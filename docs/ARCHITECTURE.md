@@ -17,7 +17,7 @@ Full Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaff
 | Crate | Role | Extern C/C++ Deps |
 |-------|------|-------------------|
 | **client** | Main binary. eglut, FakeEGL, GLCorePatch, CorePatches, JNI class modules | 6 extern C bridge functions; links local build.rs .a files |
-| **libc-shim** | ~260 Rust replacement libc symbols (FILE\*, pthreads, sockets, mmap, etc.) | `variadic.c` for variadic fns |
+| **libc-shim** | 602 Rust replacement libc symbols (FILE\*, pthreads, sockets, mmap, etc.) | `variadic.c` for variadic fns |
 | **linker** | Pure Rust ELF linker (loads .so, resolves symbols, relocates) | None |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 function vtable for JNIEnv) | None |
 | **eglut** | Pure Rust X11/EGL windowing + event loop | `libEGL.so` via dlopen, `libX11` via `x11` crate |
