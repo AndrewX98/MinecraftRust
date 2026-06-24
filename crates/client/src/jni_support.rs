@@ -1,0 +1,1119 @@
+//! Pure Rust JniSupport — replaces C++ jni_support.cpp
+//!
+//! Uses libjnivm-sys for the JNI VM backend. Java classes are registered
+//! via FindClass + RegisterNatives (standard JNI API). Each class's methods
+//! are extern "C" functions implementing the expected Java behavior.
+
+use libjnivm_sys::*;
+use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicBool, Ordering}};
+
+// ================================================================
+// Send wrapper for raw pointers
+// ================================================================
+
+#[repr(transparent)]
+struct SendPtr<T>(*mut T);
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+// ================================================================
+// GameActivity struct (matching android/game_activity.h)
+// ================================================================
+
+#[repr(C)]
+#[repr(C)]
+struct GameActivityCallbacks {
+    on_start: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_resume: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_save_instance_state: Option<unsafe extern "C" fn(*mut GameActivity, SaveInstanceStateRecallback, *mut c_void)>,
+    on_pause: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_stop: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_destroy: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_window_focus_changed: Option<unsafe extern "C" fn(*mut GameActivity, bool)>,
+    on_native_window_created: Option<unsafe extern "C" fn(*mut GameActivity, *mut c_void)>,
+    on_native_window_resized: Option<unsafe extern "C" fn(*mut GameActivity, *mut c_void, i32, i32)>,
+    on_native_window_redraw_needed: Option<unsafe extern "C" fn(*mut GameActivity, *mut c_void)>,
+    on_native_window_destroyed: Option<unsafe extern "C" fn(*mut GameActivity, *mut c_void)>,
+    on_configuration_changed: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_trim_memory: Option<unsafe extern "C" fn(*mut GameActivity, i32)>,
+    on_touch_event: Option<unsafe extern "C" fn(*mut GameActivity, *const c_void) -> bool>,
+    on_key_down: Option<unsafe extern "C" fn(*mut GameActivity, *const c_void) -> bool>,
+    on_key_up: Option<unsafe extern "C" fn(*mut GameActivity, *const c_void) -> bool>,
+    on_text_input_event: Option<unsafe extern "C" fn(*mut GameActivity, *const c_void)>,
+    on_window_insets_changed: Option<unsafe extern "C" fn(*mut GameActivity)>,
+    on_content_rect_changed: Option<unsafe extern "C" fn(*mut GameActivity, *const c_void)>,
+    on_software_keyboard_visibility_changed: Option<unsafe extern "C" fn(*mut GameActivity, bool)>,
+    on_editor_action: Option<unsafe extern "C" fn(*mut GameActivity, i32) -> bool>,
+}
+
+type SaveInstanceStateRecallback = Option<unsafe extern "C" fn(*const c_char, i32, *mut c_void)>;
+
+#[repr(C)]
+struct GameActivity {
+    callbacks: *mut GameActivityCallbacks,
+    vm: *mut JavaVM,
+    env: *mut JNIEnv,
+    java_game_activity: jobject,
+    internal_data_path: *const c_char,
+    external_data_path: *const c_char,
+    sdk_version: i32,
+    instance: *mut c_void,
+    asset_manager: *mut c_void,
+    obb_path: *const c_char,
+}
+
+type GameActivityCreateFunc = unsafe extern "C" fn(*mut GameActivity, *mut c_void, usize);
+
+// ================================================================
+// Extern C functions (from C++ wrappers)
+// ================================================================
+
+extern "C" {
+    fn register_all_jnivm_classes(env: *mut JNIEnv);
+    fn jnivm_set_main_window(window: *mut c_void);
+    fn jnivm_set_storage_dir(dir: *const c_char);
+    fn jnivm_set_asset_manager(mgr: *mut c_void);
+    fn jnivm_set_stbi_load_from_memory(fn_ptr: *mut c_void);
+    fn jnivm_set_stbi_image_free(fn_ptr: *mut c_void);
+    // C++ wrappers for FakeJni/PathHelper/XboxLiveHelper
+    fn jni_support_get_jvm(s: *mut c_void) -> *mut c_void;
+    fn fake_jni_jvm_attach_library(jvm: *mut c_void, path: *const c_char);
+    fn fake_jni_local_frame_create(jvm: *mut c_void) -> *mut c_void;
+    fn fake_jni_local_frame_destroy(frame: *mut c_void);
+    fn fake_jni_local_frame_get_env(frame: *mut c_void) -> *mut c_void;
+    fn path_helper_get_primary_data_directory() -> *const c_char;
+    fn xbox_live_helper_set_jvm(jvm: *mut c_void);
+    fn jni_support_get_game_activity_callbacks_ptr(s: *mut c_void) -> *mut c_void;
+    fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
+    fn jni_support_get_window_ptr(s: *mut c_void) -> *mut c_void;
+    fn jni_support_get_activity_ref(s: *mut c_void) -> *mut c_void;
+    fn jni_support_set_game_activity_instance(s: *mut c_void, instance: *mut c_void);
+    fn jni_support_get_game_activity_ptr(s: *mut c_void) -> *mut c_void;
+    fn jni_support_new_cpp() -> *mut c_void;
+    fn jni_support_init_activity(s: *mut c_void);
+    fn jni_support_delete(s: *mut c_void);
+}
+
+// ================================================================
+// JVM state
+// ================================================================
+
+struct JvmState {
+    vm: SendPtr<JavaVM>,
+    env: SendPtr<JNIEnv>,
+}
+
+fn jvm_state() -> &'static Mutex<JvmState> {
+    static STATE: OnceLock<Mutex<JvmState>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        let vm = unsafe { jnivm_create_vm() };
+        let env = unsafe { jnivm_get_env(vm) };
+        Mutex::new(JvmState { vm: SendPtr(vm), env: SendPtr(env) })
+    })
+}
+
+fn get_env() -> *mut JNIEnv {
+    jvm_state().lock().unwrap().env.0
+}
+
+fn get_vm() -> *mut JavaVM {
+    jvm_state().lock().unwrap().vm.0
+}
+
+fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
+    if env.is_null() { return std::ptr::null_mut(); }
+    unsafe {
+        // env points to JNIEnvAttrs; first field is functions pointer at offset 0
+        let iface = *(env as *mut *mut JNINativeInterface);
+        if iface.is_null() { return std::ptr::null_mut(); }
+        iface
+    }
+}
+
+/// Call a JNI method through the vtable
+macro_rules! jni_call {
+    ($env:expr, $iface_field:ident ($($arg:expr),*)) => {{
+        let env = $env;
+        let iface = get_iface(env);
+        if iface.is_null() { return Default::default(); }
+        let f = (*iface).$iface_field;
+        if f.is_none() { return Default::default(); }
+        f.unwrap()(env $(, $arg)*)
+    }};
+}
+
+// ================================================================
+// Class registration helpers
+// ================================================================
+
+pub fn register_all_classes() {
+    let env = get_env();
+    uuid::register(env);
+    locale::register(env);
+    certificate::register(env);
+    ecdsa_impl::register(env);
+    unsafe { register_all_jnivm_classes(env); }
+    log::info!("jni_support: registered all Java classes with libjnivm-sys VM");
+}
+
+// ================================================================
+// JniSupport orchestrator
+// ================================================================
+
+struct JniSupport {
+    env: SendPtr<JNIEnv>,
+    vm: SendPtr<JavaVM>,
+    window: SendPtr<c_void>,
+    input_queue: SendPtr<c_void>,
+    game_activity: SendPtr<GameActivity>,
+    game_callbacks: SendPtr<GameActivityCallbacks>,
+    asset_manager: SendPtr<c_void>,
+    is_game_activity: bool,
+    game_handle: SendPtr<c_void>,
+}
+
+static JNI_SUPPORT: OnceLock<Mutex<Option<Box<JniSupport>>>> = OnceLock::new();
+
+fn with_support<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut JniSupport) -> R,
+    R: Default,
+{
+    let lock = JNI_SUPPORT.get_or_init(|| Mutex::new(None));
+    let mut guard = lock.lock().unwrap();
+    if let Some(ref mut s) = *guard {
+        f(s)
+    } else {
+        log::error!("jni_support: JniSupport not initialized");
+        R::default()
+    }
+}
+
+// ================================================================
+// Public extern "C" API
+// ================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_new() -> *mut c_void {
+    // Create the libjnivm-sys VM (first call initializes it)
+    let env = get_env();
+    let vm = get_vm();
+
+    // Register all classes
+    register_all_classes();
+
+    let support = Box::new(JniSupport {
+        env: SendPtr(env),
+        vm: SendPtr(vm),
+        window: SendPtr(std::ptr::null_mut()),
+        input_queue: SendPtr(std::ptr::null_mut()),
+        game_activity: SendPtr(std::ptr::null_mut()),
+        game_callbacks: SendPtr(std::ptr::null_mut()),
+        asset_manager: SendPtr(std::ptr::null_mut()),
+        is_game_activity: true,
+        game_handle: SendPtr(std::ptr::null_mut()),
+    });
+
+    let ptr = Box::into_raw(support);
+    // Store in the global state for FakeLooper callbacks
+    let lock = JNI_SUPPORT.get_or_init(|| Mutex::new(None));
+    *lock.lock().unwrap() = Some(Box::from_raw(ptr));
+    // Leak it again - the global state owns it
+    let ptr = Box::into_raw(lock.lock().unwrap().take().unwrap());
+    ptr as *mut c_void
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_destroy(s: *mut c_void) {
+    if s.is_null() { return; }
+    drop(Box::from_raw(s as *mut JniSupport));
+    let lock = JNI_SUPPORT.get_or_init(|| Mutex::new(None));
+    *lock.lock().unwrap() = None;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_register_natives(
+    s: *mut c_void,
+    resolver: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
+) {
+    if s.is_null() || resolver.is_none() { return; }
+    let support = &*(s as *const JniSupport);
+    let env = support.env.0;
+    let resolver = resolver.unwrap();
+
+    // Register native methods from the game library for each known class
+    let class_natives: &[(&[u8], &[(&[u8], &[u8])])] = &[
+        (b"com/mojang/minecraftpe/MainActivity\0", &[
+            (b"nativeRegisterThis\0", b"()V\0"),
+            (b"nativeWaitCrashManagementSetupComplete\0", b"()V\0"),
+            (b"nativeInitializeWithApplicationContext\0", b"(Landroid/content/Context;)V\0"),
+            (b"nativeShutdown\0", b"()V\0"),
+            (b"nativeUnregisterThis\0", b"()V\0"),
+            (b"nativeStopThis\0", b"()V\0"),
+            (b"nativeOnDestroy\0", b"()V\0"),
+            (b"nativeResize\0", b"(II)V\0"),
+            (b"nativeSetTextboxText\0", b"(Ljava/lang/String;II)V\0"),
+            (b"nativeCaretPosition\0", b"(I)V\0"),
+            (b"nativeBackPressed\0", b"()V\0"),
+            (b"nativeReturnKeyPressed\0", b"()V\0"),
+            (b"nativeOnPickImageSuccess\0", b"(JLjava/lang/String;)V\0"),
+            (b"nativeOnPickImageCanceled\0", b"(J)V\0"),
+            (b"nativeOnPickFileSuccess\0", b"(Ljava/lang/String;)V\0"),
+            (b"nativeOnPickFileCanceled\0", b"()V\0"),
+            (b"nativeInitializeXboxLive\0", b"(JJ)V\0"),
+            (b"nativeinitializeLibHttpClient\0", b"(J)J\0"),
+            (b"nativeProcessIntentUriQuery\0", b"(Ljava/lang/String;Ljava/lang/String;)V\0"),
+            (b"nativeSetIntegrityToken\0", b"(Ljava/lang/String;)V\0"),
+            (b"nativeRunNativeCallbackOnUiThread\0", b"(J)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/NetworkMonitor\0", &[
+            (b"nativeUpdateNetworkStatus\0", b"(ZZZ)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/store/NativeStoreListener\0", &[
+            (b"onStoreInitialized\0", b"(JZ)V\0"),
+            (b"onPurchaseFailed\0", b"(JLjava/lang/String;)V\0"),
+            (b"onQueryProductsSuccess\0", b"(J[Lcom/mojang/minecraftpe/store/Product;)V\0"),
+            (b"onQueryPurchasesSuccess\0", b"(J[Lcom/mojang/minecraftpe/store/Purchase;)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/input/JellyBeanDeviceManager\0", &[
+            (b"onInputDeviceAddedNative\0", b"(I)V\0"),
+            (b"onInputDeviceRemovedNative\0", b"(I)V\0"),
+        ]),
+        (b"com/xbox/httpclient/HttpClientRequest\0", &[
+            (b"OnRequestCompleted\0", b"(JLcom/xbox/httpclient/HttpClientResponse;)V\0"),
+            (b"OnRequestFailed\0", b"(JLjava/lang/String;)V\0"),
+            (b"OnRequestFailed\0", b"(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V\0"),
+        ]),
+        (b"com/xbox/httpclient/HttpClientWebSocket\0", &[
+            (b"onMessage\0", b"(Ljava/lang/String;)V\0"),
+            (b"onBinaryMessage\0", b"(Ljava/nio/ByteBuffer;)V\0"),
+            (b"onOpen\0", b"()V\0"),
+            (b"onClose\0", b"(I)V\0"),
+            (b"onFailure\0", b"()V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/WebView\0", &[
+            (b"urlOperationSucceeded\0", b"(JLjava/lang/String;ZLjava/lang/String;)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/BrowserLaunchActivity\0", &[
+            (b"urlOperationSucceeded\0", b"(JLjava/lang/String;ZLjava/lang/String;)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/NativeInputStream\0", &[
+            (b"nativeRead\0", b"(JJ[BJJ)I\0"),
+        ]),
+        (b"com/mojang/minecraftpe/NativeOutputStream\0", &[
+            (b"nativeWrite\0", b"(J[BII)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/NetworkObserver\0", &[
+            (b"Log\0", b"(Ljava/lang/String;)V\0"),
+        ]),
+        (b"com/mojang/minecraftpe/PlayIntegrity\0", &[
+            (b"nativePlayIntegrityComplete\0", b"()V\0"),
+        ]),
+    ];
+
+    for &(class_name, entries) in class_natives {
+        let cls = jnivm_find_class(env, class_name.as_ptr() as *const c_char);
+        if cls.is_null() {
+            log::warn!("jni_support: FindClass failed for native registration: {:?}",
+                       std::str::from_utf8(class_name));
+            continue;
+        }
+
+        // Build the C++ class name for symbol resolution (replace / with _)
+        let class_str = std::str::from_utf8(class_name).unwrap_or("").trim_end_matches('\0');
+        let cpp_class = class_str.replace('/', "_");
+
+        let mut jni_methods: Vec<JNINativeMethod> = Vec::new();
+        for &(name, sig) in entries {
+            let name_str = std::str::from_utf8(name).unwrap_or("").trim_end_matches('\0');
+            let sym_name = format!("Java_{}_{}", cpp_class, name_str);
+            let sym_c = CString::new(sym_name.as_str()).unwrap();
+            let fn_ptr = resolver(sym_c.as_ptr());
+            if fn_ptr.is_null() {
+                log::warn!("jni_support: Missing native symbol: {}", sym_name);
+                continue;
+            }
+            jni_methods.push(JNINativeMethod {
+                name: name.as_ptr() as *const c_char,
+                signature: sig.as_ptr() as *const c_char,
+                fnPtr: fn_ptr,
+            });
+        }
+
+        if !jni_methods.is_empty() {
+            let rc = jnivm_register_natives(env, cls, jni_methods.as_ptr(), jni_methods.len() as i32);
+            if rc != 0 {
+                log::error!("jni_support: RegisterNatives failed for {:?}", class_str);
+            } else {
+                log::info!("jni_support: registered {} natives for {}", jni_methods.len(), class_str);
+            }
+        }
+    }
+
+    // Store game_handle for the resolver callback
+    // (already stored in JNI_GAME_HANDLE from rust_bridge.rs)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_start_game_with_baron(
+    s: *mut c_void,
+    game_create_func: *mut c_void,
+    game_activity_ptr: *mut c_void,
+    asset_manager: *mut c_void,
+    stbi_load: *mut c_void,
+    stbi_image_free: *mut c_void,
+) {
+    if s.is_null() || game_create_func.is_null() { return; }
+    let gameOnCreate: unsafe extern "C" fn(*mut GameActivity, *mut c_void, usize) =
+        std::mem::transmute(game_create_func);
+    let ga = game_activity_ptr as *mut GameActivity;
+
+    // Get Baron JVM from C++ JniSupport
+    let jvm = jni_support_get_jvm(s);
+
+    // Attach libraries — calls JNI_OnLoad for each (CrashManager registration etc.)
+    // Use CString for each lib since byte slices have different lengths
+    let libs = [CString::new("libfmod.so").unwrap(), CString::new("libminecraftpe.so").unwrap(), CString::new("libPlayFabMultiplayer.so").unwrap()];
+    for lib in &libs {
+        fake_jni_jvm_attach_library(jvm, lib.as_ptr());
+    }
+
+    // Set up MainActivity fields matching C++ startGame
+    let dir = path_helper_get_primary_data_directory();
+    if !dir.is_null() {
+        jnivm_set_storage_dir(dir);
+    }
+    // C++ setters for activity stbi function pointers
+    extern "C" { fn jnivm_set_stbi_load_from_memory(fn_ptr: *mut c_void); fn jnivm_set_stbi_image_free(fn_ptr: *mut c_void); }
+    jnivm_set_stbi_load_from_memory(stbi_load);
+    jnivm_set_stbi_image_free(stbi_image_free);
+    xbox_live_helper_set_jvm(jvm);
+
+    // Baron LocalFrame — env pointer is valid for the entire function scope
+    let frame = fake_jni_local_frame_create(jvm);
+    let baron_env = fake_jni_local_frame_get_env(frame) as *mut JNIEnv;
+
+    // Set up GameActivity with Baron values
+    let callbacks_ptr = jni_support_get_game_activity_callbacks_ptr(s);
+    (*ga).callbacks = callbacks_ptr as *mut GameActivityCallbacks;
+    (*ga).vm = jni_support_get_java_vm_ptr(s) as *mut JavaVM;
+    (*ga).env = baron_env;
+    (*ga).asset_manager = asset_manager;
+    (*ga).java_game_activity = jni_support_get_activity_ref(s);
+    (*ga).sdk_version = 32;
+    let internal_path = CString::new("/internal").unwrap();
+    let external_path = CString::new("/external").unwrap();
+    // Leak the CStrings — they need to live for the program's lifetime (matching C++ behavior)
+    let internal_path = internal_path.into_raw();
+    let external_path = external_path.into_raw();
+    (*ga).internal_data_path = internal_path as *const c_char;
+    (*ga).external_data_path = external_path as *const c_char;
+
+    // Call GameActivity_onCreate — game caches Baron vm/env from ga.
+    // Also triggers FakeLooper::prepare → JniSupport::onWindowCreated which sets window.
+    gameOnCreate(ga, std::ptr::null_mut(), 0);
+
+    // Copy game instance to C++ JniSupport's gameActivity for FakeLooper dispatch
+    jni_support_set_game_activity_instance(s, (*ga).instance);
+
+    // Read window from C++ JniSupport (set by FakeLooper::prepare during gameOnCreate)
+    let win = jni_support_get_window_ptr(s);
+    eprintln!("=== Rust read window from JniSupport after gameOnCreate: {:p} ===", win);
+
+    // Read callbacks (populated by game during gameOnCreate)
+    let cb = &*(callbacks_ptr as *const GameActivityCallbacks);
+
+    eprintln!("=== Rust calling onStart (fn={:?}) ===", cb.on_start.map(|f| f as *const c_void));
+    if let Some(f) = cb.on_start {
+        f(ga);
+    }
+
+    eprintln!("=== Rust calling onNativeWindowCreated (fn={:?} window={:p}) ===",
+              cb.on_native_window_created.map(|f| f as *const c_void), win);
+    if let Some(f) = cb.on_native_window_created {
+        f(ga, win);
+    }
+
+    eprintln!("=== Rust callbacks done ===");
+
+    // Destroy LocalFrame — env pointer becomes invalid after this (matching C++ behavior)
+    fake_jni_local_frame_destroy(frame);
+}
+
+// ================================================================
+// Event dispatch — called from window_callbacks_stub.cpp instead of
+// C++ JniSupport::sendKeyDown/sendKeyUp/sendMotionEvent
+// ================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_send_key_down(s: *mut c_void, event: *const c_void) {
+    let cb = &*(jni_support_get_game_activity_callbacks_ptr(s) as *const GameActivityCallbacks);
+    let ga = jni_support_get_game_activity_ptr(s) as *mut GameActivity;
+    if let Some(f) = cb.on_key_down {
+        f(ga, event);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_send_key_up(s: *mut c_void, event: *const c_void) {
+    let cb = &*(jni_support_get_game_activity_callbacks_ptr(s) as *const GameActivityCallbacks);
+    let ga = jni_support_get_game_activity_ptr(s) as *mut GameActivity;
+    if let Some(f) = cb.on_key_up {
+        f(ga, event);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_send_motion_event(s: *mut c_void, event: *const c_void) {
+    let cb = &*(jni_support_get_game_activity_callbacks_ptr(s) as *const GameActivityCallbacks);
+    let ga = jni_support_get_game_activity_ptr(s) as *mut GameActivity;
+    if ga.is_null() { return; }
+    if let Some(f) = cb.on_touch_event {
+        f(ga, event);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_create_cpp() -> *mut c_void {
+    let s = jni_support_new_cpp();
+    if !s.is_null() {
+        jni_support_init_activity(s);
+    }
+    s
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_destroy_cpp(s: *mut c_void) {
+    if !s.is_null() {
+        jni_support_delete(s);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_start_game(
+    s: *mut c_void,
+    cpp_support: *mut c_void,
+    game_create: *mut c_void,
+    stbi_load: *mut c_void,
+    stbi_image_free: *mut c_void,
+) {
+    if s.is_null() || game_create.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let env = support.env.0;
+
+    // Set stbi function pointers for C++ MainActivity wrapper
+    jnivm_set_stbi_load_from_memory(stbi_load);
+    jnivm_set_stbi_image_free(stbi_image_free);
+
+    // Create MainActivity instance via JNI NewObject
+    // libjnivm-sys NewObject ignores args and returns a valid dummy pointer
+    let activity = jni_call!(env, NewObject(std::ptr::null_mut(), std::ptr::null_mut()));
+    let activity_ref = jni_call!(env, NewGlobalRef(activity));
+
+    // Storage dir is set inside jni_support_start_game_with_baron via path_helper_get_primary_data_directory()
+
+    // Create the GameActivity struct (leaked, will live for the program's lifetime)
+    let callbacks = Box::into_raw(Box::new(std::mem::zeroed::<GameActivityCallbacks>()));
+    let internal_path = CString::new("/internal").unwrap();
+    let external_path = CString::new("/external").unwrap();
+    let obb_path = CString::new("").unwrap();
+
+    let mut game_act = Box::new(GameActivity {
+        callbacks,
+        vm: support.vm.0,
+        env: support.env.0,
+        java_game_activity: activity_ref,
+        internal_data_path: internal_path.as_ptr(),
+        external_data_path: external_path.as_ptr(),
+        sdk_version: 32,
+        instance: std::ptr::null_mut(),
+        asset_manager: std::ptr::null_mut(),
+        obb_path: obb_path.as_ptr(),
+    });
+
+    support.game_activity = SendPtr(Box::into_raw(game_act));
+    support.game_callbacks = SendPtr(callbacks);
+
+    // Leak the strings so they live for the program's lifetime
+    Box::leak(Box::new(internal_path));
+    Box::leak(Box::new(external_path));
+    Box::leak(Box::new(obb_path));
+
+    // Set the asset manager (FakeAssetManager instance)
+    extern "C" {
+        fn fake_assetmanager_get_instance() -> *mut c_void;
+    }
+    let am = fake_assetmanager_get_instance();
+    support.asset_manager = SendPtr(am);
+    jnivm_set_asset_manager(am);
+
+    // Combined bridge call: sets up Baron VM/env on the GameActivity, calls
+    // GameActivity_onCreate (so the game caches Baron vm/env, not libjnivm-sys),
+    // populates C++ JniSupport callbacks, and dispatches onStart/onNativeWindowCreated.
+    // All happens within a single Baron LocalFrame — matching the C++ startGame order.
+    log::info!("jni_support: calling jni_support_start_game_with_baron...");
+    jni_support_start_game_with_baron(
+        cpp_support,
+        game_create,
+        support.game_activity.0 as *mut c_void,
+        am,
+        stbi_load,
+        stbi_image_free,
+    );
+    log::info!("jni_support: jni_support_start_game_with_baron returned");
+
+    // Call nativeUpdateNetworkStatus
+    let nm_cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/NetworkMonitor\0".as_ptr() as *const c_char));
+    if !nm_cls.is_null() {
+        let nm_mid = jni_call!(env, GetMethodID(
+            nm_cls,
+            b"nativeUpdateNetworkStatus\0".as_ptr() as *const c_char,
+            b"(ZZZ)V\0".as_ptr() as *const c_char
+        ));
+        if !nm_mid.is_null() {
+            let args = [jvalue { z: 1 }, jvalue { z: 1 }, jvalue { z: 1 }];
+            jni_call!(env, CallStaticVoidMethodA(nm_cls, nm_mid, args.as_ptr() as *mut jvalue));
+        }
+    }
+
+    // Set game activity flag on support
+    support.is_game_activity = true;
+
+    log::info!("jni_support: startGame completed");
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_set_looper_running(_s: *mut c_void, _running: i32) {
+    // TODO: implement game exit signaling
+}
+
+// ================================================================
+// Event handler functions called from C++ stubs
+// ================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_on_window_created(s: *mut c_void, window: *mut c_void, input_queue: *mut c_void) {
+    if s.is_null() {
+        log::warn!("jni_support_on_window_created: s is null!");
+        return;
+    }
+    log::info!("jni_support_on_window_created: setting window={:p} input_queue={:p}", window, input_queue);
+    let support = &mut *(s as *mut JniSupport);
+    support.window = SendPtr(window);
+    support.input_queue = SendPtr(input_queue);
+    log::info!("jni_support_on_window_created: done");
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_on_window_closed(s: *mut c_void) {
+    if s.is_null() { return; }
+    // Call nativeShutdown via JNI
+    with_support(|_| {});
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_on_window_resized(s: *mut c_void, new_width: i32, new_height: i32) {
+    if s.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if !cls.is_null() {
+        let mid = jni_call!(env, GetMethodID(
+            cls,
+            b"nativeResize\0".as_ptr() as *const c_char,
+            b"(II)V\0".as_ptr() as *const c_char
+        ));
+        if !mid.is_null() {
+            let resize_args = [jvalue { i: new_width }, jvalue { i: new_height }];
+            jni_call!(env, CallStaticVoidMethodA(cls, mid, resize_args.as_ptr() as *mut jvalue));
+        }
+    }
+}
+
+// ================================================================
+// UUID — java/util/UUID
+// ================================================================
+
+mod uuid {
+    use libjnivm_sys::*;
+    use std::ffi::{c_char, c_void, CString};
+    use std::sync::{LazyLock, Mutex};
+
+    #[repr(C)]
+    struct UuidObject { uuid: CString }
+    unsafe impl Send for UuidObject {}
+    unsafe impl Sync for UuidObject {}
+
+    static RNG: LazyLock<Mutex<Urng>> = LazyLock::new(|| Mutex::new(Urng::new()));
+    struct Urng(u64);
+    impl Urng {
+        fn new() -> Self {
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64).unwrap_or(0x1234567890abcdef);
+            Urng(seed)
+        }
+        fn next_u32(&mut self) -> u32 {
+            let mut x = self.0; x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            self.0 = x; x as u32
+        }
+        fn fill_bytes(&mut self, buf: &mut [u8]) {
+            for chunk in buf.chunks_mut(4) {
+                chunk.copy_from_slice(&self.next_u32().to_le_bytes()[..chunk.len()]);
+            }
+        }
+    }
+
+    fn gen_uuid(hyphens: bool) -> String {
+        let mut raw = [0u8; 16];
+        RNG.lock().unwrap().fill_bytes(&mut raw);
+        raw[6] = (raw[6] & 0x0f) | 0x40;
+        raw[8] = (raw[8] & 0x3f) | 0x80;
+        if hyphens {
+            format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                raw[0],raw[1],raw[2],raw[3],raw[4],raw[5],raw[6],raw[7],raw[8],raw[9],raw[10],raw[11],raw[12],raw[13],raw[14],raw[15])
+        } else {
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+    }
+
+    unsafe extern "C" fn uuid_randomUUID(_env: *mut JNIEnv, _clazz: jclass) -> jobject {
+        let cstr = CString::new(gen_uuid(true)).unwrap_or_default();
+        Box::into_raw(Box::new(UuidObject { uuid: cstr })) as jobject
+    }
+    unsafe extern "C" fn uuid_makeRandomUUID(_env: *mut JNIEnv, _clazz: jclass, hyphens: jboolean) -> jobject {
+        let cstr = CString::new(gen_uuid(hyphens != 0)).unwrap_or_default();
+        Box::into_raw(Box::new(UuidObject { uuid: cstr })) as jobject
+    }
+    unsafe extern "C" fn uuid_toString(env: *mut JNIEnv, this: jobject) -> jobject {
+        if this.is_null() { return std::ptr::null_mut(); }
+        let obj = &*(this as *const UuidObject);
+        let iface = *(env as *mut *mut JNINativeInterface);
+        (*iface).NewStringUTF.unwrap()(env, obj.uuid.as_ptr()) as jobject
+    }
+
+    pub fn register(env: *mut JNIEnv) {
+        let methods = [
+            JNINativeMethod { name: b"randomUUID\0".as_ptr() as *const c_char, signature: b"()Ljava/util/UUID;\0".as_ptr() as *const c_char, fnPtr: uuid_randomUUID as *mut c_void },
+            JNINativeMethod { name: b"makeRandomUUID\0".as_ptr() as *const c_char, signature: b"(Z)Ljava/util/UUID;\0".as_ptr() as *const c_char, fnPtr: uuid_makeRandomUUID as *mut c_void },
+            JNINativeMethod { name: b"toString\0".as_ptr() as *const c_char, signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char, fnPtr: uuid_toString as *mut c_void },
+        ];
+        let cls = unsafe { jnivm_find_class(env, b"java/util/UUID\0".as_ptr() as *const c_char) };
+        if cls.is_null() { log::error!("uuid: FindClass failed"); return; }
+        let rc = unsafe { jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32) };
+        if rc != 0 { log::error!("uuid: RegisterNatives failed"); }
+        else { log::info!("uuid: java/util/UUID registered"); }
+    }
+}
+
+// ================================================================
+// Locale — java/util/Locale
+// ================================================================
+
+mod locale {
+    use libjnivm_sys::*;
+    use std::ffi::{c_char, c_void, CString};
+
+    #[repr(C)]
+    struct LocaleObject { name: CString }
+    unsafe impl Send for LocaleObject {}
+    unsafe impl Sync for LocaleObject {}
+
+    unsafe extern "C" fn locale_getDefault(env: *mut JNIEnv, _clazz: jclass) -> jobject {
+        let name = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
+        let cstr = CString::new(name).unwrap_or(CString::new("en_US").unwrap());
+        Box::into_raw(Box::new(LocaleObject { name: cstr })) as jobject
+    }
+    unsafe extern "C" fn locale_toString(env: *mut JNIEnv, this: jobject) -> jobject {
+        if this.is_null() { return std::ptr::null_mut(); }
+        let obj = &*(this as *const LocaleObject);
+        let iface = *(env as *mut *mut JNINativeInterface);
+        (*iface).NewStringUTF.unwrap()(env, obj.name.as_ptr()) as jobject
+    }
+
+    pub fn register(env: *mut JNIEnv) {
+        let methods = [
+            JNINativeMethod { name: b"getDefault\0".as_ptr() as *const c_char, signature: b"()Ljava/util/Locale;\0".as_ptr() as *const c_char, fnPtr: locale_getDefault as *mut c_void },
+            JNINativeMethod { name: b"toString\0".as_ptr() as *const c_char, signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char, fnPtr: locale_toString as *mut c_void },
+        ];
+        let cls = unsafe { jnivm_find_class(env, b"java/util/Locale\0".as_ptr() as *const c_char) };
+        if cls.is_null() { log::error!("locale: FindClass failed"); return; }
+        let rc = unsafe { jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32) };
+        if rc != 0 { log::error!("locale: RegisterNatives failed"); }
+        else { log::info!("locale: java/util/Locale registered"); }
+    }
+}
+
+// ================================================================
+// Certificate stubs — java/security/cert/*, javax/net/ssl/*,
+//                     java/io/InputStream, ByteArrayInputStream,
+//                     StrictHostnameVerifier
+// ================================================================
+
+mod certificate {
+    use libjnivm_sys::*;
+    use std::ffi::{c_char, c_void};
+
+    unsafe fn ensure_class(env: *mut JNIEnv, name: &[u8]) {
+        let cls = jnivm_find_class(env, name.as_ptr() as *const c_char);
+        if cls.is_null() {
+            log::warn!("certificate: FindClass failed: {:?}",
+                       std::str::from_utf8(name));
+        }
+    }
+
+    fn reg(env: *mut JNIEnv, class_name: &[u8], methods: &[JNINativeMethod]) {
+        let cls = unsafe { jnivm_find_class(env, class_name.as_ptr() as *const c_char) };
+        if cls.is_null() {
+            log::warn!("certificate: FindClass failed: {:?}",
+                       std::str::from_utf8(class_name));
+            return;
+        }
+        if methods.is_empty() { return; }
+        let rc = unsafe { jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32) };
+        if rc != 0 {
+            log::warn!("certificate: RegisterNatives failed for {:?}",
+                       std::str::from_utf8(class_name));
+        }
+    }
+
+    unsafe extern "C" fn cert_factory_getInstance(
+        _env: *mut JNIEnv, _clazz: jclass, _s: jstring,
+    ) -> jobject {
+        Box::into_raw(Box::new(0u8)) as jobject
+    }
+
+    unsafe extern "C" fn cert_factory_generateCertificate(
+        _env: *mut JNIEnv, _this: jobject, _stream: jobject,
+    ) -> jobject {
+        Box::into_raw(Box::new(0u8)) as jobject
+    }
+
+    unsafe extern "C" fn tm_factory_getInstance(
+        _env: *mut JNIEnv, _clazz: jclass, _s: jstring,
+    ) -> jobject {
+        Box::into_raw(Box::new(0u8)) as jobject
+    }
+
+    unsafe extern "C" fn tm_factory_getTrustManagers(
+        env: *mut JNIEnv, _this: jobject,
+    ) -> jobject {
+        let iface = *(env as *mut *mut JNINativeInterface);
+        let tm_cls = jnivm_find_class(
+            env,
+            b"javax/net/ssl/TrustManager\0".as_ptr() as *const c_char,
+        );
+        if tm_cls.is_null() { return std::ptr::null_mut(); }
+        let arr = match (*iface).NewObjectArray {
+            Some(f) => f(env, 1, tm_cls, std::ptr::null_mut()),
+            None => return std::ptr::null_mut(),
+        };
+        let x509 = Box::into_raw(Box::new(0u8)) as jobject;
+        if let Some(f) = (*iface).SetObjectArrayElement {
+            f(env, arr, 0, x509);
+        }
+        arr as jobject
+    }
+
+    unsafe extern "C" fn hostname_verifier_verify(
+        _env: *mut JNIEnv, _this: jobject, _host: jstring, _cert: jobject,
+    ) {
+    }
+
+    pub fn register(env: *mut JNIEnv) {
+        // Classes without native methods — just ensure they exist
+        unsafe {
+            ensure_class(env, b"java/io/InputStream\0");
+            ensure_class(env, b"java/io/ByteArrayInputStream\0");
+            ensure_class(env, b"java/security/cert/Certificate\0");
+            ensure_class(env, b"org/apache/http/conn/ssl/java/security/cert/X509Certificate\0");
+            ensure_class(env, b"javax/net/ssl/TrustManager\0");
+            ensure_class(env, b"javax/net/ssl/X509TrustManager\0");
+        }
+
+        // CertificateFactory
+        reg(env, b"java/security/cert/CertificateFactory\0", &[
+            JNINativeMethod {
+                name: b"getInstance\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;\0".as_ptr() as *const c_char,
+                fnPtr: cert_factory_getInstance as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"generateCertificate\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/io/InputStream;)Ljava/security/cert/Certificate;\0".as_ptr() as *const c_char,
+                fnPtr: cert_factory_generateCertificate as *mut c_void,
+            },
+        ]);
+
+        // TrustManagerFactory
+        reg(env, b"javax/net/ssl/TrustManagerFactory\0", &[
+            JNINativeMethod {
+                name: b"getInstance\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;)Ljavax/net/ssl/TrustManagerFactory;\0".as_ptr() as *const c_char,
+                fnPtr: tm_factory_getInstance as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getTrustManagers\0".as_ptr() as *const c_char,
+                signature: b"()[Ljavax/net/ssl/TrustManager;\0".as_ptr() as *const c_char,
+                fnPtr: tm_factory_getTrustManagers as *mut c_void,
+            },
+        ]);
+
+        // StrictHostnameVerifier
+        reg(env, b"org/apache/http/conn/ssl/StrictHostnameVerifier\0", &[
+            JNINativeMethod {
+                name: b"verify\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;Lorg/apache/http/conn/ssl/java/security/cert/X509Certificate;)V\0".as_ptr() as *const c_char,
+                fnPtr: hostname_verifier_verify as *mut c_void,
+            },
+        ]);
+
+        log::info!("certificate: stubs registered for 9 classes");
+    }
+}
+
+// ================================================================
+// ECDSA — com/microsoft/xal/crypto/Ecdsa, EccPubKey
+// ================================================================
+
+mod ecdsa_impl {
+    use libjnivm_sys::*;
+    use p256::{
+        ecdsa::{SigningKey, Signature, signature::Signer},
+        EncodedPoint,
+    };
+    use rand_core::OsRng;
+    use std::ffi::{c_char, c_void, CStr, CString};
+
+    #[repr(C)]
+    struct EcdsaObject {
+        unique_id: CString,
+        d: [u8; 32],
+        has_key: bool,
+    }
+    unsafe impl Send for EcdsaObject {}
+    unsafe impl Sync for EcdsaObject {}
+
+    #[repr(C)]
+    struct PubKeyObject {
+        x: CString,
+        y: CString,
+    }
+    unsafe impl Send for PubKeyObject {}
+    unsafe impl Sync for PubKeyObject {}
+
+    fn signing_key_from(d: &[u8; 32]) -> Option<SigningKey> {
+        let secret = p256::SecretKey::from_slice(&d[..]).ok()?;
+        Some(SigningKey::from(secret))
+    }
+
+    fn pubkey_coords(sk: &SigningKey) -> Option<([u8; 32], [u8; 32])> {
+        let vk = sk.verifying_key();
+        let point = EncodedPoint::from(vk);
+        let bytes = point.as_bytes();
+        if bytes.len() < 65 || bytes[0] != 0x04 {
+            return None;
+        }
+        let mut x = [0u8; 32];
+        let mut y = [0u8; 32];
+        x.copy_from_slice(&bytes[1..33]);
+        y.copy_from_slice(&bytes[33..65]);
+        Some((x, y))
+    }
+
+    fn base64url(data: &[u8]) -> CString {
+        let b64 = util::base64::encode(data, false);
+        let url: String = b64.chars().map(|c| match c {
+            '+' => '-',
+            '/' => '_',
+            _ => c,
+        }).collect();
+        CString::new(url).unwrap_or_default()
+    }
+
+    unsafe extern "C" fn ecdsa_init(_env: *mut JNIEnv, _this: jobject) {
+    }
+
+    unsafe extern "C" fn ecdsa_generateKey(
+        env: *mut JNIEnv, this: jobject, unique_id: jstring,
+    ) {
+        let obj = &mut *(this as *mut EcdsaObject);
+        let sk = SigningKey::random(&mut OsRng);
+        obj.d = sk.to_bytes().into();
+        obj.has_key = true;
+        let iface = *(env as *mut *mut JNINativeInterface);
+        let chars = match (*iface).GetStringUTFChars {
+            Some(f) => f(env, unique_id, std::ptr::null_mut()),
+            None => return,
+        };
+        if !chars.is_null() {
+            obj.unique_id = CString::new(CStr::from_ptr(chars).to_bytes()).unwrap_or_default();
+            let release = (*iface).ReleaseStringUTFChars;
+            if let Some(f) = release { f(env, unique_id, chars); }
+        }
+    }
+
+    unsafe extern "C" fn ecdsa_sign(
+        env: *mut JNIEnv, this: jobject, data: jbyteArray,
+    ) -> jobject {
+        let obj = &*(this as *const EcdsaObject);
+        if !obj.has_key { return std::ptr::null_mut(); }
+        let sk = match signing_key_from(&obj.d) {
+            Some(sk) => sk,
+            None => return std::ptr::null_mut(),
+        };
+        let iface = *(env as *mut *mut JNINativeInterface);
+        let elems = match (*iface).GetByteArrayElements {
+            Some(f) => f(env, data, std::ptr::null_mut()),
+            None => return std::ptr::null_mut(),
+        };
+        let len = match (*iface).GetArrayLength {
+            Some(f) => f(env, data as jarray),
+            None => return std::ptr::null_mut(),
+        };
+        let msg = std::slice::from_raw_parts(elems as *const u8, len as usize);
+        let sig: Signature = sk.sign(msg);
+        let r_bytes = sig.r().to_bytes();
+        let s_bytes = sig.s().to_bytes();
+        let mut result = Vec::with_capacity(64);
+        result.extend_from_slice(&r_bytes);
+        result.extend_from_slice(&s_bytes);
+        // Release elements
+        if let Some(f) = (*iface).ReleaseByteArrayElements {
+            f(env, data, elems, 0);
+        }
+        let v: Vec<i8> = result.into_iter().map(|b| b as i8).collect();
+        Box::into_raw(Box::new(v)) as jobject
+    }
+
+    unsafe extern "C" fn ecdsa_getPublicKey(
+        _env: *mut JNIEnv, this: jobject,
+    ) -> jobject {
+        let obj = &*(this as *const EcdsaObject);
+        if !obj.has_key { return std::ptr::null_mut(); }
+        let sk = match signing_key_from(&obj.d) {
+            Some(sk) => sk,
+            None => return std::ptr::null_mut(),
+        };
+        let (x, y) = match pubkey_coords(&sk) {
+            Some(c) => c,
+            None => return std::ptr::null_mut(),
+        };
+        Box::into_raw(Box::new(PubKeyObject {
+            x: base64url(&x),
+            y: base64url(&y),
+        })) as jobject
+    }
+
+    unsafe extern "C" fn ecdsa_getUniqueId(
+        env: *mut JNIEnv, this: jobject,
+    ) -> jobject {
+        let obj = &*(this as *const EcdsaObject);
+        let iface = *(env as *mut *mut JNINativeInterface);
+        let f = match (*iface).NewStringUTF {
+            Some(f) => f,
+            None => return std::ptr::null_mut(),
+        };
+        f(env, obj.unique_id.as_ptr()) as jobject
+    }
+
+    unsafe extern "C" fn ecdsa_restoreKeyAndId(
+        _env: *mut JNIEnv, _clazz: jclass, _ctx: jobject,
+    ) -> jobject {
+        std::ptr::null_mut()
+    }
+
+    // ---- EccPubKey methods ----
+    unsafe extern "C" fn pubkey_getBase64UrlX(
+        env: *mut JNIEnv, this: jobject,
+    ) -> jobject {
+        let obj = &*(this as *const PubKeyObject);
+        let iface = *(env as *mut *mut JNINativeInterface);
+        let f = match (*iface).NewStringUTF {
+            Some(f) => f,
+            None => return std::ptr::null_mut(),
+        };
+        f(env, obj.x.as_ptr()) as jobject
+    }
+
+    unsafe extern "C" fn pubkey_getBase64UrlY(
+        env: *mut JNIEnv, this: jobject,
+    ) -> jobject {
+        let obj = &*(this as *const PubKeyObject);
+        let iface = *(env as *mut *mut JNINativeInterface);
+        let f = match (*iface).NewStringUTF {
+            Some(f) => f,
+            None => return std::ptr::null_mut(),
+        };
+        f(env, obj.y.as_ptr()) as jobject
+    }
+
+    fn reg(env: *mut JNIEnv, class_name: &[u8], methods: &[JNINativeMethod]) {
+        let cls = unsafe { jnivm_find_class(env, class_name.as_ptr() as *const c_char) };
+        if cls.is_null() {
+            log::warn!("ecdsa: FindClass failed: {:?}",
+                       std::str::from_utf8(class_name));
+            return;
+        }
+        if methods.is_empty() { return; }
+        let rc = unsafe { jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32) };
+        if rc != 0 {
+            log::warn!("ecdsa: RegisterNatives failed for {:?}",
+                       std::str::from_utf8(class_name));
+        }
+    }
+
+    pub fn register(env: *mut JNIEnv) {
+        // Ecdsa class
+        reg(env, b"com/microsoft/xal/crypto/Ecdsa\0", &[
+            JNINativeMethod {
+                name: b"<init>\0".as_ptr() as *const c_char,
+                signature: b"()V\0".as_ptr() as *const c_char,
+                fnPtr: ecdsa_init as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"generateKey\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
+                fnPtr: ecdsa_generateKey as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"sign\0".as_ptr() as *const c_char,
+                signature: b"([B)[B\0".as_ptr() as *const c_char,
+                fnPtr: ecdsa_sign as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getPublicKey\0".as_ptr() as *const c_char,
+                signature: b"()Lcom/microsoft/xal/crypto/EccPubKey;\0".as_ptr() as *const c_char,
+                fnPtr: ecdsa_getPublicKey as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getUniqueId\0".as_ptr() as *const c_char,
+                signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+                fnPtr: ecdsa_getUniqueId as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"restoreKeyAndId\0".as_ptr() as *const c_char,
+                signature: b"(Landroid/content/Context;)Lcom/microsoft/xal/crypto/Ecdsa;\0".as_ptr() as *const c_char,
+                fnPtr: ecdsa_restoreKeyAndId as *mut c_void,
+            },
+        ]);
+
+        // EccPubKey class
+        reg(env, b"com/microsoft/xal/crypto/EccPubKey\0", &[
+            JNINativeMethod {
+                name: b"getBase64UrlX\0".as_ptr() as *const c_char,
+                signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+                fnPtr: pubkey_getBase64UrlX as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getBase64UrlY\0".as_ptr() as *const c_char,
+                signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+                fnPtr: pubkey_getBase64UrlY as *mut c_void,
+            },
+        ]);
+
+        log::info!("ecdsa: com/microsoft/xal/crypto/Ecdsa + EccPubKey registered");
+    }
+}
+

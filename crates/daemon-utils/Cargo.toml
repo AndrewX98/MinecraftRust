@@ -1,0 +1,10 @@
+[package]
+name = "daemon-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+simple-ipc = { path = "../simple-ipc" }
+tokio = { version = "1", features = ["net", "io-util", "sync", "process", "fs"] }
+log = "0.4"
+serde_json = "1"

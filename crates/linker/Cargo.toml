@@ -1,0 +1,10 @@
+[package]
+name = "linker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+goblin = "0.9"
+log = "0.4"
+thiserror = "2"
+libc = "0.2"

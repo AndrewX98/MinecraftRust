@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/minecraft-imported-symbols",
+    "crates/axml-parser",
+    "crates/simple-ipc",
+    "crates/daemon-utils",
+    "crates/msa-daemon-client",
+    "crates/cll-telemetry",
+    "crates/libc-shim",
+    "crates/libjnivm-sys",
+    "crates/game-window",
+    "crates/util",
+    "crates/common",
+    "crates/apkinfo",
+    "crates/linker",
+    "crates/client",
+]
