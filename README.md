@@ -1,17 +1,17 @@
 # MinecraftRust — Rust Minecraft Bedrock Launcher
 
-Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaffolding, every subsystem should end up pure Rust. **Currently ~70% Rust on the critical game-loading path, loads to main menu.**
+Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaffolding, every subsystem should end up pure Rust. **~8.5% Rust by total lines (17K of 200K+), but all game-facing JNI dispatch, class registration, and startup orchestration is Rust. Loads to main menu.**
 
 ## Architecture
 
-**15 Rust crates** (~15,200 lines) + **C++ bridge** (~5,700 lines compiled locally via `cc::Build`, no cmake).
+**15 Rust crates** (~17,000 lines) + **C++ bridge** (~5,700 lines compiled locally via `cc::Build`, no cmake).
 
 | Crate | Role |
 |-------|------|
 | **client** | Main binary — eglut, FakeEGL, CorePatches, JNI modules, event dispatch, FakeLooper |
 | **libc-shim** | 602 pure Rust libc replacement symbols (FILE\*, pthreads, sockets, mmap, etc.) |
 | **linker** | Pure Rust ELF linker (loads stub libs; game lib still uses C++ bionic linker) |
-| **libjnivm-sys** | Pure Rust JNI VM (~250 function JNIEnv vtable) — active for class/native registration |
+| **libjnivm-sys** | Pure Rust JNI VM (~250 function JNIEnv vtable) — active for ALL JNI dispatch after env switch |
 | **eglut** | Pure Rust X11/EGL windowing + event loop |
 | **game-window** | winit/glutin abstraction (not active — eglut path used) |
 | **util** | Base64, arg parser, file utils, logging, properties |
@@ -24,7 +24,7 @@ Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaff
 | **minecraft-imported-symbols** | Game symbol constants and auto-generated arrays |
 | **axml-parser** | Binary XML (AXML) parser for Android manifests |
 
-Two JNI VMs coexist: Rust libjnivm-sys for class/native registration, C++ FakeJni/Baron for game JNI dispatch.  
+Two JNI VMs coexist: Rust libjnivm-sys (active — env switch done, game JNI dispatch through Rust vtable) and C++ FakeJni/Baron (legacy — kept for `ga->vm` operations and FakeLooper exit callback).  
 Two linkers coexist: Rust linker for stub libs + `libc.so`, C++ bionic linker for `libminecraftpe.so`.
 
 See `docs/ARCHITECTURE.md`.
@@ -74,21 +74,21 @@ XAL cache lives in `~/.local/share/mcpelauncher/xal/` and `~/.local/MinecraftLau
 
 ## Porting Progress
 
-| Category | Rust | C++ |
-|----------|------|-----|
-| libc shim | 100% | 0% |
-| JNI VM | 100% | 0% (bridge only) |
-| EGL | 100% | 0% |
-| FakeLooper | ~70% | ~30% |
-| ELF linker | ~30% | ~70% |
-| Game window | ~30% | ~70% |
-| JNI classes | ~30% | ~70% |
-| IPC/Telemetry | 0% (local C++) | 100% |
-| Startup orchestration | ~60% | ~40% |
-| Build system | 100% (no cmake) | 0% |
-| **Overall (critical path)** | **~70%** | **~30%** |
+| Category | Rust % | Target |
+|----------|--------|--------|
+| libc shim | 100% | 100% |
+| JNI VM | 100% | 100% (bridge only remaining) |
+| EGL | 100% | 100% |
+| FakeLooper | ~70% | 100% |
+| ELF linker (bionic) | ~30% | 100% |
+| Game window | ~30% | 100% |
+| JNI classes | ~70% | 100% (all 57 MainActivity methods + 9 wrappers done) |
+| mcpelauncher-core | ~0% | 100% (game loading, hooks, patching, mod loading) |
+| Startup orchestration | ~60% | 100% |
+| Build system | 100% | 100% (no cmake) |
+| IPC/Telemetry | ~0% | 100% (Rust crates exist) |
 
-15/25 JNI files ported to Rust. Critical path: `jni_support.cpp` > `main_activity.cpp` > `store.cpp`. Independent files yet to port: `xbox_live.cpp`, `lib_http_client*.cpp`, `pulseaudio.cpp`, `sdl3audio.cpp`.
+15/25 JNI files ported to Rust. All 57 MainActivity methods and 9 wrapper classes (File, Context, Build, PackageInfo, etc.) replaced. Env switch from FakeJni to libjnivm-sys complete — game dispatches JNI through Rust vtable.
 
 See `docs/PORTING_PROGRESS.md`.
 
