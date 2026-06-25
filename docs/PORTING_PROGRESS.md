@@ -35,8 +35,8 @@ There are 25 JNI C++ files in total. 15 are excluded from build, 10 remain.
 
 | File | Lines | Role | Status | Depends On |
 |------|-------|------|--------|------------|
-| `jni_support.cpp` | 673 | FakeJni startup orchestration, class registration | ⏳ | — |
-| `main_activity.cpp` | 539 | 40+ Android API methods | ⏳ | `jni_support.cpp` port |
+| `jni_support.cpp` | 673 | FakeJni startup orchestration, class registration | 🟡 | — |
+| `main_activity.cpp` | 539 | 40+ Android API methods (all ported to Rust `main_activity.rs`) | 🟡 | `jni_support.cpp` FakeJni `registerClass<MainActivity>()` call |
 | `store.cpp` | 96 | In-app purchase stubs | 🔴 | Full startup orchestration port |
 | `xbox_live.cpp` | 128 | MSA sign-in, XBL auth | ⏳ | — |
 | `lib_http_client.cpp` | 290 | Curl-based HTTP requests | ⏳ | — |
@@ -44,7 +44,7 @@ There are 25 JNI C++ files in total. 15 are excluded from build, 10 remain.
 | `pulseaudio.cpp` | 71 | PulseAudio output | ⏳ | — |
 | `sdl3audio.cpp` | 56 | SDL3 audio output | ⏳ | — |
 | `uuid.cpp` | 30 | UUID generation | 🟡 | Rust registers JNI (`jni_support.rs:641`), C++ stays because `main_activity.cpp` calls `UUID::randomUUID()` as a C++ function directly (not through JNI dispatch) |
-| `jni_descriptors.cpp` | 315 | FakeJni class descriptors | ⏳ | Dies with `jni_support.cpp` port |
+| `jni_descriptors.cpp` | 315 | FakeJni class descriptors | 🟡 | Dies with `jni_support.cpp` port — `registerMinecraftNatives()` calls `MainActivity::getDescriptor()` etc. |
 
 ## Static Libraries (all compiled locally via build.rs, no cmake prebuilts)
 
@@ -88,8 +88,8 @@ Independent:  xbox_live.cpp, lib_http_client*.cpp, pulseaudio, sdl3audio
 
 The **bottleneck** is `jni_support.cpp` (673 lines). It contains:
 - `registerJniClasses()` — 40+ `vm.registerClass<T>()` calls
-- `registerMinecraftNatives()` — 13 native method registrations
-- `startGame()` — the active startup path that creates `MainActivity` and calls `GameActivity_onCreate`
+- `registerMinecraftNatives()` — 13 native method registrations (still called during startup)
+- `startGame()` — the old C++ startup path (no longer active — Rust `jni_support_start_game()` is used instead)
 - `onWindowCreated/Closed/Resized`, text input, back/return key callbacks
 
 A Rust version exists in `jni_support.rs` (1122 lines). Key functions ported:
@@ -98,11 +98,27 @@ A Rust version exists in `jni_support.rs` (1122 lines). Key functions ported:
 |----------|----------|--------|
 | `jni_support_new()` / `jni_support_destroy()` | `jni_support.rs:198` | ✅ Active — creates libjnivm-sys VM |
 | `jni_support_start_game()` | `jni_support.rs:493` | ✅ Active — `main.rs:110` calls this, not C++ |
-| `jni_support_start_game_with_baron()` | `jni_support.rs:359` | ✅ Active — orchestrates Baron LocalFrame, calls `GameActivity_onCreate`, dispatches `onStart`/`onNativeWindowCreated` |
+| `jni_support_start_game_with_baron()` | `jni_support.rs:359` | ✅ Bridges to C++ FakeJni for `GameActivity_onCreate` via Baron LocalFrame |
 | `jni_support_register_natives()` | `jni_support.rs:236` | ✅ Active — registers 13+ Java native classes via `jnivm_register_natives` |
 | Event dispatch (`sendKeyDown`/`sendKeyUp`/`sendMotionEvent`) | `jni_support.rs:450` | ✅ Active — forwards to `GameActivityCallbacks` |
 
-The Rust `jni_support_start_game_with_baron()` bridges to the C++ FakeJni VM for Baron JNI operations (the game caches Baron's `vm`/`env` pointers). The C++ `jni_support_start_game_cpp` path (in `jni_bridge_stub.cpp`) is fallback only — never called from `main.rs`.
+### Env Switch (Phase 5 — Complete)
+
+`(*ga).env` now points to `get_env()` (libjnivm-sys) instead of `baron_env` (FakeJni). This means:
+- All game JNI dispatch (`CallVoidMethod`, `CallStaticVoidMethod`, `FindClass`, etc.) goes through the Rust libjnivm-sys vtable
+- `main_activity.rs` (57 methods) and `jnivm_class_wrappers.rs` (21 methods across 9 classes) are handling real game calls
+- FakeJni is still linked and used for `FakeLooper::onGameActivityClose` (exit callback) and any C++ JNI stubs that remain
+
+### C++ Global Getters/Setters (Phase 5 clean-up)
+
+`jnivm_globals.rs` provides `#[no_mangle] extern "C"` replacements for the C++ global getter/setter functions that were previously in `jnivm_class_wrappers.cpp`:
+- `jnivm_set/get_main_window`
+- `jnivm_set/get_storage_dir`
+- `jnivm_set/get_text_input_handler`
+- `jnivm_set/get_asset_manager`
+- `jnivm_set/get_stbi_load_from_memory/image_free`
+
+These are called from Rust startup (`jni_support_start_game`) and C++ bridge code.
 
 ## Bridge Stubs (27 files, ~5,200 lines)
 
@@ -111,7 +127,7 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | File | Lines | Bridges To |
 |------|-------|------------|
 | `window_callbacks_stub.cpp` | 713 | Key mapping, gamepad, pointer lock → Rust `rust_bridge.rs` |
-| `jnivm_class_wrappers.cpp` | 648 | Registers 10 Java classes with libjnivm-sys |
+| `jnivm_class_wrappers.cpp` | 648 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs`) |
 | `http_client_stubs.cpp` | 441 | Stub HTTP client for XAL |
 | `jni_bridge_stub.cpp` | 375 | Android hooks, window creation, game loading, C++ wrappers for Rust `jni_support_start_game_with_baron` (FakeJni, PathHelper, XboxLiveHelper FFI) |
 | `text_input_handler_stub.cpp` | 233 | Text input state management |
@@ -120,18 +136,28 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | `fake_egl_stub.cpp` | 161 | Delegates to Rust eglut |
 | `core_patches_stub.cpp` | 141 | Vtable patching, cursor lock |
 
+## New Rust Files
+
+| File | Lines | Role |
+|------|-------|------|
+| `crates/client/src/main_activity.rs` | ~1300 | All 57 MainActivity JNI methods (getScreenWidth, createUUID, showKeyboard, etc.) |
+| `crates/client/src/jnivm_class_wrappers.rs` | ~380 | 21 methods across 9 Java classes (File, Context, Build, PackageInfo, etc.) |
+| `crates/client/src/jnivm_globals.rs` | ~80 | `#[no_mangle]` extern "C" getter/setter functions for C++ global state |
+
 ## Overall Estimate
 
-| Category | Rust % | C++ % |
-|----------|--------|-------|
-| libc shim | 100% | 0% |
-| JNI VM | 100% | 0% (bridge only) |
-| EGL | 100% | 0% |
-| ELF linker | ~30% | ~70% |
-| Game window | ~30% | ~70% |
-| JNI classes | ~30% | ~70% |
-| IPC/Telemetry | 0% (local C++) | 100% |
-| Startup orchestration | ~60% | ~40% |
-| FakeLooper | ~70% | ~30% |
-| Build system | 100% (no cmake) | 0% |
-| **Overall** | **~70%** | **~30%** |
+| Category | Rust % | Target |
+|----------|--------|--------|
+| libc shim | 100% | 100% |
+| JNI VM | 100% | 100% (bridge only remaining) |
+| EGL | 100% | 100% |
+| ELF linker (bionic) | ~30% | 100% (Rust linker crate exists, needs full relocation) |
+| Game window | ~30% | 100% (eglut done, gamepad remaining) |
+| JNI classes | ~70% | 100% (57/57 MainActivity methods done, store/xbox/http remaining) |
+| mcpelauncher-core | ~0% | 100% (game loading, hooks, patching, mod loading) |
+| Startup orchestration | ~60% | 100% |
+| FakeLooper | ~70% | 100% |
+| Build system | 100% | 100% (no cmake) |
+| IPC/Telemetry | ~0% | 100% (Rust crates exist, C++ bridge still active) |
+
+(Raw line counts: Rust 17K, C++ 84K, C Headers 76K, C 23K — ~8.5% Rust by total code. The percentages above are per-component estimates of critical-path functionality ported so far.)

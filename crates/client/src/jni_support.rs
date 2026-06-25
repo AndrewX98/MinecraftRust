@@ -153,7 +153,8 @@ pub fn register_all_classes() {
     locale::register(env);
     certificate::register(env);
     ecdsa_impl::register(env);
-    unsafe { register_all_jnivm_classes(env); }
+    crate::jnivm_class_wrappers::register_all(env);
+    crate::main_activity::register(env);
     log::info!("jni_support: registered all Java classes with libjnivm-sys VM");
 }
 
@@ -398,7 +399,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     let callbacks_ptr = jni_support_get_game_activity_callbacks_ptr(s);
     (*ga).callbacks = callbacks_ptr as *mut GameActivityCallbacks;
     (*ga).vm = jni_support_get_java_vm_ptr(s) as *mut JavaVM;
-    (*ga).env = baron_env;
+    (*ga).env = get_env();
     (*ga).asset_manager = asset_manager;
     (*ga).java_game_activity = jni_support_get_activity_ref(s);
     (*ga).sdk_version = 32;

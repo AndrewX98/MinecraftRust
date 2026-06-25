@@ -280,6 +280,14 @@ static void* g_stbi_image_free = nullptr;
 extern "C" void jnivm_set_stbi_load_from_memory(void* fn) { g_stbi_load_from_memory = fn; }
 extern "C" void jnivm_set_stbi_image_free(void* fn) { g_stbi_image_free = fn; }
 
+// Getters for Rust main_activity module
+extern "C" void* jnivm_get_main_window() { return g_main_window; }
+extern "C" const char* jnivm_get_storage_dir() { return g_storage_dir; }
+extern "C" void* jnivm_get_text_input_handler() { return g_text_input_handler; }
+extern "C" void* jnivm_get_asset_manager() { return g_asset_manager; }
+extern "C" void* jnivm_get_stbi_load_from_memory() { return g_stbi_load_from_memory; }
+extern "C" void* jnivm_get_stbi_image_free() { return g_stbi_image_free; }
+
 extern "C" jint JNICALL MainActivity_getAndroidVersion(JNIEnv* env, jobject self) {
     return 32;
 }

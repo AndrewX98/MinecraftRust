@@ -124,6 +124,8 @@ main()  [main.rs:15]
 │      ├── jnivm_set_stbi_load_from_memory(), jnivm_set_stbi_image_free()
 │      ├── JNI NewObject → MainActivity instance via libjnivm-sys
 │      ├── Creates GameActivity struct (Rust, leaked for program lifetime)
+│      ├── **Env switch**: `(*ga).env = get_env()` (libjnivm-sys, not baron_env)
+│      │   Game now dispatches all JNI calls through Rust vtable
 │      ├── Sets up storage dir, asset manager
 │      │
 │      ├── jni_support_start_game_with_baron(cpp_support, ...) [jni_support.rs:359]
@@ -178,10 +180,10 @@ The `fake_egl_make_current` function (rust_bridge.rs:940) is critical:
 - Avoids Mesa X11 thread affinity issue (EGL_BAD_ACCESS when using context from wrong thread)
 - Each thread gets its own EGL surface stored in TLS (`THREAD_SURFACES`)
 
-### Two JNI VMs — Both Active
-- Step 11: C++ FakeJni (Baron) VM created — **primary JNI the game sees** (the game caches Baron's `vm`/`env` from GameActivity)
-- Step 14: Rust libjnivm-sys VM created — **used for class registration** (jni_support.rs:150-158), **native method registration** (jni_support.rs:236-356), and **network status dispatch** (jni_support.rs:570-581)
-- Step 20's `jni_support_start_game_with_baron()` bridges both: class registrations live on libjnivm-sys, but GameActivity_onCreate receives the Baron VM so the game's cache points to FakeJni
+### Two JNI VMs — Rust Dispatch Active
+- Step 11: C++ FakeJni (Baron) VM created — **legacy**, kept for `vm` operations (`AttachCurrentThread`) and `FakeLooper::onGameActivityClose`
+- Step 14: Rust libjnivm-sys VM created — **primary JNI dispatch** for the game
+- Step 20: `(*ga).env = get_env()` **switches game dispatch** from Baron to libjnivm-sys. All game `CallXxxMethod`/`FindClass`/`RegisterNatives` now go through the Rust vtable. `ga->vm` still points to Baron for VM-level operations.
 
 ### Dual Linker Registration
 - Step 5: Rust linker registers libc symbols
@@ -191,6 +193,8 @@ The `fake_egl_make_current` function (rust_bridge.rs:940) is critical:
 The Rust version at `jni_support.rs:493` is the **active** start path. It:
 1. Creates GameActivity struct with libjnivm-sys VM/env
 2. Creates MainActivity via JNI NewObject
-3. Bridges to C++ FakeJni via `jni_support_start_game_with_baron()` for `GameActivity_onCreate` (game caches Baron VM)
-4. Calls lifecycle callbacks (onStart, onNativeWindowCreated) after game returns
-5. Still depends on C++ FakeJni for Baron operations — full libjnivm-sys exclusivity requires porting `main_activity.cpp` and eliminating the Baron LocalFrame bridge
+3. Sets `(*ga).env = get_env()` — **switches game JNI dispatch** to libjnivm-sys (Phase 5)
+4. Bridges to C++ FakeJni via `jni_support_start_game_with_baron()` for `GameActivity_onCreate` (game caches Baron `vm`, but `env` is already switched to libjnivm-sys)
+5. All 57 MainActivity methods and 9 wrapper classes handled by Rust (`main_activity.rs`, `jnivm_class_wrappers.rs`)
+6. Calls lifecycle callbacks (onStart, onNativeWindowCreated) after game returns
+7. C++ FakeJni still needed for: `ga->vm` operations (AttachCurrentThread), FakeLooper::onGameActivityClose, and linker compatibility

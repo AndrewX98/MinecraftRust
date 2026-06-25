@@ -1646,7 +1646,7 @@ pub unsafe extern "C" fn file_util_read_file_rust(
             Box::into_raw(boxed) as *mut u8
         }
         Err(e) => {
-            log::warn!("file_util_read_file_rust: failed to read '{}': {}", p, e);
+            log::debug!("file_util_read_file_rust: failed to read '{}': {}", p, e);
             *out_len = 0;
             std::ptr::null_mut()
         }

@@ -28,12 +28,13 @@ Rust declares these extern "C" functions and calls them through FFI. They are im
 
 | Rust Call | C++ / Rust Target | File | Purpose |
 |-----------|-------------------|------|---------|
-| `register_all_jnivm_classes(env)` | `jnivm_class_wrappers.cpp` | C++ wrapper | Register 10 Java classes with libjnivm-sys |
-| `jnivm_set_main_window(window)` | `jnivm_class_wrappers.cpp` | C++ wrapper | Set global window ptr for C++ wrappers |
-| `jnivm_set_storage_dir(dir)` | `jnivm_class_wrappers.cpp` | C++ wrapper | Set storage dir for MainActivity wrappers |
-| `jnivm_set_asset_manager(mgr)` | `jnivm_class_wrappers.cpp` | C++ wrapper | Set asset manager for wrappers |
-| `jnivm_set_stbi_load_from_memory(fn)` | `jnivm_class_wrappers.cpp` | C++ wrapper | Set stbi loader ptr |
-| `jnivm_set_stbi_image_free(fn)` | `jnivm_class_wrappers.cpp` | C++ wrapper | Set stbi free ptr |
+| `register_all_jnivm_classes(env)` | `jnivm_class_wrappers.cpp` + `jnivm_class_wrappers.rs` | C++ + Rust | Register 10 Java classes with libjnivm-sys (Rust registrations active, C++ redundant) |
+| `jnivm_set_main_window(window)` | `jnivm_globals.rs` (Rust `#[no_mangle]`) | Rust | Set global window ptr for wrappers |
+| `jnivm_set_storage_dir(dir)` | `jnivm_globals.rs` (Rust `#[no_mangle]`) | Rust | Set storage dir for MainActivity wrappers |
+| `jnivm_set_text_input_handler(handler)` | `jnivm_globals.rs` (Rust `#[no_mangle]`) | Rust | Set text input handler ptr |
+| `jnivm_set_asset_manager(mgr)` | `jnivm_globals.rs` (Rust `#[no_mangle]`) | Rust | Set asset manager for wrappers |
+| `jnivm_set_stbi_load_from_memory(fn)` | `jnivm_globals.rs` (Rust `#[no_mangle]`) | Rust | Set stbi loader ptr |
+| `jnivm_set_stbi_image_free(fn)` | `jnivm_globals.rs` (Rust `#[no_mangle]`) | Rust | Set stbi free ptr |
 | `fake_jni_jvm_attach_library(jvm, path)` | Baron JVM `attachLibrary()` | jni_bridge_stub.cpp | Attach lib for JNI_OnLoad |
 | `fake_jni_local_frame_create/destroy/get_env` | Baron `LocalFrame` | jni_bridge_stub.cpp | Baron local frame mgmt |
 | `fake_assetmanager_get_instance()` | FakeAssetManager | C++ | Get global asset manager instance |
@@ -63,6 +64,7 @@ Rust provides ~154+ `#[no_mangle]` extern "C" functions callable from C++.
 |--------|-------|-----------|
 | `rust_bridge.rs` | ~62 | FakeWindow(4), SwappyGL(16), ThreadMover(2), GLCorePatch(7), CorePatches(1), WindowCallbacks(3), FakeEGL(~30), SHA/Base64/File(9), JNI variants |
 | `jni_support.rs` | ~14 | jni_support_new/destroy/register_natives/start_game_with_baron/start_game/set_looper_running/on_window_created/on_window_closed/on_window_resized/send_key_down/send_key_up/send_motion_event/create_cpp/destroy_cpp |
+| `jnivm_globals.rs` | ~6 | jnivm_set/get_main_window, jnivm_set/get_storage_dir, jnivm_set/get_text_input_handler, jnivm_set/get_asset_manager, jnivm_set/get_stbi_load_from_memory, jnivm_set/get_stbi_image_free |
 | `fake_looper.rs` | ~7 | mc_register_fake_looper_hooks, fake_looper_prepare_begin, fake_looper_notify_window_created, fake_looper_create_window_callbacks, fake_looper_register_core_patches, fake_looper_show_window, fake_looper_*patch* |
 | `eglut/` | ~60 | eglutInit/CreateWindow/PollEvents/MainLoop/WarpMousePointer, window mgmt, callbacks, mouse, compat, egl, event, state, xinput |
 | `file_picker.rs` | ~8 | File picker factory CRUD |
@@ -104,7 +106,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 |------|-------|------|
 | `capi.cpp` | 213 | Low-level bridge: path setup, linker init, GLES2 symbol registration |
 | `jni_bridge_stub.cpp` | 375 | Android hooks, window creation, game lib loading, C++ JniSupport FFI wrappers, FakeJni/Baron LocalFrame wrappers |
-| `jnivm_class_wrappers.cpp` | 647 | Registers 10 Java classes with libjnivm-sys (FindClass + RegisterNatives) |
+| `jnivm_class_wrappers.cpp` | 647 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs` — C++ kept for `registerClass<>()` linker deps from `jni_support.cpp`) |
 | `window_callbacks_stub.cpp` | 710 | Window callback registration, key mapping, delegates to Rust event dispatch |
 | `core_patches_stub.cpp` | 141 | CorePatches vtable patching, cursor lock, fullscreen |
 | `fake_egl_stub.cpp` | 161 | Delegates all EGL functions to Rust eglut module |
@@ -120,6 +122,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | Functionality | C++ Removed | Rust Replacement | Status |
 |--------------|-------------|------------------|--------|
 | Startup orchestration | `JniSupport::startGame()` | `jni_support::jni_support_start_game()` | Done |
+| Env switch (JNI dispatch) | `baron_env` on `ga->env` | `get_env()` (libjnivm-sys) on `ga->env` | Done |
 | Event dispatch (sendKeyDown/Up/MotionEvent) | `JniSupport::sendKeyDown()` etc. | `jni_support::jni_support_send_key_down()` etc. | Done |
 | JniSupport create/destroy | `new/delete JniSupport` | `jni_support_create_cpp()` / `jni_support_destroy_cpp()` | Done |
 | FakeLooper prepare | `FakeLooper::prepare()` | `fake_looper::prepare()` (Rust) | Done |
@@ -128,3 +131,6 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | FakeLooper attachInputQueue | `FakeLooper::attachInputQueue()` | `fake_looper::attach_input_queue()` (Rust) | Done |
 | hybris hook lambdas | 6 lambdas in jni_bridge_stub.cpp | `fake_looper.rs` hook registration | Done |
 | start_game_with_baron | `JniSupport::startGame()` (Baron path) | `jni_support::jni_support_start_game_with_baron()` (Rust) | Done |
+| MainActivity JNI methods (57 methods) | `main_activity.cpp` | `main_activity.rs` | Done |
+| Class wrapper JNI methods (9 classes, 21 methods) | `jnivm_class_wrappers.cpp` | `jnivm_class_wrappers.rs` | Done |
+| C++ global getter/setters (6 functions) | `jnivm_class_wrappers.cpp` (embedded) | `jnivm_globals.rs` (dedicated `#[no_mangle]` module) | Done |

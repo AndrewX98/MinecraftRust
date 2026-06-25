@@ -32,13 +32,13 @@ Full Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaff
 
 ## Two JNI VMs Coexist
 
-1. **FakeJni VM** (C++ `jni_support.cpp`) — The **legacy** VM. Game receives this through `gameActivity.vm`. Still used by FakeLooper for window callbacks and text input. Game JNI dispatch was recently switched to the Rust VM.
+1. **libjnivm-sys VM** (Rust `jni_support.rs` + `libjnivm-sys` crate) — The **active** VM for game JNI dispatch. `main.rs:110` calls `jni_support::jni_support_start_game()` (Rust), which creates the Baron VM for `vm` operations, registers classes via `register_all_classes()` (Rust) and `register_all_jnivm_classes()` (C++), sets `(*ga).env` to the Rust JNI env, and dispatches `GameActivity_onCreate`. All game calls to `CallVoidMethod`, `FindClass`, `RegisterNatives` go through the Rust 250-function vtable.
 
-2. **libjnivm-sys VM** (Rust `jni_support.rs` + `libjnivm-sys` crate) — The **active** VM for game startup. `main.rs:110` calls `jni_support::jni_support_start_game()` (Rust), which creates the Baron VM, attaches the game library, sets up JNI, and dispatches `GameActivity_onCreate`. Classes are registered via `register_all_classes()` (Rust modules) and `register_all_jnivm_classes()` (C++ wrappers, `jnivm_class_wrappers.cpp`).
+2. **FakeJni VM** (C++ `jni_support.cpp`) — The **legacy** VM. Created first during startup. Game receives the Baron VM through `gameActivity.vm` for operations like `AttachCurrentThread`. Still needed by `FakeLooper::onGameActivityClose` for exit callback dispatch and by `jni_support.cpp` for `registerClass<T>()` registrations that keep the C++ linker happy. Game JNI dispatch was switched from Baron to the Rust VM in Phase 5.
 
 ## Key Architectural Insight
 
-The Rust `jni_support::jni_support_start_game()` function (1,122 lines) is now the **active game startup path**, called from `main.rs:110`. The C++ `start_game_cpp()` bridge is kept for compatibility but is no longer the primary dispatch. The C++ FakeJni VM is still needed for FakeLooper callback dispatch (window, input queue, callbacks), meaning `jni_support.cpp` and FakeLooper-dependent C++ files must remain compiled for now.
+The Rust `jni_support::jni_support_start_game()` function (1,122 lines) is now the **active game startup path**, called from `main.rs:110`. The C++ `start_game_cpp()` bridge is kept for compatibility but is no longer the primary path. The C++ FakeJni VM is still needed for `FakeLooper::onGameActivityClose` callback dispatch, meaning `jni_support.cpp` and FakeLooper-dependent C++ files must remain compiled for now.
 
 ## Two Linkers Coexist
 

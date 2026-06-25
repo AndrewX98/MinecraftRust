@@ -4,6 +4,9 @@ mod jni_support;
 mod file_picker;
 mod eglut;
 mod fake_looper;
+mod main_activity;
+mod jnivm_class_wrappers;
+mod jnivm_globals;
 
 use std::ffi::{c_char, c_void, CStr};
 
