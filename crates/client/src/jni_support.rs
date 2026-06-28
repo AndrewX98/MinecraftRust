@@ -104,6 +104,25 @@ struct JvmState {
     env: SendPtr<JNIEnv>,
 }
 
+static BARON_ENV: OnceLock<Mutex<Option<SendPtr<c_void>>>> = OnceLock::new();
+
+pub fn set_baron_env(env: *mut JNIEnv) {
+    if let Ok(mut guard) = BARON_ENV.get_or_init(|| Mutex::new(None)).lock() {
+        *guard = Some(SendPtr(env as *mut c_void));
+    }
+}
+
+pub fn get_baron_env() -> Option<*mut JNIEnv> {
+    if let Some(m) = BARON_ENV.get() {
+        if let Ok(guard) = m.lock() {
+            if let Some(ref p) = *guard {
+                return Some(p.0 as *mut JNIEnv);
+            }
+        }
+    }
+    None
+}
+
 fn jvm_state() -> &'static Mutex<JvmState> {
     static STATE: OnceLock<Mutex<JvmState>> = OnceLock::new();
     STATE.get_or_init(|| {
@@ -155,6 +174,10 @@ pub fn register_all_classes() {
     ecdsa_impl::register(env);
     crate::jnivm_class_wrappers::register_all(env);
     crate::main_activity::register(env);
+    crate::jni::store::register_all(env);
+    crate::jni::audio::register(env);
+    crate::jni::http_client::register(env);
+    crate::jni::websocket::register(env);
     log::info!("jni_support: registered all Java classes with libjnivm-sys VM");
 }
 
@@ -373,6 +396,14 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     // Get Baron JVM from C++ JniSupport
     let jvm = jni_support_get_jvm(s);
 
+    // Baron LocalFrame — MUST be created BEFORE library attachment.
+    // XSAPI's JNI_OnLoad spawns background threads that access the JNI env;
+    // without an active frame, concurrent env access causes SIGSEGV.
+    // This matches the C++ JniSupport::startGame ordering.
+    let frame = fake_jni_local_frame_create(jvm);
+    let baron_env = fake_jni_local_frame_get_env(frame) as *mut JNIEnv;
+    set_baron_env(baron_env);
+
     // Attach libraries — calls JNI_OnLoad for each (CrashManager registration etc.)
     // Use CString for each lib since byte slices have different lengths
     let libs = [CString::new("libfmod.so").unwrap(), CString::new("libminecraftpe.so").unwrap(), CString::new("libPlayFabMultiplayer.so").unwrap()];
@@ -390,10 +421,6 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     jnivm_set_stbi_load_from_memory(stbi_load);
     jnivm_set_stbi_image_free(stbi_image_free);
     xbox_live_helper_set_jvm(jvm);
-
-    // Baron LocalFrame — env pointer is valid for the entire function scope
-    let frame = fake_jni_local_frame_create(jvm);
-    let baron_env = fake_jni_local_frame_get_env(frame) as *mut JNIEnv;
 
     // Set up GameActivity with Baron values
     let callbacks_ptr = jni_support_get_game_activity_callbacks_ptr(s);

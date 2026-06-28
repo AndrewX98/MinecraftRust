@@ -373,6 +373,10 @@ fn main() {
         "shahasher.cpp",
         "http_stub.cpp",
         "ecdsa.cpp",
+        "store.cpp",
+        "uuid.cpp",
+        "pulseaudio.cpp",
+        "sdl3audio.cpp",
     ].into_iter().collect();
     for entry in std::fs::read_dir(manifest_dir.join("src/jni")).unwrap() {
         let entry = entry.unwrap();
@@ -412,6 +416,10 @@ fn main() {
         "webview_stub.cpp",
         "shahasher_stub.cpp",
         "file_picker_stub.cpp",
+        "store_stub.cpp",
+        "uuid_stub.cpp",
+        "pulseaudio_stub.cpp",
+        "sdl3audio_stub.cpp",
     ];
     for f in &stub_files {
         let path = manifest_dir.join("src").join(f);

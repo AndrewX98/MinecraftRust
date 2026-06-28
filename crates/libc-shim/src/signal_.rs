@@ -19,5 +19,8 @@ pub unsafe extern "C" fn bsd_signal(sig: i32, func: Option<unsafe extern "C" fn(
     let old = libc::signal(sig, std::mem::transmute::<Option<unsafe extern "C" fn(i32)>, usize>(func));
     std::mem::transmute::<usize, Option<unsafe extern "C" fn(i32)>>(old)
 }
+pub unsafe extern "C" fn pthread_sigmask(how: i32, set: *const libc::sigset_t, oldset: *mut libc::sigset_t) -> i32 {
+    libc::pthread_sigmask(how, set, oldset)
+}
 pub unsafe extern "C" fn kill(pid: i32, sig: i32) -> i32 { libc::kill(pid, sig) }
 pub unsafe extern "C" fn killpg(pgrp: i32, sig: i32) -> i32 { libc::killpg(pgrp, sig) }

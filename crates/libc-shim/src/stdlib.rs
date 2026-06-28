@@ -154,3 +154,30 @@ pub unsafe extern "C" fn strtold_l(s: *const c_char, endptr: *mut *mut c_char, _
     extern "C" { fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> u128; }
     strtold(s, endptr)
 }
+
+#[repr(C)]
+pub struct ldiv_t {
+    pub quot: libc::c_long,
+    pub rem: libc::c_long,
+}
+pub unsafe extern "C" fn ldiv(numerator: libc::c_long, denominator: libc::c_long) -> ldiv_t {
+    ldiv_t { quot: numerator / denominator, rem: numerator % denominator }
+}
+
+#[repr(C)]
+pub struct lldiv_t {
+    pub quot: libc::c_longlong,
+    pub rem: libc::c_longlong,
+}
+pub unsafe extern "C" fn lldiv(numerator: libc::c_longlong, denominator: libc::c_longlong) -> lldiv_t {
+    lldiv_t { quot: numerator / denominator, rem: numerator % denominator }
+}
+
+#[repr(C)]
+pub struct imaxdiv_t {
+    pub quot: i64,
+    pub rem: i64,
+}
+pub unsafe extern "C" fn imaxdiv(numerator: i64, denominator: i64) -> imaxdiv_t {
+    imaxdiv_t { quot: numerator / denominator, rem: numerator % denominator }
+}

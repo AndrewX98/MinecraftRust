@@ -7,6 +7,7 @@ mod fake_looper;
 mod main_activity;
 mod jnivm_class_wrappers;
 mod jnivm_globals;
+mod jni;
 
 use std::ffi::{c_char, c_void, CStr};
 

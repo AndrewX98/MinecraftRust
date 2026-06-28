@@ -19,6 +19,7 @@ pub struct JvmInner {
     pub env_handle: *mut JNIEnvAttrs,
     pub handles: HashMap<usize, String>,
     pub next_class_id: usize,
+    pub object_fields: HashMap<usize, HashMap<String, jvalue>>,
 }
 
 unsafe impl Send for JvmInner {}
@@ -39,6 +40,7 @@ pub fn jvm_state() -> &'static Mutex<JvmInner> {
             env_handle: env,
             handles: HashMap::new(),
             next_class_id: 1,
+            object_fields: HashMap::new(),
         })
     })
 }
@@ -75,4 +77,36 @@ pub fn get_class_name_from_handle(clazz: jclass) -> Option<String> {
     let id = clazz as usize;
     let state = jvm_state().lock().unwrap();
     state.handles.get(&id).cloned()
+}
+
+pub fn get_field_id_name(fieldID: jfieldID) -> Option<(String, String)> {
+    if fieldID.is_null() { return None; }
+    unsafe {
+        let pair = fieldID as *const (String, String);
+        Some(((*pair).0.clone(), (*pair).1.clone()))
+    }
+}
+
+pub fn set_field(obj: jobject, field_name: &str, value: jvalue) {
+    if obj.is_null() { return; }
+    let mut state = jvm_state().lock().unwrap();
+    state.object_fields
+        .entry(obj as usize)
+        .or_insert_with(HashMap::new)
+        .insert(field_name.to_string(), value);
+}
+
+pub fn get_field(obj: jobject, field_name: &str) -> Option<jvalue> {
+    if obj.is_null() { return None; }
+    let state = jvm_state().lock().unwrap();
+    state.object_fields
+        .get(&(obj as usize))
+        .and_then(|fields| fields.get(field_name))
+        .copied()
+}
+
+pub fn alloc_object_fields(obj: jobject) {
+    if obj.is_null() { return; }
+    let mut state = jvm_state().lock().unwrap();
+    state.object_fields.entry(obj as usize).or_insert_with(HashMap::new);
 }
