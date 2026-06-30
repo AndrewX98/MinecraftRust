@@ -27,7 +27,7 @@ The launcher uses a **dual JNI VM** setup during transition. The Rust libjnivm-s
 
 ### libjnivm-sys VM (Rust) — via `register_all_classes()` in `jni_support.rs:130`
 
-**Rust modules** (4 modules, in `jni_support.rs`):
+**Rust modules** (8 modules, in `jni_support.rs` + `crates/client/src/jni/`):
 
 | Module | Java Class | Methods |
 |--------|------------|---------|
@@ -38,6 +38,15 @@ The launcher uses a **dual JNI VM** setup during transition. The Rust libjnivm-s
 | `certificate` | `org/apache/http/conn/ssl/StrictHostnameVerifier` | verify |
 | `ecdsa_impl` | `com/microsoft/xal/crypto/Ecdsa` | \<init\>, generateKey, sign, getPublicKey, getUniqueId, restoreKeyAndId |
 | `ecdsa_impl` | `com/microsoft/xal/crypto/EccPubKey` | getBase64UrlX, getBase64UrlY |
+| `store` | `com/mojang/minecraftpe/store/Store` | receivedLicenseResponse, hasVerifiedLicense, getStoreId, getProductSkuPrefix, getRealmsSkuPrefix, getExtraLicenseData, queryProducts, purchase, acknowledgePurchase, queryPurchases, destructor |
+| `store` | `com/mojang/minecraftpe/store/NativeStoreListener` | onStoreInitialized, onPurchaseFailed, onQueryProductsSuccess, onQueryPurchasesSuccess |
+| `store` | `com/mojang/minecraftpe/store/ExtraLicenseResponseData` | getValidationTime, getRetryUntilTime, getRetryAttempts |
+| `store` | `com/mojang/minecraftpe/NotificationListenerService` | getDeviceRegistrationToken |
+| `store` | `com/mojang/minecraftpe/store/StoreFactory` | createGooglePlayStore, createAmazonAppStore |
+| `audio` | `org/fmod/AudioDevice` | init, write, write2, close |
+| `http_client` | `com/xbox/httpclient/HttpClientRequest` | \<init\>, destroy, isNetworkAvailable, createClientRequest, setHttpUrl, setHttpMethodAndBody, setHttpHeader, doRequestAsync |
+| `http_client` | `com/xbox/httpclient/HttpClientResponse` | getNumHeaders, getHeaderNameAtIndex, getHeaderValueAtIndex, getResponseBodyBytes, getResponseCode |
+| `websocket` | `com/xbox/httpclient/HttpClientWebSocket` | \<init\>, destroy, connect, addHeader, sendMessage, sendBinaryMessage, disconnect |
 
 Plus 5 "ensured" classes (FindClass only): InputStream, ByteArrayInputStream, Certificate, TrustManager, X509TrustManager
 
@@ -114,6 +123,8 @@ registerNatives(MainActivity::getDescriptor(), {{"nativeRegisterThis", "()V"}, .
 3. **Registration redundancy**: Both VMs still register the same classes and natives. The C++ `registerJniClasses()` runs first (step 11 in startup), then Rust `register_all_classes()` runs (step 14). This redundancy is a transitional requirement — `jni_support.cpp` must still compile and link.
 
 4. **`jnivm_globals.rs`** provides `#[no_mangle]` extern "C" getter/setter functions that the C++ bridge code calls to access global state (window handle, storage dir, text input handler, asset manager, stbi function pointers). Previously these lived in `jnivm_class_wrappers.cpp`.
+
+5. **BARON_ENV** global (`jni_support.rs:107`): A `OnceLock<Mutex<Option<SendPtr<c_void>>>>` that stores the Baron `JNIEnv` pointer. Set via `set_baron_env()` (line 109) during `jni_support_start_game_with_baron()` — the Baron `LocalFrame` is created **before** library attachment (line 403) to ensure XSAPI's `JNI_OnLoad` background threads have safe env access. Retrieved via `get_baron_env()` (line 115) by any code needing the Baron env for FakeJni callbacks.
 
 ## Two-VM Coexistence (during transition)
 

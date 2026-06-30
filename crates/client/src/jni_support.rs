@@ -6,7 +6,9 @@
 
 use libjnivm_sys::*;
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::sync::{Mutex, OnceLock, atomic::{AtomicBool, Ordering}};
+use std::sync::{Mutex, Condvar, OnceLock, atomic::{AtomicBool, Ordering}};
+
+use crate::jnivm_globals::jnivm_set_text_input_handler;
 
 // ================================================================
 // Send wrapper for raw pointers
@@ -178,7 +180,17 @@ pub fn register_all_classes() {
     crate::jni::audio::register(env);
     crate::jni::http_client::register(env);
     crate::jni::websocket::register(env);
+    crate::jni::xbox_live::register(env);
     log::info!("jni_support: registered all Java classes with libjnivm-sys VM");
+}
+
+// ================================================================
+// Game exit synchronization state
+// ================================================================
+
+struct GameState {
+    game_exit_val: bool,
+    looper_running: bool,
 }
 
 // ================================================================
@@ -195,6 +207,8 @@ struct JniSupport {
     asset_manager: SendPtr<c_void>,
     is_game_activity: bool,
     game_handle: SendPtr<c_void>,
+    game_state: Mutex<GameState>,
+    game_cond: Condvar,
 }
 
 static JNI_SUPPORT: OnceLock<Mutex<Option<Box<JniSupport>>>> = OnceLock::new();
@@ -237,6 +251,8 @@ pub unsafe extern "C" fn jni_support_new() -> *mut c_void {
         asset_manager: SendPtr(std::ptr::null_mut()),
         is_game_activity: true,
         game_handle: SendPtr(std::ptr::null_mut()),
+        game_state: Mutex::new(GameState { game_exit_val: false, looper_running: false }),
+        game_cond: Condvar::new(),
     });
 
     let ptr = Box::into_raw(support);
@@ -423,8 +439,8 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     xbox_live_helper_set_jvm(jvm);
 
     // Set up GameActivity with Baron values
-    let callbacks_ptr = jni_support_get_game_activity_callbacks_ptr(s);
-    (*ga).callbacks = callbacks_ptr as *mut GameActivityCallbacks;
+    // NOTE: (*ga).callbacks already points to Rust-allocated GameActivityCallbacks
+    // from jni_support_start_game. The game will write into Rust memory.
     (*ga).vm = jni_support_get_java_vm_ptr(s) as *mut JavaVM;
     (*ga).env = get_env();
     (*ga).asset_manager = asset_manager;
@@ -449,8 +465,8 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     let win = jni_support_get_window_ptr(s);
     eprintln!("=== Rust read window from JniSupport after gameOnCreate: {:p} ===", win);
 
-    // Read callbacks (populated by game during gameOnCreate)
-    let cb = &*(callbacks_ptr as *const GameActivityCallbacks);
+    // Read callbacks from the Rust-allocated GameActivity (populated by game during gameOnCreate)
+    let cb = &*(*ga).callbacks;
 
     eprintln!("=== Rust calling onStart (fn={:?}) ===", cb.on_start.map(|f| f as *const c_void));
     if let Some(f) = cb.on_start {
@@ -476,8 +492,11 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
 
 #[no_mangle]
 pub unsafe extern "C" fn jni_support_send_key_down(s: *mut c_void, event: *const c_void) {
-    let cb = &*(jni_support_get_game_activity_callbacks_ptr(s) as *const GameActivityCallbacks);
-    let ga = jni_support_get_game_activity_ptr(s) as *mut GameActivity;
+    if s.is_null() { return; }
+    let support = &*(s as *const JniSupport);
+    let ga = support.game_activity.0;
+    if ga.is_null() { return; }
+    let cb = &*support.game_callbacks.0;
     if let Some(f) = cb.on_key_down {
         f(ga, event);
     }
@@ -485,8 +504,11 @@ pub unsafe extern "C" fn jni_support_send_key_down(s: *mut c_void, event: *const
 
 #[no_mangle]
 pub unsafe extern "C" fn jni_support_send_key_up(s: *mut c_void, event: *const c_void) {
-    let cb = &*(jni_support_get_game_activity_callbacks_ptr(s) as *const GameActivityCallbacks);
-    let ga = jni_support_get_game_activity_ptr(s) as *mut GameActivity;
+    if s.is_null() { return; }
+    let support = &*(s as *const JniSupport);
+    let ga = support.game_activity.0;
+    if ga.is_null() { return; }
+    let cb = &*support.game_callbacks.0;
     if let Some(f) = cb.on_key_up {
         f(ga, event);
     }
@@ -494,9 +516,11 @@ pub unsafe extern "C" fn jni_support_send_key_up(s: *mut c_void, event: *const c
 
 #[no_mangle]
 pub unsafe extern "C" fn jni_support_send_motion_event(s: *mut c_void, event: *const c_void) {
-    let cb = &*(jni_support_get_game_activity_callbacks_ptr(s) as *const GameActivityCallbacks);
-    let ga = jni_support_get_game_activity_ptr(s) as *mut GameActivity;
+    if s.is_null() { return; }
+    let support = &*(s as *const JniSupport);
+    let ga = support.game_activity.0;
     if ga.is_null() { return; }
+    let cb = &*support.game_callbacks.0;
     if let Some(f) = cb.on_touch_event {
         f(ga, event);
     }
@@ -608,12 +632,23 @@ pub unsafe extern "C" fn jni_support_start_game(
     // Set game activity flag on support
     support.is_game_activity = true;
 
+    // Initialize the Rust TextInputHandler global (replaces C++ TextInputHandler)
+    let text_handler = crate::text_input_handler::TextInputHandler::new();
+    let text_handler_ptr = Box::into_raw(Box::new(text_handler)) as *mut c_void;
+    jnivm_set_text_input_handler(text_handler_ptr);
+
     log::info!("jni_support: startGame completed");
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn jni_support_set_looper_running(_s: *mut c_void, _running: i32) {
-    // TODO: implement game exit signaling
+pub unsafe extern "C" fn jni_support_set_looper_running(s: *mut c_void, running: i32) {
+    if s.is_null() { return; }
+    let support = &*(s as *mut JniSupport);
+    let mut state = support.game_state.lock().unwrap();
+    state.looper_running = running != 0;
+    if running == 0 {
+        support.game_cond.notify_all();
+    }
 }
 
 // ================================================================
@@ -636,8 +671,20 @@ pub unsafe extern "C" fn jni_support_on_window_created(s: *mut c_void, window: *
 #[no_mangle]
 pub unsafe extern "C" fn jni_support_on_window_closed(s: *mut c_void) {
     if s.is_null() { return; }
-    // Call nativeShutdown via JNI
-    with_support(|_| {});
+    let support = &mut *(s as *mut JniSupport);
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if !cls.is_null() {
+        let mid = jni_call!(env, GetMethodID(
+            cls,
+            b"nativeShutdown\0".as_ptr() as *const c_char,
+            b"()V\0".as_ptr() as *const c_char
+        ));
+        if !mid.is_null() {
+            jni_call!(env, CallStaticVoidMethod(cls, mid));
+        }
+    }
+    log::info!("jni_support_on_window_closed: nativeShutdown dispatched");
 }
 
 #[no_mangle]
@@ -657,6 +704,252 @@ pub unsafe extern "C" fn jni_support_on_window_resized(s: *mut c_void, new_width
             jni_call!(env, CallStaticVoidMethodA(cls, mid, resize_args.as_ptr() as *mut jvalue));
         }
     }
+}
+
+// ================================================================
+// Game lifecycle — stopGame, waitForGameExit, requestExitGame
+// ================================================================
+
+unsafe fn native_call_void(env: *mut JNIEnv, cls: jclass, name: &[u8], sig: &[u8]) {
+    let mid = jni_call!(env, GetMethodID(
+        cls,
+        name.as_ptr() as *const c_char,
+        sig.as_ptr() as *const c_char
+    ));
+    if !mid.is_null() {
+        jni_call!(env, CallStaticVoidMethod(cls, mid));
+    }
+}
+
+unsafe fn stop_game(support: &mut JniSupport) {
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if cls.is_null() {
+        log::error!("stop_game: FindClass failed");
+        return;
+    }
+
+    native_call_void(env, cls, b"nativeStopThis\0", b"()V\0");
+    native_call_void(env, cls, b"nativeUnregisterThis\0", b"()V\0");
+    native_call_void(env, cls, b"nativeOnDestroy\0", b"()V\0");
+
+    if !support.game_activity.0.is_null() {
+        let cb = &*support.game_callbacks.0;
+        let ga = support.game_activity.0;
+        if let Some(f) = cb.on_pause { f(ga); }
+        if let Some(f) = cb.on_stop { f(ga); }
+        if let Some(f) = cb.on_destroy { f(ga); }
+    }
+
+    let mut state = support.game_state.lock().unwrap();
+    state.game_exit_val = true;
+    state.looper_running = false;
+    support.game_cond.notify_all();
+
+    log::info!("stop_game: game shutdown complete");
+}
+
+fn url_decode(encoded: &str) -> String {
+    let mut decoded = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+            let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+            decoded.push((hi as u8 * 16 + lo as u8) as char);
+        } else {
+            decoded.push(c);
+        }
+    }
+    decoded
+}
+
+unsafe fn send_uri(support: &mut JniSupport, uri: &str) {
+    if !uri.starts_with("minecraft://") {
+        log::warn!("send_uri: not a minecraft URI: {}", uri);
+        return;
+    }
+
+    let rest = &uri["minecraft://".len()..];
+    let host = rest.split('/').next().unwrap_or("");
+    let query = uri.find('?')
+        .map(|q| url_decode(&uri[q + 1..]))
+        .unwrap_or_default();
+
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if cls.is_null() { return; }
+    let mid = jni_call!(env, GetMethodID(
+        cls,
+        b"nativeProcessIntentUriQuery\0".as_ptr() as *const c_char,
+        b"(Ljava/lang/String;Ljava/lang/String;)V\0".as_ptr() as *const c_char
+    ));
+    if mid.is_null() { return; }
+
+    let query_log = query.clone();
+    let host_c = CString::new(host).unwrap_or_default();
+    let query_c = CString::new(query).unwrap_or_default();
+    let host_j = jni_call!(env, NewStringUTF(host_c.as_ptr()));
+    let query_j = jni_call!(env, NewStringUTF(query_c.as_ptr()));
+    if host_j.is_null() || query_j.is_null() {
+        log::error!("send_uri: failed to create JNI strings");
+        return;
+    }
+    let args = [jvalue { l: host_j }, jvalue { l: query_j }];
+    jni_call!(env, CallStaticVoidMethodA(cls, mid, args.as_ptr() as *mut jvalue));
+    log::info!("send_uri: dispatched host={} query={}", host, query_log);
+}
+
+unsafe fn import_file(support: &mut JniSupport, path: &str) {
+    let ext = path.rsplit('.').next().unwrap_or("");
+    let valid = ["mcworld", "mcpack", "mcaddon", "mctemplate"];
+    if !valid.contains(&ext) {
+        log::warn!("import_file: unsupported extension .{}, must be one of {:?}", ext, valid);
+        return;
+    }
+
+    let tmp_dir = std::env::temp_dir();
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let dest_path = tmp_dir.join(file_name);
+
+    if path.contains('&') {
+        log::warn!("import_file: path contains '&', skipping: {}", path);
+        return;
+    }
+
+    match std::fs::copy(path, &dest_path) {
+        Ok(_) => log::info!("import_file: copied {} to {:?}", path, dest_path),
+        Err(e) => {
+            log::error!("import_file: failed to copy {}: {}", path, e);
+            return;
+        }
+    }
+
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if cls.is_null() { return; }
+    let mid = jni_call!(env, GetMethodID(
+        cls,
+        b"nativeProcessIntentUriQuery\0".as_ptr() as *const c_char,
+        b"(Ljava/lang/String;Ljava/lang/String;)V\0".as_ptr() as *const c_char
+    ));
+    if mid.is_null() { return; }
+
+    let host_c = CString::new("contentIntent").unwrap();
+    let combined = format!("{}&{}", path, dest_path.display());
+    let query_c = CString::new(combined).unwrap_or_default();
+    let host_j = jni_call!(env, NewStringUTF(host_c.as_ptr()));
+    let query_j = jni_call!(env, NewStringUTF(query_c.as_ptr()));
+    if host_j.is_null() || query_j.is_null() {
+        log::error!("import_file: failed to create JNI strings");
+        return;
+    }
+    let args = [jvalue { l: host_j }, jvalue { l: query_j }];
+    jni_call!(env, CallStaticVoidMethodA(cls, mid, args.as_ptr() as *mut jvalue));
+    log::info!("import_file: dispatched for {}", path);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_stop_game(s: *mut c_void) {
+    if s.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    stop_game(support);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_wait_for_game_exit(s: *mut c_void) {
+    if s.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let mut state = support.game_state.lock().unwrap();
+    while !state.game_exit_val {
+        state = support.game_cond.wait(state).unwrap();
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_request_exit_game(s: *mut c_void) {
+    if s.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    {
+        let mut state = support.game_state.lock().unwrap();
+        state.game_exit_val = true;
+        support.game_cond.notify_all();
+    }
+    std::thread::spawn(|| {
+        with_support(|s| {
+            stop_game(s);
+        });
+    });
+    log::info!("request_exit_game: signaled");
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_send_uri(s: *mut c_void, uri: *const c_char) {
+    if s.is_null() || uri.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let uri_str = match std::ffi::CStr::from_ptr(uri).to_str() {
+        Ok(s) => s,
+        Err(_) => { log::error!("jni_support_send_uri: invalid UTF-8"); return; }
+    };
+    send_uri(support, uri_str);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_import_file(s: *mut c_void, path: *const c_char) {
+    if s.is_null() || path.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let path_str = match std::ffi::CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => { log::error!("jni_support_import_file: invalid UTF-8"); return; }
+    };
+    import_file(support, path_str);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_on_return_key_pressed(s: *mut c_void) {
+    if s.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if cls.is_null() { return; }
+    let mid = jni_call!(env, GetMethodID(
+        cls,
+        b"nativeReturnKeyPressed\0".as_ptr() as *const c_char,
+        b"()V\0".as_ptr() as *const c_char
+    ));
+    if !mid.is_null() {
+        jni_call!(env, CallStaticVoidMethod(cls, mid));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_set_game_controller_connected(s: *mut c_void, dev_id: i32, connected: bool) {
+    if s.is_null() { return; }
+    let support = &mut *(s as *mut JniSupport);
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/input/JellyBeanDeviceManager\0".as_ptr() as *const c_char));
+    if cls.is_null() { return; }
+    let (name, sig) = if connected {
+        (b"onInputDeviceAddedNative\0" as *const u8, b"(I)V\0" as *const u8)
+    } else {
+        (b"onInputDeviceRemovedNative\0" as *const u8, b"(I)V\0" as *const u8)
+    };
+    let mid = jni_call!(env, GetStaticMethodID(
+        cls,
+        name as *const c_char,
+        sig as *const c_char
+    ));
+    if !mid.is_null() {
+        let args = [jvalue { i: dev_id }];
+        jni_call!(env, CallStaticVoidMethodA(cls, mid, args.as_ptr() as *mut jvalue));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_is_game_activity(s: *mut c_void) -> bool {
+    if s.is_null() { return true; }
+    let support = &*(s as *mut JniSupport);
+    support.is_game_activity
 }
 
 // ================================================================

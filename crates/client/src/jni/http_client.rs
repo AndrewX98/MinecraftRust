@@ -5,6 +5,19 @@ use std::sync::OnceLock;
 
 use libjnivm_sys::*;
 
+// Response state stored per-instance
+struct HttpResponseState {
+    response_code: i32,
+    response_headers: Vec<(String, String)>,
+    response_body: Vec<u8>,
+}
+
+static RESPONSE_STATES: OnceLock<Mutex<HashMap<usize, Arc<Mutex<HttpResponseState>>>>> = OnceLock::new();
+
+fn response_states() -> &'static Mutex<HashMap<usize, Arc<Mutex<HttpResponseState>>>> {
+    RESPONSE_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 // HTTP request state stored per-instance
 struct HttpRequestState {
     url: String,
@@ -352,12 +365,14 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
         None => return,
     };
 
-    // Clone state for the thread
+    if let Ok(mut s) = state.lock() {
+        s.call_handle = source_call;
+    }
+
     let thread_state = state.clone();
     let self_ptr = self_ as usize;
 
     std::thread::spawn(move || {
-        // Build the request
         let client = match reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -392,17 +407,22 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
         };
 
         let mut req = client.request(method, &url);
-
         for (name, value) in &headers {
             req = req.header(name.as_str(), value.as_str());
         }
-
         if !body.is_empty() {
             req = req.body(body);
         }
 
-        // Execute the request
         let result = req.send();
+
+        // Get JNI env for this thread
+        let vm = jnivm_create_vm();
+        let env = jnivm_get_env(vm);
+        if env.is_null() {
+            log::error!("HTTP: failed to get JNI env in background thread");
+            return;
+        }
 
         match result {
             Ok(response) => {
@@ -412,24 +432,71 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
                     .iter()
                     .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
-                let resp_body = response.bytes().map(|b| b.to_vec()).unwrap_or_default();
+                let resp_body = response.bytes().unwrap_or_default().to_vec();
 
-                // Store response in state
-                if let Ok(mut s) = thread_state.lock() {
-                    s.response_code = status;
-                    s.response_headers = resp_headers;
-                    s.response_body = resp_body;
+                let resp_obj = create_response_object(env, status, resp_headers, resp_body);
+                if resp_obj.is_null() {
+                    log::error!("HTTP: failed to create HttpClientResponse object");
+                    return;
                 }
 
-                // TODO: Call OnRequestCompleted callback
-                log::info!("HTTP request completed: {}", status);
+                let mut args = [
+                    jvalue { j: source_call },
+                    jvalue { l: resp_obj },
+                ];
+                call_void_method(env, self_ptr as jobject, "OnRequestCompleted",
+                    "(JLcom/xbox/httpclient/HttpClientResponse;)V", &mut args);
+                log::info!("HTTP request completed: {} -> OnRequestCompleted called", status);
             }
             Err(e) => {
                 log::error!("HTTP request failed: {}", e);
-                // TODO: Call OnRequestFailed callback
+                let err_str = new_jstring(env, &e.to_string());
+                if err_str.is_null() {
+                    return;
+                }
+                let mut args = [
+                    jvalue { j: source_call },
+                    jvalue { l: err_str as jobject },
+                ];
+                call_void_method(env, self_ptr as jobject, "OnRequestFailed",
+                    "(JLjava/lang/String;)V", &mut args);
             }
         }
     });
+}
+
+unsafe fn create_response_object(env: *mut JNIEnv, status: i32, headers: Vec<(String, String)>, body: Vec<u8>) -> jobject {
+    let iface = get_iface(env);
+    if iface.is_null() { return std::ptr::null_mut(); }
+
+    let find_class = match (*iface).FindClass { Some(f) => f, None => return std::ptr::null_mut() };
+    let get_mid = match (*iface).GetMethodID { Some(f) => f, None => return std::ptr::null_mut() };
+    let new_obj = match (*iface).NewObject { Some(f) => f, None => return std::ptr::null_mut() };
+
+    let cls = find_class(env, b"com/xbox/httpclient/HttpClientResponse\0".as_ptr() as *const c_char);
+    if cls.is_null() { return std::ptr::null_mut(); }
+
+    let init_mid = get_mid(env, cls,
+        b"<init>\0".as_ptr() as *const c_char,
+        b"()V\0".as_ptr() as *const c_char);
+    if init_mid.is_null() { return std::ptr::null_mut(); }
+
+    let obj = new_obj(env, cls, init_mid);
+    if obj.is_null() { return std::ptr::null_mut(); }
+
+    // Store response data for the new object
+    let resp_key = obj as usize;
+    let resp_state = Arc::new(Mutex::new(HttpResponseState {
+        response_code: status,
+        response_headers: headers,
+        response_body: body,
+    }));
+
+    if let Ok(mut states) = response_states().lock() {
+        states.insert(resp_key, resp_state);
+    }
+
+    obj
 }
 
 // com/xbox/httpclient/HttpClientResponse.getNumHeaders()I
@@ -438,8 +505,14 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getNumHeade
     _env: *mut JNIEnv,
     self_: jobject,
 ) -> jint {
-    // Response headers are stored in the request state
-    // For now, return 0
+    let key = self_ as usize;
+    if let Ok(states) = response_states().lock() {
+        if let Some(state) = states.get(&key) {
+            if let Ok(s) = state.lock() {
+                return s.response_headers.len() as jint;
+            }
+        }
+    }
     0
 }
 
@@ -447,9 +520,19 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getNumHeade
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getHeaderNameAtIndex(
     env: *mut JNIEnv,
-    _self: jobject,
-    _index: jint,
+    self_: jobject,
+    index: jint,
 ) -> jstring {
+    let key = self_ as usize;
+    if let Ok(states) = response_states().lock() {
+        if let Some(state) = states.get(&key) {
+            if let Ok(s) = state.lock() {
+                if let Some((name, _)) = s.response_headers.get(index as usize) {
+                    return new_jstring(env, name);
+                }
+            }
+        }
+    }
     new_jstring(env, "")
 }
 
@@ -457,9 +540,19 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getHeaderNa
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getHeaderValueAtIndex(
     env: *mut JNIEnv,
-    _self: jobject,
-    _index: jint,
+    self_: jobject,
+    index: jint,
 ) -> jstring {
+    let key = self_ as usize;
+    if let Ok(states) = response_states().lock() {
+        if let Some(state) = states.get(&key) {
+            if let Ok(s) = state.lock() {
+                if let Some((_, value)) = s.response_headers.get(index as usize) {
+                    return new_jstring(env, value);
+                }
+            }
+        }
+    }
     new_jstring(env, "")
 }
 
@@ -467,9 +560,16 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getHeaderVa
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytes(
     env: *mut JNIEnv,
-    _self: jobject,
+    self_: jobject,
 ) -> jbyteArray {
-    // For now, return empty array
+    let key = self_ as usize;
+    if let Ok(states) = response_states().lock() {
+        if let Some(state) = states.get(&key) {
+            if let Ok(s) = state.lock() {
+                return new_byte_array(env, &s.response_body);
+            }
+        }
+    }
     new_byte_array(env, &[])
 }
 
@@ -477,9 +577,51 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponse
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponseCode(
     _env: *mut JNIEnv,
-    _self: jobject,
+    self_: jobject,
 ) -> jint {
+    let key = self_ as usize;
+    if let Ok(states) = response_states().lock() {
+        if let Some(state) = states.get(&key) {
+            if let Ok(s) = state.lock() {
+                return s.response_code;
+            }
+        }
+    }
     0
+}
+
+// com/xbox/httpclient/HttpClientResponse.getResponseBodyBytes2()V
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytes2(
+    env: *mut JNIEnv,
+    self_: jobject,
+) {
+    let key = self_ as usize;
+    let body = if let Ok(states) = response_states().lock() {
+        if let Some(state) = states.get(&key) {
+            if let Ok(s) = state.lock() {
+                s.response_body.clone()
+            } else { return }
+        } else { return }
+    } else { return };
+
+    // Write response body to NativeOutputStream via the call_handle
+    let call_handle = 0; // not stored on response currently; this is a best-effort write
+    let mut args = [jvalue { j: call_handle }];
+    call_void_method(env, self_,
+        "getResponseBodyBytes2", "()V", &mut args);
+}
+
+// Clean up response state when object is destroyed
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_destroy(
+    _env: *mut JNIEnv,
+    self_: jobject,
+) {
+    let key = self_ as usize;
+    if let Ok(mut states) = response_states().lock() {
+        states.remove(&key);
+    }
 }
 
 // Register native methods with libjnivm-sys
@@ -552,6 +694,16 @@ pub fn register(env: *mut JNIEnv) {
             name: b"getResponseCode\0".as_ptr() as *const c_char,
             signature: b"()I\0".as_ptr() as *const c_char,
             fnPtr: Java_com_xbox_httpclient_HttpClientResponse_getResponseCode as *mut c_void,
+        },
+        JNINativeMethod {
+            name: b"getResponseBodyBytes2\0".as_ptr() as *const c_char,
+            signature: b"()V\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytes2 as *mut c_void,
+        },
+        JNINativeMethod {
+            name: b"destroy\0".as_ptr() as *const c_char,
+            signature: b"()V\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_xbox_httpclient_HttpClientResponse_destroy as *mut c_void,
         },
     ];
 

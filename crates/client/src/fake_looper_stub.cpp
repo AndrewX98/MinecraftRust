@@ -2,6 +2,7 @@
 /// Contains the full implementation identical to the manifest version.
 
 #include "fake_looper.h"
+#include "jni/jni_support.h"
 #include "main.h"
 #include "shader_error_patch.h"
 #include "splitscreen_patch.h"
@@ -75,7 +76,7 @@ void FakeLooper::prepare() {
                                       (void *)&fakeInputQueue);
     }
     fprintf(stderr, "=== FakeLooper::prepare: creating WindowCallbacks ===\n");
-    associatedWindowCallbacks = std::make_shared<WindowCallbacks>(*associatedWindow, *jniSupport, fakeInputQueue);
+    associatedWindowCallbacks = std::make_shared<WindowCallbacks>(*associatedWindow, (void*)jniSupport, rustJniSupport, fakeInputQueue);
     associatedWindowCallbacks->registerCallbacks();
 
     CorePatches::setGameWindow(associatedWindow);

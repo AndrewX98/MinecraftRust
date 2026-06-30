@@ -131,7 +131,7 @@ extern "C" void fake_looper_notify_window_created() {
 extern "C" void fake_looper_create_window_callbacks() {
     auto* l = FakeLooper::getCurrent();
     auto cb = std::make_shared<WindowCallbacks>(
-        *l->getWindow(), *FakeLooper::getJniSupport(), *l->getInputQueue());
+        *l->getWindow(), FakeLooper::getJniSupport(), FakeLooper::getRustJniSupport(), *l->getInputQueue());
     cb->registerCallbacks();
     l->setWindowCallbacks(std::move(cb));
 }
@@ -378,4 +378,15 @@ extern "C" void jni_support_init_activity(void* s) {
 
 extern "C" void jni_support_delete(void* s) {
     delete (JniSupport*)s;
+}
+
+// ============================================================
+// JniSupport bridge functions (void* → JniSupport*)
+// Called from window_callbacks_stub.cpp
+// ============================================================
+
+extern "C" void* jni_support_get_text_input_handler(void*) {
+    // Return the Rust global TextInputHandler instead of C++ member
+    extern void* jnivm_get_text_input_handler();
+    return jnivm_get_text_input_handler();
 }

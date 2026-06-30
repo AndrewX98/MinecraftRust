@@ -1,8 +1,10 @@
 #pragma once
 
 #include <game_window.h>
+#include <android/game_activity.h>
+#include <android/native_activity.h>
+#include <android/input.h>
 #include <unordered_map>
-#include "jni/jni_support.h"
 #include "fake_inputqueue.h"
 #include <chrono>
 #include <vector>
@@ -46,7 +48,8 @@ private:
     std::mutex mouseScrollCallbacksLock;
 
     GameWindow &window;
-    JniSupport &jniSupport;
+    void *jniSupport;       // C++ JniSupport (text input, isGameActivity, etc.)
+    void *rustJniSupport;   // Rust JniSupport (sendKeyDown, sendKeyUp, sendMotionEvent, onWindowResized)
     FakeInputQueue &inputQueue;
     std::unordered_map<int, GamepadData> gamepads;
     int32_t buttonState = 0;
@@ -81,7 +84,7 @@ private:
     void sendTouchEvent(int32_t pointerId, int32_t action, float x, float y);
 
 public:
-    WindowCallbacks(GameWindow &window, JniSupport &jniSupport, FakeInputQueue &inputQueue);
+    WindowCallbacks(GameWindow &window, void *jniSupport, void *rustJniSupport, FakeInputQueue &inputQueue);
 
     static void loadGamepadMappings();
 
