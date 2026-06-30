@@ -8,14 +8,14 @@
 
 ## JNI Files (`mcpelauncher-client/src/jni/*.cpp`)
 
-There are 25 JNI C++ files in total. 15 are excluded from build, 10 remain.
+19 JNI C++ files are excluded from build (via excluded_jni set). 6 remain compiled.
 
-### Already Ported (15 files — excluded from build)
+### Already Ported (19 files — excluded from build)
 
 | File | Rust Module | Status |
 |------|-------------|--------|
 | `locale.cpp` | `jni_support.rs::locale` | ✅ |
-| `uuid.cpp` | `jni_support.rs::uuid` | 🟡 (C++ file stays — used by `main_activity.cpp`) |
+| `uuid.cpp` | `uuid_stub.cpp` + Rust in `jni_support.rs` | 🟡 (stub, Rust registration exists) |
 | `cert_manager.cpp` | `jni_support.rs::certificate` | ✅ |
 | `ecdsa.cpp` | `jni_support.rs::ecdsa_impl` | ✅ |
 | `jbase64.cpp` | stub | ✅ |
@@ -30,20 +30,21 @@ There are 25 JNI C++ files in total. 15 are excluded from build, 10 remain.
 | `webview.cpp` | stub | ✅ |
 | `shahasher.cpp` | stub | ✅ |
 | `http_stub.cpp` | n/a (dead code) | ✅ |
+| `store.cpp` | `store.rs` + `store_stub.cpp` (stub) | ✅ |
+| `pulseaudio.cpp` | `pulseaudio_stub.cpp` + Rust `audio.rs` | ✅ |
+| `sdl3audio.cpp` | `sdl3audio_stub.cpp` + Rust `audio.rs` | ✅ |
+| `http_client.rs` | new Rust module (`lib_http_client.cpp` still compiled) | 🟡 |
+| `websocket.rs` | new Rust module (`lib_http_client_websocket.cpp` still compiled) | 🟡 |
 
-### Still Compiled (10 files)
+### Still Compiled (6 files)
 
 | File | Lines | Role | Status | Depends On |
 |------|-------|------|--------|------------|
 | `jni_support.cpp` | 673 | FakeJni startup orchestration, class registration | 🟡 | — |
 | `main_activity.cpp` | 539 | 40+ Android API methods (all ported to Rust `main_activity.rs`) | 🟡 | `jni_support.cpp` FakeJni `registerClass<MainActivity>()` call |
-| `store.cpp` | 96 | In-app purchase stubs | 🔴 | Full startup orchestration port |
 | `xbox_live.cpp` | 128 | MSA sign-in, XBL auth | ⏳ | — |
 | `lib_http_client.cpp` | 290 | Curl-based HTTP requests | ⏳ | — |
 | `lib_http_client_websocket.cpp` | 224 | Curl-based WebSocket | ⏳ | — |
-| `pulseaudio.cpp` | 71 | PulseAudio output | ⏳ | — |
-| `sdl3audio.cpp` | 56 | SDL3 audio output | ⏳ | — |
-| `uuid.cpp` | 30 | UUID generation | 🟡 | Rust registers JNI (`jni_support.rs:641`), C++ stays because `main_activity.cpp` calls `UUID::randomUUID()` as a C++ function directly (not through JNI dispatch) |
 | `jni_descriptors.cpp` | 315 | FakeJni class descriptors | 🟡 | Dies with `jni_support.cpp` port — `registerMinecraftNatives()` calls `MainActivity::getDescriptor()` etc. |
 
 ## Static Libraries (all compiled locally via build.rs, no cmake prebuilts)
@@ -79,11 +80,9 @@ The C++ `fake_looper_stub.cpp` retains FakeLooper class state (`jniSupport`, `ru
 ## Critical Path to Pure Rust
 
 ```
-jni_support.cpp  ──blocker──>  main_activity.cpp  ──blocker──>  store.cpp
-       │
-       └──>  jni_descriptors.cpp  (dies when jni_support.cpp ported)
-       
-Independent:  xbox_live.cpp, lib_http_client*.cpp, pulseaudio, sdl3audio
+jni_support.cpp  ──blocker──>  main_activity.cpp  ──blocker──>  jni_descriptors.cpp
+
+Independent:  xbox_live.cpp, lib_http_client*.cpp (http_client.rs + websocket.rs exist)
 ```
 
 The **bottleneck** is `jni_support.cpp` (673 lines). It contains:
@@ -143,6 +142,10 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | `crates/client/src/main_activity.rs` | ~1300 | All 57 MainActivity JNI methods (getScreenWidth, createUUID, showKeyboard, etc.) |
 | `crates/client/src/jnivm_class_wrappers.rs` | ~380 | 21 methods across 9 Java classes (File, Context, Build, PackageInfo, etc.) |
 | `crates/client/src/jnivm_globals.rs` | ~80 | `#[no_mangle]` extern "C" getter/setter functions for C++ global state |
+| `crates/client/src/jni/store.rs` | ~367 | In-app purchase JNI stubs (replaces `store.cpp`) |
+| `crates/client/src/jni/audio.rs` | ~350 | PulseAudio + SDL3 audio output JNI (replaces `pulseaudio.cpp` + `sdl3audio.cpp`) |
+| `crates/client/src/jni/http_client.rs` | ~599 | HTTP client JNI (coexists with `lib_http_client.cpp`) |
+| `crates/client/src/jni/websocket.rs` | ~393 | WebSocket JNI (coexists with `lib_http_client_websocket.cpp`) |
 
 ## Overall Estimate
 
@@ -153,7 +156,7 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | EGL | 100% | 100% |
 | ELF linker (bionic) | ~30% | 100% (Rust linker crate exists, needs full relocation) |
 | Game window | ~30% | 100% (eglut done, gamepad remaining) |
-| JNI classes | ~70% | 100% (57/57 MainActivity methods done, store/xbox/http remaining) |
+| JNI classes | ~80% | 100% (57/57 MainActivity methods done, store/audio/http/websocket ported, xbox remaining) |
 | mcpelauncher-core | ~0% | 100% (game loading, hooks, patching, mod loading) |
 | Startup orchestration | ~60% | 100% |
 | FakeLooper | ~70% | 100% |

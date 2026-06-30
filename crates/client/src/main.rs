@@ -8,6 +8,7 @@ mod main_activity;
 mod jnivm_class_wrappers;
 mod jnivm_globals;
 mod jni;
+mod text_input_handler;
 
 use std::ffi::{c_char, c_void, CStr};
 

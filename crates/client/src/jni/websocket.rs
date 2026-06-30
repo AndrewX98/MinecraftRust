@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
 
 use libjnivm_sys::*;
+use tungstenite::stream::MaybeTlsStream;
 
 // WebSocket state stored per-instance
 struct WebSocketState {
@@ -12,6 +14,7 @@ struct WebSocketState {
     headers: Vec<(String, String)>,
     connected: bool,
     call_handle: i64,
+    stream: Option<Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>>,
 }
 
 // Map from jobject to WebSocket state
@@ -107,6 +110,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_init(
         headers: Vec::new(),
         connected: false,
         call_handle: owner,
+        stream: None,
     }));
 
     let key = self_ as usize;
@@ -156,7 +160,6 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_connect(
         None => return,
     };
 
-    // Update state
     {
         if let Ok(mut s) = state.lock() {
             s.url = url_str.clone();
@@ -168,7 +171,6 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_connect(
     let thread_state = state.clone();
 
     std::thread::spawn(move || {
-        // Use tungstenite for WebSocket connection
         let url_str = {
             match thread_state.lock() {
                 Ok(s) => s.url.clone(),
@@ -176,72 +178,117 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_connect(
             }
         };
 
-        // Parse URL
         let url = match url::Url::parse(&url_str) {
             Ok(u) => u,
             Err(e) => {
                 log::error!("WebSocket URL parse error: {}", e);
-                // Call onFailure
+                let vm = jnivm_create_vm();
+                let env = jnivm_get_env(vm);
+                if env.is_null() { return; }
+                let mut args: [jvalue; 0] = [];
+                call_void_method(env, self_ptr as jobject, "onFailure", "()V", &mut args);
                 return;
             }
         };
 
-        // Connect
         let (ws_stream, _response) = match tungstenite::connect(url) {
             Ok(r) => r,
             Err(e) => {
                 log::error!("WebSocket connection error: {}", e);
-                // Call onFailure
+                let vm = jnivm_create_vm();
+                let env = jnivm_get_env(vm);
+                if env.is_null() { return; }
+                let mut args: [jvalue; 0] = [];
+                call_void_method(env, self_ptr as jobject, "onFailure", "()V", &mut args);
                 return;
             }
         };
 
         log::info!("WebSocket connected");
 
-        // Mark as connected
+        let stream = Arc::new(Mutex::new(ws_stream));
+
         {
             if let Ok(mut s) = thread_state.lock() {
+                s.stream = Some(stream.clone());
                 s.connected = true;
             }
         }
 
-        // TODO: Call onOpen callback
+        // Call onOpen callback
+        {
+            let vm = jnivm_create_vm();
+            let env = jnivm_get_env(vm);
+            if !env.is_null() {
+                let mut args: [jvalue; 0] = [];
+                call_void_method(env, self_ptr as jobject, "onOpen", "()V", &mut args);
+            }
+        }
 
         // Read messages in a loop
         use tungstenite::Message;
-        let mut ws_stream = ws_stream;
 
         loop {
-            let connected = match thread_state.lock() {
-                Ok(s) => s.connected,
-                Err(_) => false,
+            let connected = {
+                match thread_state.lock() {
+                    Ok(s) => s.connected,
+                    Err(_) => false,
+                }
             };
             if !connected {
                 break;
             }
 
-            // Read next message
-            match ws_stream.read() {
+            let msg = {
+                let mut guard = match stream.lock() {
+                    Ok(g) => g,
+                    Err(_) => break,
+                };
+                guard.read()
+            };
+
+            match msg {
                 Ok(Message::Text(text)) => {
                     log::debug!("WebSocket got text: {}", text);
-                    // TODO: Call onMessage callback
+                    let vm = jnivm_create_vm();
+                    let env = jnivm_get_env(vm);
+                    if !env.is_null() {
+                        let jstr = new_jstring(env, &text);
+                        if !jstr.is_null() {
+                            let mut args = [jvalue { l: jstr as jobject }];
+                            call_void_method(env, self_ptr as jobject, "onMessage",
+                                "(Ljava/lang/String;)V", &mut args);
+                        }
+                    }
                 }
                 Ok(Message::Binary(data)) => {
                     log::debug!("WebSocket got binary: {} bytes", data.len());
-                    // TODO: Call onBinaryMessage callback
+                    // libjnivm-sys does not support NewDirectByteBuffer or ByteBuffer.wrap
+                    // Skip onBinaryMessage callback for now
                 }
                 Ok(Message::Close(_)) => {
                     log::info!("WebSocket closed by server");
+                    let vm = jnivm_create_vm();
+                    let env = jnivm_get_env(vm);
+                    if !env.is_null() {
+                        let mut args = [jvalue { i: 0 }];
+                        call_void_method(env, self_ptr as jobject, "onClose",
+                            "(I)V", &mut args);
+                    }
                     break;
                 }
-                Ok(Message::Ping(_)) => {
-                    // Pong is handled automatically by tungstenite
-                }
+                Ok(Message::Ping(_)) => {}
                 Ok(_) => {}
                 Err(e) => {
                     log::error!("WebSocket read error: {}", e);
                     break;
                 }
+            }
+        }
+
+        {
+            if let Ok(mut s) = thread_state.lock() {
+                s.connected = false;
             }
         }
 
@@ -279,18 +326,33 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_addHeader(
 // com/xbox/httpclient/HttpClientWebSocket.sendMessage(Ljava/lang/String;)Z
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_sendMessage(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     self_: jobject,
-    _msg: jstring,
+    msg: jstring,
 ) -> jboolean {
     let key = self_ as usize;
-    if let Ok(states) = ws_states().lock() {
+    let (connected, stream) = if let Ok(states) = ws_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(s) = state.lock() {
-                if !s.connected {
-                    return 0;
-                }
-                // TODO: Send via tungstenite
+                (s.connected, s.stream.clone())
+            } else { return 0 }
+        } else { return 0 }
+    } else { return 0 };
+
+    if !connected {
+        return 0;
+    }
+
+    let text = match get_jstring_content(env, msg) {
+        Some(s) => s,
+        None => return 0,
+    };
+
+    if let Some(stream) = stream {
+        if let Ok(mut guard) = stream.lock() {
+            if let Err(e) = guard.send(tungstenite::Message::Text(text)) {
+                log::error!("WebSocket send error: {}", e);
+                return 0;
             }
         }
     }
@@ -305,16 +367,21 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_sendBinary
     _msg: jobject,
 ) -> jboolean {
     let key = self_ as usize;
-    if let Ok(states) = ws_states().lock() {
+    let (connected, stream) = if let Ok(states) = ws_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(s) = state.lock() {
-                if !s.connected {
-                    return 0;
-                }
-                // TODO: Send via tungstenite
-            }
-        }
+                (s.connected, s.stream.clone())
+            } else { return 0 }
+        } else { return 0 }
+    } else { return 0 };
+
+    if !connected {
+        return 0;
     }
+
+    // For binary messages, we'd need to read the ByteBuffer data
+    // libjnivm-sys NewDirectByteBuffer is a stub, so skip for now
+    log::warn!("WebSocket binary message send not fully implemented");
     1
 }
 
@@ -330,10 +397,15 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_disconnect
         if let Some(state) = states.get(&key) {
             if let Ok(mut s) = state.lock() {
                 s.connected = false;
+                // Close the stream
+                if let Some(stream) = s.stream.take() {
+                    if let Ok(mut guard) = stream.lock() {
+                        let _ = guard.close(None);
+                    }
+                }
             }
         }
     }
-    // TODO: Close the WebSocket connection
 }
 
 // Register native methods with libjnivm-sys

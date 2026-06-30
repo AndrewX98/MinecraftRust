@@ -56,7 +56,7 @@ Key `#[no_mangle]` functions callable from C++:
 
 ## C++ → Rust (`#[no_mangle]` extern "C" definitions)
 
-Rust provides ~154+ `#[no_mangle]` extern "C" functions callable from C++.
+Rust provides ~189+ `#[no_mangle]` extern "C" functions callable from C++.
 
 ### By Module
 
@@ -64,13 +64,16 @@ Rust provides ~154+ `#[no_mangle]` extern "C" functions callable from C++.
 |--------|-------|-----------|
 | `rust_bridge.rs` | ~62 | FakeWindow(4), SwappyGL(16), ThreadMover(2), GLCorePatch(7), CorePatches(1), WindowCallbacks(3), FakeEGL(~30), SHA/Base64/File(9), JNI variants |
 | `jni_support.rs` | ~14 | jni_support_new/destroy/register_natives/start_game_with_baron/start_game/set_looper_running/on_window_created/on_window_closed/on_window_resized/send_key_down/send_key_up/send_motion_event/create_cpp/destroy_cpp |
-| `jnivm_globals.rs` | ~6 | jnivm_set/get_main_window, jnivm_set/get_storage_dir, jnivm_set/get_text_input_handler, jnivm_set/get_asset_manager, jnivm_set/get_stbi_load_from_memory, jnivm_set/get_stbi_image_free |
+| `jnivm_globals.rs` | ~12 | jnivm_set/get_main_window, jnivm_set/get_storage_dir, jnivm_set/get_text_input_handler, jnivm_set/get_asset_manager, jnivm_set/get_stbi_load_from_memory, jnivm_set/get_stbi_image_free |
 | `fake_looper.rs` | ~7 | mc_register_fake_looper_hooks, fake_looper_prepare_begin, fake_looper_notify_window_created, fake_looper_create_window_callbacks, fake_looper_register_core_patches, fake_looper_show_window, fake_looper_*patch* |
 | `eglut/` | ~60 | eglutInit/CreateWindow/PollEvents/MainLoop/WarpMousePointer, window mgmt, callbacks, mouse, compat, egl, event, state, xinput |
 | `file_picker.rs` | ~8 | File picker factory CRUD |
 | `libc-shim` | ~3 | get_shimmed_symbols_fill/len, shim_internal_rewrite_path |
 | `libjnivm-sys` | ~9 | jnivm_create_vm/destroy_vm/get_env/find_class/get_method_id/.../register_natives |
 | `linker` | ~3 | linker_init_rust/load_library_rust/show_state_rust |
+| `jni/audio.rs` | ~4 | Java_org_fmod_AudioDevice_init/write/write2/close |
+| `jni/http_client.rs` | ~13 | Java_com_xbox_httpclient_HttpClientRequest_*/HttpClientResponse_* |
+| `jni/websocket.rs` | ~7 | Java_com_xbox_httpclient_HttpClientWebSocket_* |
 
 ### Key Categories
 
@@ -111,6 +114,10 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | `core_patches_stub.cpp` | 141 | CorePatches vtable patching, cursor lock, fullscreen |
 | `fake_egl_stub.cpp` | 161 | Delegates all EGL functions to Rust eglut module |
 | `fake_looper_stub.cpp` | 152 | C++ helpers for Rust FakeLooper (prepare_begin, notify_window_created, create_window_callbacks, register_core_patches, show_window, poll helpers) |
+| `store_stub.cpp` | 96 | Store JNI stubs (Store, StoreFactory, NativeStoreListener, etc.) |
+| `jni/uuid_stub.cpp` | 34 | UUID stub — UUID::randomUUID for main_activity dependency |
+| `jni/pulseaudio_stub.cpp` | 25 | PulseAudio stub (delegates to Rust audio.rs) |
+| `jni/sdl3audio_stub.cpp` | 28 | SDL3 Audio stub (delegates to Rust audio.rs) |
 | `fake_inputqueue_stub.cpp` | 112 | Full FakeInputQueue implementation |
 | `fake_assetmanager_stub.cpp` | 214 | Full FakeAssetManager implementation |
 | `text_input_handler_stub.cpp` | 233 | C++ TextInputHandler class |
@@ -133,4 +140,9 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | start_game_with_baron | `JniSupport::startGame()` (Baron path) | `jni_support::jni_support_start_game_with_baron()` (Rust) | Done |
 | MainActivity JNI methods (57 methods) | `main_activity.cpp` | `main_activity.rs` | Done |
 | Class wrapper JNI methods (9 classes, 21 methods) | `jnivm_class_wrappers.cpp` | `jnivm_class_wrappers.rs` | Done |
-| C++ global getter/setters (6 functions) | `jnivm_class_wrappers.cpp` (embedded) | `jnivm_globals.rs` (dedicated `#[no_mangle]` module) | Done |
+| C++ global getter/setters (12 functions) | `jnivm_class_wrappers.cpp` (embedded) | `jnivm_globals.rs` (dedicated `#[no_mangle]` module) | Done |
+| Store JNI (Store, StoreFactory, NativeStoreListener, etc.) | `store.cpp` → `store_stub.cpp` | `jni/store.rs` (libjnivm-sys registration) | Done |
+| Audio JNI (AudioDevice) | `pulseaudio.cpp` + `sdl3audio.cpp` | `jni/audio.rs` (cpal-based output) | Done |
+| HTTP Client JNI | `lib_http_client.cpp` | `jni/http_client.rs` (reqwest-based) | Partial (response callbacks not wired) |
+| WebSocket JNI | `lib_http_client_websocket.cpp` | `jni/websocket.rs` (tungstenite-based) | Partial (callbacks not wired) |
+| UUID JNI | `uuid.cpp` → `jni/uuid_stub.cpp` | `jni/uuid_stub.cpp` (C++ stub) + Rust registration in `jni_support.rs` | Done |

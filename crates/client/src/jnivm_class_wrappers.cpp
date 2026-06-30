@@ -263,14 +263,13 @@ static void register_network_monitor_class(JNIEnv* env) {
 // These are set by JniSupport before the game starts.
 static void* g_main_window = nullptr;
 static char g_storage_dir[4096] = "/tmp";
-static void* g_text_input_handler = nullptr;
+
 static void* g_asset_manager = nullptr;
 
 extern "C" void jnivm_set_main_window(void* window) { g_main_window = window; }
 extern "C" void jnivm_set_storage_dir(const char* dir) {
     if (dir) { strncpy(g_storage_dir, dir, sizeof(g_storage_dir) - 1); }
 }
-extern "C" void jnivm_set_text_input_handler(void* handler) { g_text_input_handler = handler; }
 extern "C" void jnivm_set_asset_manager(void* mgr) { g_asset_manager = mgr; }
 
 // stbi image loading function pointers — set by Rust jni_support_start_game()
@@ -283,7 +282,6 @@ extern "C" void jnivm_set_stbi_image_free(void* fn) { g_stbi_image_free = fn; }
 // Getters for Rust main_activity module
 extern "C" void* jnivm_get_main_window() { return g_main_window; }
 extern "C" const char* jnivm_get_storage_dir() { return g_storage_dir; }
-extern "C" void* jnivm_get_text_input_handler() { return g_text_input_handler; }
 extern "C" void* jnivm_get_asset_manager() { return g_asset_manager; }
 extern "C" void* jnivm_get_stbi_load_from_memory() { return g_stbi_load_from_memory; }
 extern "C" void* jnivm_get_stbi_image_free() { return g_stbi_image_free; }

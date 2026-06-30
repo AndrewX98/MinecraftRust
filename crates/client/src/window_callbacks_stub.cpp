@@ -14,6 +14,7 @@
 #include "settings.h"
 #include "util.h"
 #include <cstring>
+#include <cstddef>
 
 // --- Rust key mapping functions ---
 extern "C" int window_callbacks_map_mouse_button(int btn);
@@ -22,8 +23,19 @@ extern "C" int window_callbacks_map_gamepad_key(int btn);
 extern "C" void jni_support_send_key_down(void* s, const void* event);
 extern "C" void jni_support_send_key_up(void* s, const void* event);
 extern "C" void jni_support_send_motion_event(void* s, const void* event);
+extern "C" bool jni_support_is_game_activity(void* s);
+extern "C" void* jni_support_get_text_input_handler(void* s);
+extern "C" void jni_support_on_window_resized(void* s, int w, int h);
+extern "C" void jni_support_on_return_key_pressed(void* s);
+extern "C" void jni_support_import_file(void* s, const char* path);
+extern "C" void jni_support_set_game_controller_connected(void* s, int devId, bool connected);
+extern "C" bool text_input_handler_is_enabled(void* h);
+extern "C" bool text_input_handler_is_multiline(void* h);
+extern "C" void text_handler_on_text_input(void* h, const char* text);
+extern "C" void text_handler_on_key_pressed(void* h, int key, int action, int mods);
+extern "C" const char* text_handler_get_copy_text(void* h, size_t* len);
 
-WindowCallbacks::WindowCallbacks(GameWindow& window, JniSupport& jniSupport, FakeInputQueue& inputQueue) : window(window), jniSupport(jniSupport), inputQueue(inputQueue) {
+WindowCallbacks::WindowCallbacks(GameWindow& window, void* jniSupport, void* rustJniSupport, FakeInputQueue& inputQueue) : window(window), jniSupport(jniSupport), rustJniSupport(rustJniSupport), inputQueue(inputQueue) {
     useDirectMouseInput = Mouse::feed;
     useDirectKeyboardInput = (Keyboard::_states && (Keyboard::_inputs || Keyboard::_inputsLegacy) && Keyboard::_gameControllerId);
     if(Settings::fullscreen) {
@@ -59,7 +71,7 @@ void WindowCallbacks::startSendEvents() {
     if(!sendEvents) {
         sendEvents = true;
         for(auto&& gp : gamepads) {
-            jniSupport.setGameControllerConnected(gp.first, true);
+            jni_support_set_game_controller_connected(rustJniSupport, gp.first, true);
         }
     }
     auto nextSize = Settings::menubarsize.load();
@@ -72,14 +84,14 @@ void WindowCallbacks::startSendEvents() {
     if(delayedPaste > 0) {
         delayedPaste--;
         if(delayedPaste == 0) {
-            jniSupport.getTextInputHandler().onTextInput("\x08");
-            jniSupport.getTextInputHandler().onTextInput(lastPasteStr);
+            text_handler_on_text_input(jni_support_get_text_input_handler(jniSupport), "\x08");
+            text_handler_on_text_input(jni_support_get_text_input_handler(jniSupport), lastPasteStr.c_str());
         }
     }
 }
 
 void WindowCallbacks::onWindowSizeCallback(int w, int h) {
-    jniSupport.onWindowResized(w, h - menubarsize);
+    jni_support_on_window_resized(rustJniSupport, w, h - menubarsize);
 }
 
 void WindowCallbacks::setCursorLocked(bool locked) {
@@ -160,7 +172,7 @@ void WindowCallbacks::onMouseButton(double x, double y, int btn, MouseButtonActi
         }
 #endif
         if(options.emulateTouch) {
-            if(jniSupport.isGameActivityVersion()) {
+            if(jni_support_is_game_activity(rustJniSupport)) {
                 sendTouchEvent(0, action == MouseButtonAction::PRESS ? AMOTION_EVENT_ACTION_DOWN : AMOTION_EVENT_ACTION_UP, x, y - menubarsize);
             } else {
                 inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, action == MouseButtonAction::PRESS ? AMOTION_EVENT_ACTION_DOWN : AMOTION_EVENT_ACTION_UP, 0, x, y - menubarsize));
@@ -173,7 +185,7 @@ void WindowCallbacks::onMouseButton(double x, double y, int btn, MouseButtonActi
         }
         if(useDirectMouseInput)
             Mouse::feed((char)btn, (char)(action == MouseButtonAction::PRESS ? 1 : 0), (short)x, (short)(y - menubarsize), 0, 0);
-        else if(!jniSupport.isGameActivityVersion()) {
+        else if(!jni_support_is_game_activity(rustJniSupport)) {
             if(action == MouseButtonAction::PRESS) {
                 buttonState |= mapMouseButtonToAndroid(btn);
                 inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_MOUSE, AMOTION_EVENT_ACTION_BUTTON_PRESS, 0, x, y - menubarsize, buttonState, 0));
@@ -213,7 +225,7 @@ void WindowCallbacks::onMousePosition(double x, double y) {
         }
 #endif
         if(options.emulateTouch) {
-            if(jniSupport.isGameActivityVersion()) {
+            if(jni_support_is_game_activity(rustJniSupport)) {
                 sendTouchEvent(0, AMOTION_EVENT_ACTION_MOVE, x, y - menubarsize);
             } else {
                 inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_MOVE, 0, x, y - menubarsize));
@@ -222,7 +234,7 @@ void WindowCallbacks::onMousePosition(double x, double y) {
         }
         if(useDirectMouseInput)
             Mouse::feed(0, 0, (short)x, (short)(y - menubarsize), 0, 0);
-        else if(jniSupport.isGameActivityVersion()) {
+        else if(jni_support_is_game_activity(rustJniSupport)) {
             sendMouseEvent(AINPUT_SOURCE_MOUSE, 0, AMOTION_EVENT_ACTION_HOVER_MOVE, buttonState, x, y - menubarsize, 0);
         } else
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_MOUSE, AMOTION_EVENT_ACTION_HOVER_MOVE, 0, x, y - menubarsize, buttonState, 0));
@@ -241,7 +253,7 @@ void WindowCallbacks::onMouseRelativePosition(double x, double y) {
         }
         if(useDirectMouseInput)
             Mouse::feed(0, 0, 0, 0, (short)x, (short)y);
-        else if(jniSupport.isGameActivityVersion()) {
+        else if(jni_support_is_game_activity(rustJniSupport)) {
             sendMouseEvent(AINPUT_SOURCE_MOUSE_RELATIVE, 0, AMOTION_EVENT_ACTION_HOVER_MOVE, buttonState, x, y, 0);
         } else
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_MOUSE_RELATIVE, AMOTION_EVENT_ACTION_HOVER_MOVE, 0, x, y, buttonState, 0));
@@ -276,7 +288,7 @@ void WindowCallbacks::onMouseScroll(double x, double y, double dx, double dy) {
 #endif
         if(useDirectMouseInput)
             Mouse::feed(4, (char&)cdy, 0, 0, (short)x, (short)y - menubarsize);
-        else if(jniSupport.isGameActivityVersion())
+        else if(jni_support_is_game_activity(rustJniSupport))
             sendMouseEvent(AINPUT_SOURCE_MOUSE, 0, AMOTION_EVENT_ACTION_SCROLL, buttonState, x, y - menubarsize, cdy);
         else
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_MOUSE, AMOTION_EVENT_ACTION_SCROLL, 0, x, y - menubarsize, buttonState, cdy));
@@ -298,7 +310,7 @@ void WindowCallbacks::sendMouseEvent(int32_t source, int32_t deviceId, int32_t a
     event.pointers[0].rawY = x;
     event.pointers[0].axisValues[AMOTION_EVENT_AXIS_VSCROLL] = scrollY;
 
-    jni_support_send_motion_event(&jniSupport, &event);
+    jni_support_send_motion_event(rustJniSupport, &event);
 }
 
 void WindowCallbacks::onTouchStart(int id, double x, double y) {
@@ -319,7 +331,7 @@ void WindowCallbacks::onTouchStart(int id, double x, double y) {
             }
         }
 #endif
-        if(jniSupport.isGameActivityVersion()) {
+        if(jni_support_is_game_activity(rustJniSupport)) {
             sendTouchEvent(id, AMOTION_EVENT_ACTION_DOWN, x, y - menubarsize);
         } else {
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_DOWN, id, x, y - menubarsize));
@@ -337,7 +349,7 @@ void WindowCallbacks::onTouchUpdate(int id, double x, double y) {
             return;
         }
 #endif
-        if(jniSupport.isGameActivityVersion()) {
+        if(jni_support_is_game_activity(rustJniSupport)) {
             sendTouchEvent(id, AMOTION_EVENT_ACTION_MOVE, x, y - menubarsize);
         } else {
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_MOVE, id, x, y - menubarsize));
@@ -358,7 +370,7 @@ void WindowCallbacks::onTouchEnd(int id, double x, double y) {
             return;
         }
 #endif
-        if(jniSupport.isGameActivityVersion()) {
+        if(jni_support_is_game_activity(rustJniSupport)) {
             sendTouchEvent(id, AMOTION_EVENT_ACTION_UP, x, y - menubarsize);
         } else {
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_UP, id, x, y - menubarsize));
@@ -377,7 +389,7 @@ void WindowCallbacks::sendTouchEvent(int32_t pointerId, int32_t action, float x,
     ev.pointers[0].axisValues[AMOTION_EVENT_AXIS_Y] = y;
     ev.pointers[0].rawX = x;
     ev.pointers[0].rawY = y;
-    jni_support_send_motion_event(&jniSupport, &ev);
+    jni_support_send_motion_event(rustJniSupport, &ev);
 }
 
 void WindowCallbacks::onKeyboard(KeyCode key, KeyAction action, int mods) {
@@ -410,10 +422,12 @@ void WindowCallbacks::onKeyboard(KeyCode key, KeyAction action, int mods) {
         int modCTRL = mods & KEY_MOD_CTRL;
 #endif
 
-        if(modCTRL && action == KeyAction::PRESS && key == KeyCode::C && jniSupport.getTextInputHandler().getCopyText() != "") {
-            window.setClipboardText(jniSupport.getTextInputHandler().getCopyText());
+        size_t copy_len = 0;
+        const char* copy_text = text_handler_get_copy_text(jni_support_get_text_input_handler(jniSupport), &copy_len);
+        if(modCTRL && action == KeyAction::PRESS && key == KeyCode::C && copy_len > 0) {
+            window.setClipboardText(copy_text ? std::string(copy_text, copy_len) : "");
         } else {
-            jniSupport.getTextInputHandler().onKeyPressed(key, action, mods);
+            text_handler_on_key_pressed(jni_support_get_text_input_handler(jniSupport), (int)key, (int)action, mods);
         }
 
         if(key == KeyCode::FN11 && action == KeyAction::PRESS)
@@ -462,7 +476,7 @@ void WindowCallbacks::onKeyboard(KeyCode key, KeyAction action, int mods) {
             state |= AMETA_NUM_LOCK_ON;
         }
 
-        if(jniSupport.isGameActivityVersion()) {
+        if(jni_support_is_game_activity(rustJniSupport)) {
             GameActivityKeyEvent event = {};
             event.deviceId = 0;
             event.source = AINPUT_SOURCE_KEYBOARD;
@@ -470,9 +484,9 @@ void WindowCallbacks::onKeyboard(KeyCode key, KeyAction action, int mods) {
             event.metaState = state;
             event.keyCode = mapMinecraftToAndroidKey(key);
             if(action == KeyAction::PRESS)
-                jni_support_send_key_down(&jniSupport, &event);
+                jni_support_send_key_down(rustJniSupport, &event);
             else if(action == KeyAction::RELEASE)
-                jni_support_send_key_up(&jniSupport, &event);
+                jni_support_send_key_up(rustJniSupport, &event);
         } else {
             if(action == KeyAction::PRESS)
                 inputQueue.addEvent(FakeKeyEvent(AKEY_EVENT_ACTION_DOWN, mapMinecraftToAndroidKey(key), state));
@@ -495,13 +509,14 @@ void WindowCallbacks::onKeyboardText(std::string const& c) {
         return;
     }
 #endif
-    if(c == "\n" && !jniSupport.getTextInputHandler().isMultiline())
-        jniSupport.onReturnKeyPressed();
+    void* text_handler = jni_support_get_text_input_handler(jniSupport);
+    if(c == "\n" && !text_input_handler_is_multiline(text_handler))
+        jni_support_on_return_key_pressed(rustJniSupport);
     else
-        jniSupport.getTextInputHandler().onTextInput(c);
+        text_handler_on_text_input(text_handler, c.c_str());
 }
 void WindowCallbacks::onDrop(std::string const& path) {
-    jniSupport.importFile(path);
+    jni_support_import_file(rustJniSupport, path.c_str());
 }
 void WindowCallbacks::onPaste(std::string const& str) {
 #ifdef USE_IMGUI
@@ -510,7 +525,7 @@ void WindowCallbacks::onPaste(std::string const& str) {
     if(Settings::enable_keyboard_autofocus_paste_patches_1_20_60) {
         lastPasteStr = str;
     }
-    jniSupport.getTextInputHandler().onTextInput(str);
+    text_handler_on_text_input(jni_support_get_text_input_handler(jniSupport), str.c_str());
 }
 void WindowCallbacks::onGamepadState(int gamepad, bool connected) {
     Log::trace("WindowCallbacks", "Gamepad %s #%i", connected ? "connected" : "disconnected", gamepad);
@@ -523,14 +538,14 @@ void WindowCallbacks::onGamepadState(int gamepad, bool connected) {
         // This crashs the game 1.16.210+ during init, but works after loading
         // We block sendEvents before the game starts polling the looper, to avoid the crash
         // 1.19.60+ requires calling this method, otherwise the game ignores the gamepad input
-        jniSupport.setGameControllerConnected(gamepad, connected);
+        jni_support_set_game_controller_connected(rustJniSupport, gamepad, connected);
     }
 }
 
 void WindowCallbacks::queueGamepadAxisInputIfNeeded(int gamepad) {
-    if(!needsQueueGamepadInput && !jniSupport.isGameActivityVersion())
+    if(!needsQueueGamepadInput && !jni_support_is_game_activity(rustJniSupport))
         return;
-    if(jniSupport.isGameActivityVersion()) {
+    if(jni_support_is_game_activity(rustJniSupport)) {
         auto gpi = gamepads.find(gamepad);
         if(gpi == gamepads.end())
             return;
@@ -563,7 +578,7 @@ void WindowCallbacks::queueGamepadAxisInputIfNeeded(int gamepad) {
             hatY = 1.f;
         ev.pointers[0].axisValues[AMOTION_EVENT_AXIS_HAT_Y] = hatY;
 
-        jni_support_send_motion_event(&jniSupport, &ev);
+        jni_support_send_motion_event(rustJniSupport, &ev);
     } else {
         inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_GAMEPAD, gamepad, AMOTION_EVENT_ACTION_MOVE, 0, 0.f, 0.f,
                                             [this, gamepad](int axis) {
@@ -620,16 +635,16 @@ void WindowCallbacks::onGamepadButton(int gamepad, GamepadButtonId btn, bool pre
             return;
         }
 
-        if(jniSupport.isGameActivityVersion()) {
+        if(jni_support_is_game_activity(rustJniSupport)) {
             GameActivityKeyEvent event = {};
             event.deviceId = gamepad;
             event.source = AINPUT_SOURCE_GAMEPAD;
             event.action = pressed ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP;
             event.keyCode = mapGamepadToAndroidKey(btn);
             if(pressed)
-                jni_support_send_key_down(&jniSupport, &event);
+                jni_support_send_key_down(rustJniSupport, &event);
             else
-                jni_support_send_key_up(&jniSupport, &event);
+                jni_support_send_key_up(rustJniSupport, &event);
         } else {
             if(pressed)
                 inputQueue.addEvent(FakeKeyEvent(AINPUT_SOURCE_GAMEPAD, gamepad, AKEY_EVENT_ACTION_DOWN, mapGamepadToAndroidKey(btn)));
