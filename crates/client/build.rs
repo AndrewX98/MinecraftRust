@@ -377,6 +377,7 @@ fn main() {
         "uuid.cpp",
         "pulseaudio.cpp",
         "sdl3audio.cpp",
+        "xbox_live.cpp",
     ].into_iter().collect();
     for entry in std::fs::read_dir(manifest_dir.join("src/jni")).unwrap() {
         let entry = entry.unwrap();
@@ -401,6 +402,7 @@ fn main() {
         "fake_assetmanager_stub.cpp",
         "fake_looper_stub.cpp",
         "xbox_live_helper_stub.cpp",
+        "xbox_live_stub.cpp",
         "jni_bridge_stub.cpp",
         "jnivm_class_wrappers.cpp",
         "jbase64_stub.cpp",
@@ -482,24 +484,41 @@ fn main() {
 
     client.compile("mcpelauncher-client-jni");
 
-    // System libraries
-    println!("cargo:rustc-link-lib=dylib=stdc++");
-    println!("cargo:rustc-link-lib=dylib=pthread");
-    println!("cargo:rustc-link-lib=dylib=dl");
-    println!("cargo:rustc-link-lib=dylib=m");
-    println!("cargo:rustc-link-lib=dylib=z");
-    println!("cargo:rustc-link-lib=dylib=GL");
-    println!("cargo:rustc-link-lib=dylib=EGL");
-    println!("cargo:rustc-link-lib=dylib=curl");
-    println!("cargo:rustc-link-lib=dylib=crypto");
-    println!("cargo:rustc-link-lib=dylib=ssl");
-    println!("cargo:rustc-link-lib=dylib=SDL2-2.0");
-    println!("cargo:rustc-link-lib=dylib=pulse");
-    println!("cargo:rustc-link-lib=dylib=pulse-simple");
-    println!("cargo:rustc-link-lib=dylib=X11");
-    println!("cargo:rustc-link-lib=dylib=evdev");
-    println!("cargo:rustc-link-lib=dylib=png");
-    println!("cargo:rustc-link-lib=dylib=udev");
+    // System libraries (dylib)
+    // Emit both `rustc-link-lib` (for lib target) and `rustc-link-arg-bins`
+    // (for bin target — same-package lib+bin doesn't propagate native deps).
+    static DYLIB_NAMES: &[&str] = &[
+        "stdc++", "pthread", "dl", "m", "z",
+        "GL", "EGL", "curl", "crypto", "ssl",
+        "SDL2-2.0", "pulse", "pulse-simple",
+        "X11", "evdev", "png", "udev",
+    ];
+    for name in DYLIB_NAMES {
+        println!("cargo:rustc-link-lib=dylib={name}");
+        println!("cargo:rustc-link-arg-bins=-l{name}");
+    }
+
+    // Static C++ libs from cc::Build — same propagation fix.
+    static STATIC_LIBS: &[&str] = &[
+        "mcpelauncher-client-bridge",
+        "linker",
+        "linker-c",
+        "mcpelauncher-core",
+        "mcpelauncher-manifest-libs",
+        "mcpelauncher-base64",
+        "mcpelauncher-simpleipc",
+        "mcpelauncher-daemon-client-utils",
+        "mcpelauncher-msa-daemon-client",
+        "mcpelauncher-cll-telemetry",
+        "mcpelauncher-linux-gamepad",
+        "mcpelauncher-gamewindow",
+        "mcpelauncher-client-jni",
+    ];
+    println!("cargo:rustc-link-arg-bins=-Wl,-Bstatic");
+    for lib in STATIC_LIBS {
+        println!("cargo:rustc-link-arg-bins=-l{lib}");
+    }
+    println!("cargo:rustc-link-arg-bins=-Wl,-Bdynamic");
 
     // Linker defsym flags (expected by mcpelauncher-linker)
     println!("cargo:rustc-link-arg-bins=-Wl,--defsym=__rela_iplt_start=0");
