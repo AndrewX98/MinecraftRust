@@ -399,8 +399,8 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "apkinfo",
- "cc",
  "cpal",
+ "cpp-bridge-sys",
  "env_logger",
  "game-window",
  "libc",
@@ -563,6 +563,13 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "windows 0.54.0",
+]
+
+[[package]]
+name = "cpp-bridge-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -1788,6 +1795,7 @@ name = "libjnivm-sys"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "log",
 ]
 
 [[package]]

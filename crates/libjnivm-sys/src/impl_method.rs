@@ -13,6 +13,8 @@ pub unsafe extern "C" fn jni_GetMethodID(_env: *mut JNIEnv, _clazz: jclass, name
             return f as jmethodID;
         }
     }
+    drop(state);
+    log::warn!("GetMethodID: no native registered for {}{} — calls will return 0/null", n, s);
     Box::into_raw(Box::new((n, s))) as jmethodID
 }
 

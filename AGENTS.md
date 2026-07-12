@@ -11,13 +11,16 @@ cargo build -p client
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.
 
-No `cmake`, no `make` — C++ bridge compiled via `cc::Build`. All 13 static libs built in `build.rs`.
+No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 13 static libs built there; `client/build.rs` only emits link directives.
 
-## Workspace (14 crates)
+**WARNING: `cargo build -p client` takes ~3 minutes.** Do not run it unless the user explicitly asks. Incremental builds still take ~2.5 min due to linking 257 object files into a 130MB binary. Only the C++ re-archive step is avoided when `client/build.rs` changes alone.
+
+## Workspace (15 crates)
 
 | Crate | Role |
 |-------|------|
 | **client** | Sole binary — eglut, FakeEGL, CorePatches, JNI, event dispatch |
+| **cpp-bridge-sys** | C++ cc::Build compilation (13 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
 | **libc-shim** | 602 pure Rust libc replacements (FILE*, pthreads, sockets, mmap) |
 | **linker** | Pure Rust ELF linker (stub libs only — game lib still uses C++ bionic linker) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 fn JNIEnv vtable) |

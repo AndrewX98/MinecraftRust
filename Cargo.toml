@@ -15,4 +15,5 @@ members = [
     "crates/apkinfo",
     "crates/linker",
     "crates/client",
+    "crates/cpp-bridge-sys",
 ]

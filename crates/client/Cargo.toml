@@ -9,6 +9,7 @@ log = "0.4"
 env_logger = "0.11"
 thiserror = "2"
 
+cpp-bridge-sys = { path = "../cpp-bridge-sys" }
 linker = { path = "../linker" }
 libc-shim = { path = "../libc-shim" }
 game-window = { path = "../game-window" }
@@ -23,5 +24,4 @@ reqwest = { version = "0.11", features = ["blocking"] }
 tungstenite = "0.21"
 url = "2"
 
-[build-dependencies]
-cc = "1"
+

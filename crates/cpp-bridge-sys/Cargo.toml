@@ -1,11 +1,7 @@
 [package]
-name = "libjnivm-sys"
+name = "cpp-bridge-sys"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"
-
-[dependencies]
-log = "0.4"
 
 [build-dependencies]
 cc = "1"
