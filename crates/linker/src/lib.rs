@@ -112,6 +112,7 @@ fn load_dependencies(
     external_symbols: &HashMap<String, *mut std::ffi::c_void>,
 ) {
     let deps = soinfo.dependencies.clone();
+    log::info!("linker: {} has {} deps: {:?}", name, deps.len(), deps);
     for dep_name in &deps {
         if dep_name == "libc.so" {
             continue;
@@ -149,6 +150,7 @@ fn load_library_internal(
     } else {
         format!("lib{}.so", name_)
     };
+    log::info!("linker: load_library_internal '{}' (is_stub={})", name, is_stub);
     let mut state = STATE.write().unwrap();
 
     if let Some(&handle) = state.libraries_by_name.get(name.as_str()) {
@@ -225,8 +227,14 @@ fn load_library_internal(
                             .insert(k.clone(), *v as usize);
                     }
 
+                    // Drop lock before loading deps (load_library_internal needs it)
+                    drop(state);
+
                     // Recursively load DT_NEEDED dependencies
                     load_dependencies(&mut loaded.soinfo, &data, &name, external_symbols);
+
+                    // Re-acquire lock for remainder
+                    let mut state = STATE.write().unwrap();
 
                     // Make all segments writable for relocation
                     let prot = libc::PROT_READ | libc::PROT_WRITE;
@@ -264,14 +272,28 @@ fn load_library_internal(
                                 return Some(addr as usize);
                             }
                         }
-                        resolve_symbol(sym_name)
+                        // Note: resolve_symbol acquires STATE.read(), but state (write guard) is held — deadlock.
+                        // The logic above already covers what resolve_symbol does, so fallback is None.
+                        None
                     };
 
-                    if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
-                        for e in &errs {
-                            log::warn!("linker: relocation error for {}: {:?}", name, e);
+                    let has_reloc_errs = if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
+                        let sym_count = errs.iter().filter(|e| matches!(e, reloc::RelocError::SymbolNotFound(_))).count();
+                        let other_count = errs.len() - sym_count;
+                        if sym_count > 0 {
+                            log::warn!("linker: {} unresolved symbols in {} ({} other errors)", sym_count, name, other_count);
                         }
-                    }
+                        if other_count > 0 {
+                            for e in &errs {
+                                if !matches!(e, reloc::RelocError::SymbolNotFound(_)) {
+                                    log::warn!("linker: relocation error for {}: {:?}", name, e);
+                                }
+                            }
+                        }
+                        !errs.is_empty()
+                    } else {
+                        false
+                    };
 
                     // Apply RELRO (make read-only after relocations)
                     if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
@@ -309,20 +331,31 @@ fn load_library_internal(
                     // Add all exported symbols to global_symbols for cross-library resolution
                     if let Some(symtab) = loaded.soinfo.symtab {
                         if let Some(strtab) = loaded.soinfo.strtab {
-                            let sym_count = loaded.soinfo.strtab_size / 24;
-                            for i in 0..sym_count {
+                            let base = loaded.soinfo.base;
+                            let end = base + loaded.soinfo.size;
+                            let mut i = 0usize;
+                            loop {
+                                let entry_addr = symtab.wrapping_add(i * 24);
+                                if entry_addr >= end || entry_addr < symtab {
+                                    break;
+                                }
                                 unsafe {
-                                    let sym_ptr = (symtab as *const u8).add(i * 24) as *const goblin::elf::Sym;
-                                    let sym = *sym_ptr;
-                                    if sym.st_name != 0 && sym.st_shndx != 0 && sym.st_value != 0 {
+                                    let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
+                                    if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
+                                        break;
+                                    }
+                                    if sym.st_name != 0 && (sym.st_name as usize) < loaded.soinfo.strtab_size {
                                         let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
                                         let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
                                         if let Ok(s) = cstr.to_str() {
-                                            let addr = loaded.soinfo.base + sym.st_value as usize;
-                                            state.global_symbols.entry(s.to_string()).or_insert(addr);
+                                            let addr = base + sym.st_value as usize;
+                                            if addr != 0 {
+                                                state.global_symbols.entry(s.to_string()).or_insert(addr);
+                                            }
                                         }
                                     }
                                 }
+                                i += 1;
                             }
                         }
                     }
@@ -336,10 +369,14 @@ fn load_library_internal(
                         loaded.soinfo.size,
                     );
 
-                    // Call init functions
-                    unsafe {
-                        call_init_array(&loaded.soinfo);
-                        call_init(&loaded.soinfo);
+                    // Call init functions only if no unresolved symbols
+                    if !has_reloc_errs {
+                        unsafe {
+                            call_init_array(&loaded.soinfo);
+                            call_init(&loaded.soinfo);
+                        }
+                    } else {
+                        log::warn!("linker: skipping init for {} due to unresolved symbols", name);
                     }
 
                     let soname = loaded.soinfo.soname.clone();
@@ -694,6 +731,26 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
     load_library_internal_no_ctors(path, &symbols, false)
 }
 
+/// C-exported dlsym for Rust-loaded libraries.
+/// Returns the symbol address, or null if not found.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlsym(
+    handle: usize,
+    symbol: *const libc::c_char,
+) -> *mut libc::c_void {
+    if handle == 0 || symbol.is_null() {
+        return std::ptr::null_mut();
+    }
+    let sym_str = match unsafe { std::ffi::CStr::from_ptr(symbol) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match dlsym(handle, sym_str) {
+        Some(addr) => addr,
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// Same as load_library_internal but skips calling init/init_array constructors.
 /// Used by the diagnostic dlopen_ext to avoid double-initializing the game library.
 fn load_library_internal_no_ctors(
@@ -706,6 +763,7 @@ fn load_library_internal_no_ctors(
     } else {
         format!("lib{}.so", name_)
     };
+    log::info!("linker: load_library_internal_no_ctors '{}' (is_stub={})", name, is_stub);
     let mut state = STATE.write().unwrap();
 
     if let Some(&handle) = state.libraries_by_name.get(name.as_str()) {
@@ -795,8 +853,156 @@ fn load_library_internal_no_ctors(
             loaded.soinfo.external_symbols.insert(k.clone(), *v as usize);
         }
 
-        // Skip expensive post-load processing for diagnostic trial —
-        // the C++ linker will do the real load. Just verify ELF is loaded.
+        // Register exported symbols early so dependencies can resolve them
+        let base = loaded.soinfo.base;
+        let seg_end = base + loaded.soinfo.size;
+        if let Some(symtab) = loaded.soinfo.symtab {
+            if let Some(strtab) = loaded.soinfo.strtab {
+                let mut i = 0usize;
+                loop {
+                    let entry_addr = symtab.wrapping_add(i * 24);
+                    if entry_addr >= seg_end || entry_addr < symtab {
+                        break;
+                    }
+                    unsafe {
+                        let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
+                        if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
+                            break;
+                        }
+                        if sym.st_name != 0 && (sym.st_name as usize) < loaded.soinfo.strtab_size {
+                            let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
+                            let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
+                            if let Ok(s) = cstr.to_str() {
+                                let addr = base + sym.st_value as usize;
+                                if addr != 0 {
+                                    state.global_symbols.entry(s.to_string()).or_insert(addr);
+                                }
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+
+        // Drop lock before loading deps (load_library_internal needs it)
+        drop(state);
+
+        load_dependencies(&mut loaded.soinfo, &data, &name, external_symbols);
+
+        // Re-acquire lock for relocation + registration
+        let mut state = STATE.write().unwrap();
+
+        // Make all segments writable for relocation
+        unsafe {
+            libc::mprotect(
+                loaded.soinfo.base as *mut libc::c_void,
+                loaded.soinfo.size,
+                libc::PROT_READ | libc::PROT_WRITE,
+            );
+        }
+        // Resolver: global symbols → external hooks → loaded libs → C++ dlsym → builtin
+        let resolve = |sym_name: &str| -> Option<usize> {
+            if let Some(&addr) = state.global_symbols.get(sym_name) {
+                return Some(addr);
+            }
+            if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
+                return Some(addr);
+            }
+            for (_, lib) in &state.libraries_by_handle {
+                if lib.is_stub { continue; }
+                if let Some((addr, _)) = symbol::find_symbol(&lib.soinfo, sym_name) {
+                    if addr != 0 { return Some(addr); }
+                }
+                if let Some(&addr) = lib.soinfo.external_symbols.get(sym_name) {
+                    return Some(addr);
+                }
+            }
+            if let Some(cpp_dlsym) = DLSYM_FALLBACK.get() {
+                let c_name = std::ffi::CString::new(sym_name).ok()?;
+                let addr = unsafe { cpp_dlsym(c_name.as_ptr()) };
+                if !addr.is_null() {
+                    return Some(addr as usize);
+                }
+            }
+            // Note: resolve_symbol acquires STATE.read(), but state (write guard) is held — deadlock.
+            // The logic above already covers what resolve_symbol does, so fallback is None.
+            None
+        };
+
+        if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
+            let sym_count = errs.iter().filter(|e| matches!(e, reloc::RelocError::SymbolNotFound(_))).count();
+            let other_count = errs.len() - sym_count;
+            if sym_count > 0 {
+                log::warn!("linker: {} unresolved symbols in {} ({} other errors)", sym_count, name, other_count);
+            }
+            if other_count > 0 {
+                for e in &errs {
+                    if !matches!(e, reloc::RelocError::SymbolNotFound(_)) {
+                        log::warn!("linker: relocation error for {}: {:?}", name, e);
+                    }
+                }
+            }
+        }
+        // Apply RELRO (make read-only after relocations)
+        if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
+            unsafe {
+                libc::mprotect(relro_addr as *mut libc::c_void, relro_size, libc::PROT_READ);
+            }
+        }
+
+        // Restore segment protections for executable segments
+        unsafe {
+            libc::mprotect(
+                loaded.soinfo.base as *mut libc::c_void,
+                loaded.soinfo.size,
+                libc::PROT_READ | libc::PROT_EXEC,
+            );
+        }
+
+        // Register TLS module if present
+        if let Some(ref tls_seg) = loaded.soinfo.tls_segment {
+            let tls_id = tls::register_tls_module(loaded.soinfo.base, tls_seg);
+            loaded.soinfo.tls_module_id = tls_id;
+            log::debug!(
+                "linker: registered TLS module id={} size={} align={} for '{}'",
+                tls_id, tls_seg.size, tls_seg.alignment, name,
+            );
+        }
+
+        // Add all exported symbols to global_symbols for cross-library resolution
+        if let Some(symtab) = loaded.soinfo.symtab {
+            if let Some(strtab) = loaded.soinfo.strtab {
+                // Iterate until we go past the mapped segment to avoid reading garbage
+                let base = loaded.soinfo.base;
+                let end = base + loaded.soinfo.size;
+                let mut i = 0;
+                loop {
+                    let entry_addr = symtab.wrapping_add(i * 24);
+                    if entry_addr >= end || entry_addr < symtab {
+                        break;
+                    }
+                    unsafe {
+                        let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
+                        if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
+                            break;
+                        }
+                        if sym.st_name != 0 && (sym.st_name as usize) < loaded.soinfo.strtab_size {
+                            let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
+                            let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
+                            if let Ok(s) = cstr.to_str() {
+                                let addr = base + sym.st_value as usize;
+                                if addr != 0 {
+                                    state.global_symbols.entry(s.to_string()).or_insert(addr);
+                                }
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+
         loaded.soinfo.is_stub = false;
 
         log::info!(

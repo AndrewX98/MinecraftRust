@@ -19,10 +19,11 @@
 #include <stdexcept>
 #include <cstring>
 
-// Rust linker extern "C" function for Phase 2 diagnostic trial load
+// Rust linker extern "C" functions for Phase 2 diagnostic trial load
 extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
                                          const char* const* hook_names,
                                          void* const* hook_vals, size_t hook_count);
+extern "C" void* linker_rust_dlsym(size_t handle, const char* symbol);
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
@@ -958,8 +959,9 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     extinfo.flags = ANDROID_DLEXT_MCPELAUNCHER_HOOKS;
     extinfo.mcpelauncher_hooks = hooks.data();
 
-    // Phase 2: Try Rust linker first (diagnostic), fall back to C++ on failure
+    // Phase 2: Try Rust linker first (full load with relocations)
     void* handle = nullptr;
+    size_t rust_handle = 0;
     {
         // Build parallel arrays for Rust FFI
         size_t hook_count = 0;
@@ -974,9 +976,9 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             hook_vals[i] = hooks[i].value;
         }
 
-        size_t rust_handle = linker_rust_dlopen_ext("libminecraftpe.so", 0,
-                                                     hook_names.data(), hook_vals.data(),
-                                                     hook_count);
+        rust_handle = linker_rust_dlopen_ext("libminecraftpe.so", 0,
+                                              hook_names.data(), hook_vals.data(),
+                                              hook_count);
         if (rust_handle != 0) {
             Log::info("MinecraftUtils", "Rust linker loaded libminecraftpe.so (handle=%zu)", rust_handle);
         } else {
@@ -984,30 +986,13 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         }
     }
 
-    // Always use C++ path for now — Rust handle is incompatible with C++ dlsym expectations
-    handle = linker::dlopen_ext("libminecraftpe.so", 0, &extinfo);
-    if(libc) {
-        linker::dlclose(libc);
-    }
-    if(libcxx) {
-        linker::dlclose(libcxx);
-    }
-    if(libstdcxx) {
-        linker::dlclose(libstdcxx);
-    }
-    if(pairipcore) {
-        linker::dlclose(pairipcore);
-    }
-    if(handle == nullptr) {
-        Log::error("MinecraftUtils", "Failed to load Minecraft: %s", linker::dlerror());
-    } else {
-        if(fmod) {
-            // We cannot load this again, so make it static and unload it once
-            linker::dlclose(fmod);
-        }
+    if (rust_handle != 0) {
+        // Rust linker loaded the game — skip C++ dlopen_ext, use Rust dlsym for hooks
+        handle = reinterpret_cast<void*>(rust_handle);
         for(auto&& h : hooks) {
             if(h.name) {
-                printf("Found hook: %s @ %p\n", h.name, linker::dlsym(handle, h.name));
+                void* addr = linker_rust_dlsym(rust_handle, h.name);
+                printf("Found hook: %s @ %p\n", h.name, addr);
                 if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
                     printf("with value: %p\n", h.value);
                     res->second.callback(res->second.user, h.value);
@@ -1015,6 +1000,38 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             }
         }
         HookManager::instance.addLibrary(handle);
+    } else {
+        // Fallback to C++ loader
+        handle = linker::dlopen_ext("libminecraftpe.so", 0, &extinfo);
+        if(libc) {
+            linker::dlclose(libc);
+        }
+        if(libcxx) {
+            linker::dlclose(libcxx);
+        }
+        if(libstdcxx) {
+            linker::dlclose(libstdcxx);
+        }
+        if(pairipcore) {
+            linker::dlclose(pairipcore);
+        }
+        if(handle == nullptr) {
+            Log::error("MinecraftUtils", "Failed to load Minecraft: %s", linker::dlerror());
+        } else {
+            if(fmod) {
+                linker::dlclose(fmod);
+            }
+            for(auto&& h : hooks) {
+                if(h.name) {
+                    printf("Found hook: %s @ %p\n", h.name, linker::dlsym(handle, h.name));
+                    if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
+                        printf("with value: %p\n", h.value);
+                        res->second.callback(res->second.user, h.value);
+                    }
+                }
+            }
+            HookManager::instance.addLibrary(handle);
+        }
     }
     return handle;
 }

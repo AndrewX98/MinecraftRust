@@ -1,5 +1,4 @@
-use crate::soinfo::SoInfo;
-use goblin::elf::Sym;
+use crate::soinfo::{Elf64_Sym, SoInfo};
 
 fn gnu_hash(name: &str) -> u32 {
     let bytes = name.as_bytes();
@@ -63,7 +62,7 @@ fn find_symbol_gnu<'a>(soinfo: &'a SoInfo, name: &str) -> Option<(usize, &'a [u8
                 std::slice::from_raw_parts(ptr, len)
             }) {
                 if let Some(sym) = soinfo.symtab.map(|s| unsafe {
-                    let ptr = s as *const Sym;
+                    let ptr = s as *const Elf64_Sym;
                     &*ptr.add(sym_idx)
                 }) {
                     let sym_name_ptr = strtab_bytes.as_ptr() as usize + sym.st_name as usize;
@@ -114,7 +113,7 @@ fn find_symbol_sysv<'a>(soinfo: &'a SoInfo, name: &str) -> Option<(usize, &'a [u
             std::slice::from_raw_parts(ptr, len)
         }) {
             if let Some(sym) = soinfo.symtab.map(|s| unsafe {
-                let ptr = s as *const Sym;
+                let ptr = s as *const Elf64_Sym;
                 &*ptr.add(sym_idx)
             }) {
                 let sym_name_ptr = strtab_bytes.as_ptr() as usize + sym.st_name as usize;

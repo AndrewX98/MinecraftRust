@@ -2,6 +2,17 @@ use std::collections::HashMap;
 
 use crate::Handle;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Elf64_Sym {
+    pub st_name: u32,
+    pub st_info: u8,
+    pub st_other: u8,
+    pub st_shndx: u16,
+    pub st_value: u64,
+    pub st_size: u64,
+}
+
 // Flag constants matching bionic linker_soinfo.h
 pub const FLAG_LINKED: u32 = 0x0000_0001;
 pub const FLAG_EXE: u32 = 0x0000_0004;

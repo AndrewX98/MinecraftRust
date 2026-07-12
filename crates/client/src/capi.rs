@@ -109,6 +109,14 @@ pub fn create_and_set_global_asset_manager(root_dir: &str) {
 }
 
 pub fn dlsym(handle: *mut std::ffi::c_void, symbol: &str) -> *mut std::ffi::c_void {
+    // If handle looks like a Rust linker handle (small integer cast to ptr),
+    // use Rust linker dlsym. Rust handles are < 10000.
+    let handle_val = handle as usize;
+    if handle_val > 0 && handle_val < 10000 {
+        if let Some(addr) = linker::dlsym(handle_val, symbol) {
+            return addr;
+        }
+    }
     let sym = CString::new(symbol).unwrap();
     unsafe { mc_dlsym(handle, sym.as_ptr()) }
 }
