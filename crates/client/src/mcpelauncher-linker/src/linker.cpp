@@ -20,6 +20,10 @@ void linker::init() {
     linker::load_library("libdl.so", linker::libdl::get_dl_symbols());
 }
 
+extern "C" void mcpelauncher_linker_cpp_init() {
+    linker::init();
+}
+
 void *linker::load_library(const char *name, const std::unordered_map<std::string, void *> &symbols) {
     auto lib = soinfo::load_library(name, symbols);
     lib->increment_ref_count();

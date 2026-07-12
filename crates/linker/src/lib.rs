@@ -1,7 +1,26 @@
-pub mod soinfo;
+pub mod base_strings;
+pub mod block_allocator;
+pub mod cfi;
+pub mod debug;
+pub mod dlwarning;
+pub mod gdb_support;
+pub mod linker_config;
+pub mod linker_main;
+pub mod linker_stubs;
 pub mod loader;
+pub mod phdr;
+pub mod mapped_file_fragment;
 pub mod reloc;
+pub mod relocate;
+pub mod reloc_iter;
+pub mod sdk_versions;
+pub mod tls;
+pub mod soinfo;
 pub mod symbol;
+pub mod libdl;
+pub mod namespaces;
+pub mod properties;
+pub mod utils;
 
 use soinfo::SoInfo;
 use std::collections::HashMap;
@@ -69,15 +88,14 @@ pub fn resolve_symbol(name: &str) -> Option<usize> {
 }
 
 pub fn init() {
-    log::info!("linker: initializing");
-    *STATE.write().unwrap() = LinkerState::new();
-    let mut dl_syms: HashMap<String, *mut std::ffi::c_void> = HashMap::new();
-    dl_syms.insert("dlopen".to_string(), libc::dlopen as *mut std::ffi::c_void);
-    dl_syms.insert("dlsym".to_string(), libc::dlsym as *mut std::ffi::c_void);
-    dl_syms.insert("dlclose".to_string(), libc::dlclose as *mut std::ffi::c_void);
-    dl_syms.insert("dlerror".to_string(), libc::dlerror as *mut std::ffi::c_void);
-    load_library_internal("libdl.so", &dl_syms, true);
-    log::info!("linker: initialized");
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        log::info!("linker: initializing");
+        *STATE.write().unwrap() = LinkerState::new();
+        let dl_syms = libdl::get_dl_symbols();
+        load_library_internal("libdl.so", &dl_syms, true);
+        log::info!("linker: initialized");
+    });
 }
 
 fn load_dependencies(
@@ -516,8 +534,16 @@ unsafe fn c_arrays_to_hashmap(
     map
 }
 
+extern "C" {
+    fn mcpelauncher_linker_cpp_init();
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn linker_init_rust() {
+    // Initialize C++ bionic linker state first (solist, libdl.so stub in C++ state)
+    // The game library still uses the C++ linker; this keeps its state alive.
+    unsafe { mcpelauncher_linker_cpp_init() };
+    // Also initialize Rust linker state
     init();
 }
 

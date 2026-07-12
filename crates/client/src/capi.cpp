@@ -126,11 +126,14 @@ int mc_get_libc_symbols(shim_shimmed_symbol* buf, int max_entries) {
     return count;
 }
 
+extern "C" void linker_init_rust();
+
 /// Runs the core init sequence that the original main.cpp performs.
 /// Call this AFTER mc_setup_paths and mc_init_version.
 int mc_load_core_libraries(const char* lib_dir) {
-    // 0) Initialize the C++ linker (calls solist_init, registers libdl)
-    linker::init();
+    // 0) Initialize Rust linker (primary). Also initializes C++ bionic linker
+    //    state internally so game library loading via C++ linker still works.
+    linker_init_rust();
 
     // 1) Register libc symbols with the C++ linker
     auto libC = MinecraftUtils::getLibCSymbols();
