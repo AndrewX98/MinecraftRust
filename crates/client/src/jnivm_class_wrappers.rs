@@ -1,5 +1,6 @@
 use libjnivm_sys::*;
 use std::ffi::c_char;
+use std::mem;
 
 const JNI_TRUE: jboolean = 1;
 const JNI_FALSE: jboolean = 0;
@@ -75,12 +76,40 @@ unsafe extern "C" fn File_length(_env: *mut JNIEnv, self_: jobject) -> jlong {
 unsafe extern "C" fn File_isDirectory(_env: *mut JNIEnv, self_: jobject) -> jboolean {
     let f = self_ as *const FileObject;
     let path_c = (*f).path.as_ptr();
-    let mut st: libc::stat = std::mem::zeroed();
+    let mut st: libc::stat = mem::zeroed();
     if libc::stat(path_c, &mut st) == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFDIR {
         JNI_TRUE
     } else {
         JNI_FALSE
     }
+}
+
+fn statvfs_space(path: *const i8, field_fn: fn(&libc::statvfs) -> u64) -> jlong {
+    let mut stat: libc::statvfs = unsafe { mem::zeroed() };
+    let path_str = unsafe { std::ffi::CStr::from_ptr(path).to_string_lossy().into_owned() };
+    if unsafe { libc::statvfs(path, &mut stat) } == 0 {
+        let val = (field_fn(&stat) * stat.f_bsize as u64) as jlong;
+        log::info!("File: statvfs_space({}) -> {}", path_str, val);
+        val
+    } else {
+        log::warn!("File: statvfs_space({}) failed, returning 1TB fallback", path_str);
+        1024i64 * 1024 * 1024 * 1024
+    }
+}
+
+unsafe extern "C" fn File_getTotalSpace(_env: *mut JNIEnv, self_: jobject) -> jlong {
+    let f = self_ as *const FileObject;
+    statvfs_space((*f).path.as_ptr(), |s| s.f_blocks)
+}
+
+unsafe extern "C" fn File_getUsableSpace(_env: *mut JNIEnv, self_: jobject) -> jlong {
+    let f = self_ as *const FileObject;
+    statvfs_space((*f).path.as_ptr(), |s| s.f_bavail)
+}
+
+unsafe extern "C" fn File_getFreeSpace(_env: *mut JNIEnv, self_: jobject) -> jlong {
+    let f = self_ as *const FileObject;
+    statvfs_space((*f).path.as_ptr(), |s| s.f_bfree)
 }
 
 fn register_file_class(env: *mut JNIEnv) {
@@ -109,6 +138,21 @@ fn register_file_class(env: *mut JNIEnv) {
             name: b"isDirectory\0".as_ptr() as *const c_char,
             signature: b"()Z\0".as_ptr() as *const c_char,
             fnPtr: File_isDirectory as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getTotalSpace\0".as_ptr() as *const c_char,
+            signature: b"()J\0".as_ptr() as *const c_char,
+            fnPtr: File_getTotalSpace as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getUsableSpace\0".as_ptr() as *const c_char,
+            signature: b"()J\0".as_ptr() as *const c_char,
+            fnPtr: File_getUsableSpace as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getFreeSpace\0".as_ptr() as *const c_char,
+            signature: b"()J\0".as_ptr() as *const c_char,
+            fnPtr: File_getFreeSpace as *mut std::ffi::c_void,
         },
     ];
     let cls = unsafe { jnivm_find_class(env, b"java/io/File\0".as_ptr() as *const c_char) };

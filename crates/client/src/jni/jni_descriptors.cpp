@@ -38,6 +38,11 @@ BEGIN_NATIVE_DESCRIPTOR(BuildVersion){Field<&BuildVersion::SDK_INT>{}, "SDK_INT"
     END_NATIVE_DESCRIPTOR
 
     BEGIN_NATIVE_DESCRIPTOR(File){Function<&File::getPath>{}, "getPath"},
+    {Function<&File::getAbsolutePath>{}, "getAbsolutePath"},
+    {Function<&File::exists>{}, "exists"},
+    {Function<&File::getTotalSpace>{}, "getTotalSpace"},
+    {Function<&File::getUsableSpace>{}, "getUsableSpace"},
+    {Function<&File::getFreeSpace>{}, "getFreeSpace"},
     END_NATIVE_DESCRIPTOR
 
     BEGIN_NATIVE_DESCRIPTOR(ClassLoader){Function<&ClassLoader::loadClass>{}, "loadClass"},

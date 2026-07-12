@@ -199,6 +199,7 @@ unsafe extern "C" fn get_allocatable_bytes(
     _self: jobject,
     _path: jstring,
 ) -> jlong {
+    log::info!("MainActivity: getAllocatableBytes called -> 1TB");
     1024i64 * 1024 * 1024 * 1024
 }
 
@@ -207,6 +208,7 @@ unsafe extern "C" fn supports_size_query(
     _self: jobject,
     _path: jstring,
 ) -> jboolean {
+    log::info!("MainActivity: supportsSizeQuery called -> true");
     JNI_TRUE
 }
 
@@ -215,6 +217,7 @@ unsafe extern "C" fn calculate_available_disk_free_space(
     _self: jobject,
     _path: jstring,
 ) -> jlong {
+    log::info!("MainActivity: calculateAvailableDiskFreeSpace called -> 1TB");
     1024i64 * 1024 * 1024 * 1024
 }
 
@@ -223,6 +226,7 @@ unsafe extern "C" fn get_usable_space(
     _self: jobject,
     _path: jstring,
 ) -> jlong {
+    log::info!("MainActivity: getUsableSpace called -> 1TB");
     1024i64 * 1024 * 1024 * 1024
 }
 

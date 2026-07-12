@@ -15,6 +15,7 @@
 #include <vector>
 #include <unordered_map>
 #include <fstream>
+#include <sys/statvfs.h>
 
 // Forward declare the libjnivm-sys extern "C" functions
 extern "C" {
@@ -100,6 +101,33 @@ extern "C" jstring JNICALL File_getAbsolutePath(JNIEnv* env, jobject self) {
     return env->NewStringUTF(f->path);
 }
 
+extern "C" jlong JNICALL File_getTotalSpace(JNIEnv* env, jobject self) {
+    auto* f = file_from_jobject(self);
+    struct statvfs stat;
+    if (::statvfs(f->path, &stat) == 0) {
+        return (jlong)stat.f_blocks * stat.f_bsize;
+    }
+    return 1024LL * 1024LL * 1024LL * 1024LL;
+}
+
+extern "C" jlong JNICALL File_getUsableSpace(JNIEnv* env, jobject self) {
+    auto* f = file_from_jobject(self);
+    struct statvfs stat;
+    if (::statvfs(f->path, &stat) == 0) {
+        return (jlong)stat.f_bavail * stat.f_bsize;
+    }
+    return 1024LL * 1024LL * 1024LL * 1024LL;
+}
+
+extern "C" jlong JNICALL File_getFreeSpace(JNIEnv* env, jobject self) {
+    auto* f = file_from_jobject(self);
+    struct statvfs stat;
+    if (::statvfs(f->path, &stat) == 0) {
+        return (jlong)stat.f_bfree * stat.f_bsize;
+    }
+    return 1024LL * 1024LL * 1024LL * 1024LL;
+}
+
 static void register_file_class(JNIEnv* env) {
     JNINativeMethod methods[] = {
         {(char*)"getPath",             (char*)"()Ljava/lang/String;",  (void*)&File_getPath},
@@ -107,8 +135,11 @@ static void register_file_class(JNIEnv* env) {
         {(char*)"exists",              (char*)"()Z",                   (void*)&File_exists},
         {(char*)"length",              (char*)"()J",                   (void*)&File_length},
         {(char*)"isDirectory",         (char*)"()Z",                   (void*)&File_isDirectory},
+        {(char*)"getTotalSpace",       (char*)"()J",                   (void*)&File_getTotalSpace},
+        {(char*)"getUsableSpace",      (char*)"()J",                   (void*)&File_getUsableSpace},
+        {(char*)"getFreeSpace",        (char*)"()J",                   (void*)&File_getFreeSpace},
     };
-    register_class(env, "java/io/File", methods, 5);
+    register_class(env, "java/io/File", methods, 8);
 }
 
 // ================================================================
