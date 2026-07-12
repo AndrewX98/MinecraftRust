@@ -13,7 +13,11 @@ System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, 
 
 No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 13 static libs built there; `client/build.rs` only emits link directives.
 
-**WARNING: `cargo build -p client` takes ~3 minutes.** Do not run it unless the user explicitly asks. Incremental builds still take ~2.5 min due to linking 257 object files into a 130MB binary. Only the C++ re-archive step is avoided when `client/build.rs` changes alone.
+**WARNING: `cargo build -p client` takes ~3 minutes on initial build, ~2.5 min on C++ changes, ~0.3s on pure Rust changes.** Do not run full builds unless necessary. After editing C++ sources, force C++ recompilation with:
+```bash
+cargo clean -p cpp-bridge-sys
+cargo build -p client
+```
 
 ## Workspace (15 crates)
 
