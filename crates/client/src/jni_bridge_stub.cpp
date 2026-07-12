@@ -42,6 +42,41 @@ namespace linker {
     void* load_library(const char* name, const std::unordered_map<std::string, void*>& symbols);
 }
 
+// Rust linker FFI bridge — mirror C++ state to Rust linker
+extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
+extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
+
+static void mirror_rust_load(const char* name, const std::unordered_map<std::string, void*>& syms) {
+    size_t n = syms.size();
+    if (n == 0) {
+        linker_load_library_rust(name, nullptr, nullptr, 0);
+        return;
+    }
+    std::vector<const char*> keys(n);
+    std::vector<void*> vals(n);
+    size_t i = 0;
+    for (auto& [k, v] : syms) {
+        keys[i] = k.c_str();
+        vals[i] = v;
+        i++;
+    }
+    linker_load_library_rust(name, keys.data(), vals.data(), n);
+}
+
+static void mirror_rust_add_symbols(const char* name, const std::unordered_map<std::string, void*>& syms) {
+    size_t n = syms.size();
+    if (n == 0) return;
+    std::vector<const char*> keys(n);
+    std::vector<void*> vals(n);
+    size_t i = 0;
+    for (auto& [k, v] : syms) {
+        keys[i] = k.c_str();
+        vals[i] = v;
+        i++;
+    }
+    linker_add_symbols_to_library_rust(name, keys.data(), vals.data(), n);
+}
+
 struct MinecraftUtils {
     static void* loadMinecraftLib(void* showMousePointerCallback,
                                   void* hideMousePointerCallback,
@@ -98,6 +133,7 @@ extern "C" void mc_setup_android_hooks() {
     }
 
     linker::load_library("libandroid.so", android_syms);
+    mirror_rust_load("libandroid.so", android_syms);
     CorePatches::loadGameWindowLibrary();
 }
 

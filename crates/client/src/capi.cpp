@@ -94,6 +94,46 @@ static void linker_update_LD_LIBRARY_PATH(const char* path) {
 // can replace stub entries with real GL functions via linker::relocate.
 static void* g_glesv2_handle = nullptr;
 
+// --- Rust linker FFI bridge ---
+// Functions for mirroring C++ linker state to the Rust linker.
+extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
+extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
+
+/// Helper: mirror a C++ linker::load_library call to the Rust linker state.
+/// Call this AFTER the corresponding C++ linker::load_library().
+static void mirror_rust_load(const char* name, const std::unordered_map<std::string, void*>& syms) {
+    size_t n = syms.size();
+    if (n == 0) {
+        linker_load_library_rust(name, nullptr, nullptr, 0);
+        return;
+    }
+    std::vector<const char*> keys(n);
+    std::vector<void*> vals(n);
+    size_t i = 0;
+    for (auto& [k, v] : syms) {
+        keys[i] = k.c_str();
+        vals[i] = v;
+        i++;
+    }
+    linker_load_library_rust(name, keys.data(), vals.data(), n);
+}
+
+/// Helper: add symbols to an already-registered Rust linker library.
+/// Call this when the C++ side calls linker::load_library() on an already-registered library.
+static void mirror_rust_add_symbols(const char* name, const std::unordered_map<std::string, void*>& syms) {
+    size_t n = syms.size();
+    if (n == 0) return;
+    std::vector<const char*> keys(n);
+    std::vector<void*> vals(n);
+    size_t i = 0;
+    for (auto& [k, v] : syms) {
+        keys[i] = k.c_str();
+        vals[i] = v;
+        i++;
+    }
+    linker_add_symbols_to_library_rust(name, keys.data(), vals.data(), n);
+}
+
 extern "C" {
 
 void mc_setup_paths(const char* g, const char* d, const char* c) {
@@ -148,6 +188,7 @@ int mc_load_core_libraries(const char* lib_dir) {
     // then returns. The main thread blocks on executeMainThread but the game
     // thread runs the event loop and renders.
     linker::load_library("libc.so", libC);
+    mirror_rust_load("libc.so", libC);
 
     // 2) Load libm
     MinecraftUtils::loadLibM();
@@ -156,9 +197,21 @@ int mc_load_core_libraries(const char* lib_dir) {
     MinecraftUtils::setupHybris();
 
     // 4) Register stub libraries that libminecraftpe.so depends on
-    linker::load_library("libOpenSLES.so", std::unordered_map<std::string, void*>());
-    linker::load_library("libGLESv1_CM.so", std::unordered_map<std::string, void*>());
-    linker::load_library("libstdc++.so", std::unordered_map<std::string, void*>());
+    {
+        auto empty = std::unordered_map<std::string, void*>();
+        linker::load_library("libOpenSLES.so", empty);
+        mirror_rust_load("libOpenSLES.so", empty);
+    }
+    {
+        auto empty = std::unordered_map<std::string, void*>();
+        linker::load_library("libGLESv1_CM.so", empty);
+        mirror_rust_load("libGLESv1_CM.so", empty);
+    }
+    {
+        auto empty = std::unordered_map<std::string, void*>();
+        linker::load_library("libstdc++.so", empty);
+        mirror_rust_load("libstdc++.so", empty);
+    }
 
     // Register libGLESv2.so with stub functions (real GL context needed for proper symbols)
     {
@@ -167,6 +220,7 @@ int mc_load_core_libraries(const char* lib_dir) {
             gl_syms[*p] = (void*)+[](void) -> int { return 0; };
         }
         g_glesv2_handle = linker::load_library("libGLESv2.so", gl_syms);
+        mirror_rust_load("libGLESv2.so", gl_syms);
     }
 
     // EGL symbols are registered by FakeEGL::installLibrary() later, after window
@@ -176,8 +230,16 @@ int mc_load_core_libraries(const char* lib_dir) {
     // NOTE: android hooks (libandroid.so) and game window library are set up in
     // mc_setup_android_hooks() — call it from Rust AFTER mc_load_core_libraries
     // but BEFORE mc_load_minecraft.
-    linker::load_library("liblog.so", std::unordered_map<std::string, void*>());
-    linker::load_library("libmcpelauncher_gamewindow.so", std::unordered_map<std::string, void*>());
+    {
+        auto empty = std::unordered_map<std::string, void*>();
+        linker::load_library("liblog.so", empty);
+        mirror_rust_load("liblog.so", empty);
+    }
+    {
+        auto empty = std::unordered_map<std::string, void*>();
+        linker::load_library("libmcpelauncher_gamewindow.so", empty);
+        mirror_rust_load("libmcpelauncher_gamewindow.so", empty);
+    }
 
     // 5) Set up library search path so dlopen_ext can find libminecraftpe.so etc.
     //    This must match the original main.cpp: update_LD_LIBRARY_PATH with the lib dir

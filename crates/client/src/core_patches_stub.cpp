@@ -21,6 +21,7 @@ std::vector<std::function<void()>> CorePatches::onWindowCreatedCallbacks;
 
 // --- Rust functions (declared) ---
 extern "C" void core_patches_install_impl(void* handle);
+extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
 // --- extern "C" helpers for Rust FFI ---
 
@@ -116,6 +117,21 @@ void CorePatches::loadGameWindowLibrary() {
     };
 
     linker::load_library("libmcpelauncher_gamewindow.so", syms);
+    // Mirror symbols to Rust linker state (lib already registered from capi.cpp)
+    {
+        size_t n = syms.size();
+        if (n > 0) {
+            std::vector<const char*> keys(n);
+            std::vector<void*> vals(n);
+            size_t i = 0;
+            for (auto& [k, v] : syms) {
+                keys[i] = k.c_str();
+                vals[i] = v;
+                i++;
+            }
+            linker_add_symbols_to_library_rust("libmcpelauncher_gamewindow.so", keys.data(), vals.data(), n);
+        }
+    }
 }
 
 // --- extern "C" thunks for Rust / FFI ---

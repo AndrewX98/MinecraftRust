@@ -556,7 +556,29 @@ pub unsafe extern "C" fn linker_load_library_rust(
 ) -> usize {
     let name_str = unsafe { std::ffi::CStr::from_ptr(name) }.to_str().unwrap_or("");
     let map = unsafe { c_arrays_to_hashmap(keys, vals, len) };
-    load_library(name_str, &map)
+    // Always register as stub — C++ linker::load_library() only creates stub
+    // libraries, never real ELF loads (those go through linker::dlopen()).
+    load_library_internal(name_str, &map, true)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linker_add_symbols_to_library_rust(
+    name: *const libc::c_char,
+    keys: *const *const libc::c_char,
+    vals: *const *mut libc::c_void,
+    len: usize,
+) {
+    let name_str = unsafe { std::ffi::CStr::from_ptr(name) }
+        .to_str()
+        .unwrap_or("");
+    let map = unsafe { c_arrays_to_hashmap(keys, vals, len) };
+    let handle = {
+        let state = STATE.read().unwrap();
+        state.libraries_by_name.get(name_str).copied()
+    };
+    if let Some(h) = handle {
+        add_symbols(h, &map);
+    }
 }
 
 #[no_mangle]

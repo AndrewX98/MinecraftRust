@@ -337,9 +337,12 @@ long XAsyncSchedule(uint64_t, uint64_t) {
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #include <unordered_map>
 #include <string>
 #include <mcpelauncher/linker.h>
+
+extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
 extern "C" void http_client_register_stubs() {
     std::unordered_map<std::string, void*> syms;
@@ -436,6 +439,19 @@ extern "C" void http_client_register_stubs() {
     char* name_stable = (char*)malloc(strlen("libHttpClient.Android.so") + 1);
     strcpy(name_stable, "libHttpClient.Android.so");
     void* handle = linker::load_library(name_stable, syms);
+    // Mirror to Rust linker state
+    {
+        size_t n = syms.size();
+        std::vector<const char*> keys(n);
+        std::vector<void*> vals(n);
+        size_t i = 0;
+        for (auto& [k, v] : syms) {
+            keys[i] = k.c_str();
+            vals[i] = v;
+            i++;
+        }
+        linker_load_library_rust(name_stable, keys.data(), vals.data(), n);
+    }
     fprintf(stderr, "LAUNCHER: http_client_register_stubs: registered %zu symbols, handle=%p\n",
             sizeof(table) / sizeof(table[0]), handle);
 }
