@@ -1,6 +1,5 @@
-use crate::soinfo::{RelocType, SoInfo};
+use crate::soinfo::{RelocType, SoInfo, TlsSegment};
 use goblin::elf::program_header::ProgramHeader;
-use goblin::elf::sym::Sym;
 use goblin::elf::Elf;
 use goblin::elf;
 
@@ -31,12 +30,23 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     let mut base: usize = 0;
     let mut total_size: usize = 0;
     let mut phdrs: Vec<ProgramHeader> = Vec::new();
+    let mut tls_phdr: Option<ProgramHeader> = None;
+    let mut relro_phdr: Option<ProgramHeader> = None;
 
     for phdr in &elf.program_headers {
-        if phdr.p_type == elf::program_header::PT_LOAD {
-            let end = (phdr.p_vaddr + phdr.p_memsz) as usize;
-            total_size = total_size.max(end);
-            phdrs.push(phdr.clone());
+        match phdr.p_type {
+            elf::program_header::PT_LOAD => {
+                let end = (phdr.p_vaddr + phdr.p_memsz) as usize;
+                total_size = total_size.max(end);
+                phdrs.push(phdr.clone());
+            }
+            elf::program_header::PT_TLS => {
+                tls_phdr = Some(phdr.clone());
+            }
+            elf::program_header::PT_GNU_RELRO => {
+                relro_phdr = Some(phdr.clone());
+            }
+            _ => {}
         }
     }
 
@@ -44,10 +54,12 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
         return Err(LoadError::NoLoadSegments);
     }
 
+    let page_size = 0x1000;
+    let aligned_total = (total_size + page_size - 1) & !(page_size - 1);
     let addr = unsafe {
         libc::mmap(
             std::ptr::null_mut(),
-            total_size,
+            aligned_total,
             libc::PROT_NONE,
             libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
             -1,
@@ -62,17 +74,26 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     for phdr in &phdrs {
         let seg_start = base + phdr.p_vaddr as usize;
         let seg_memsz = phdr.p_memsz as usize;
-        let prot = phdr_flags_to_prot(phdr.p_flags);
+        let final_prot = phdr_flags_to_prot(phdr.p_flags);
+        // Map RW initially to allow copying data; caller sets final prot
+        let map_prot = final_prot | libc::PROT_WRITE;
+
+        let aligned_start = seg_start & !(page_size - 1);
+        let offset_in_page = seg_start - aligned_start;
+        let aligned_size = seg_memsz + offset_in_page;
 
         unsafe {
-            libc::mmap(
-                seg_start as *mut libc::c_void,
-                seg_memsz,
-                prot,
+            let r = libc::mmap(
+                aligned_start as *mut libc::c_void,
+                aligned_size,
+                map_prot,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
                 -1,
                 0,
             );
+            if r == libc::MAP_FAILED {
+                continue;
+            }
         }
 
         let file_start = phdr.p_offset as usize;
@@ -217,6 +238,19 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     soinfo.pltrel_type = pltrel_type;
     soinfo.rel = rel.map(|(o, s)| (base + o as usize, s as usize));
     soinfo.rela = rela.map(|(o, s)| (base + o as usize, s as usize));
+
+    if let Some(tls) = tls_phdr {
+        soinfo.tls_segment = Some(TlsSegment {
+            size: tls.p_memsz as usize,
+            alignment: tls.p_align as usize,
+            init_ptr: base + tls.p_vaddr as usize,
+            init_size: tls.p_filesz as usize,
+        });
+    }
+
+    if let Some(relro) = relro_phdr {
+        soinfo.pt_gnu_relro = Some((base + relro.p_vaddr as usize, relro.p_memsz as usize));
+    }
 
     Ok(LoadedElf {
         soinfo,

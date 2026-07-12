@@ -86,8 +86,16 @@ namespace linker {
 // Forward declarations for bionic linker functions
 extern "C" void __loader_android_update_LD_LIBRARY_PATH(const char*);
 extern "C" void* __loader_android_dlopen_ext(const char*, int, const void*, const void*);
+extern "C" void* __loader_dlsym(void* handle, const char* symbol, const void* caller_addr);
 static void linker_update_LD_LIBRARY_PATH(const char* path) {
     __loader_android_update_LD_LIBRARY_PATH(path);
+}
+
+/// C++ dlsym fallback — called by Rust linker when a symbol isn't found
+/// in the Rust linker state. Uses the C++ bionic linker's dlsym to resolve.
+extern "C" void* linker_cpp_dlsym_fallback(const char* name) {
+    // Use RTLD_DEFAULT to search all loaded libraries in the C++ linker
+    return __loader_dlsym(RTLD_DEFAULT, name, __builtin_return_address(0));
 }
 
 // Handle for libGLESv2.so soinfo, saved so that mc_relocate_glesv2_symbols
@@ -133,6 +141,13 @@ static void mirror_rust_add_symbols(const char* name, const std::unordered_map<s
     }
     linker_add_symbols_to_library_rust(name, keys.data(), vals.data(), n);
 }
+
+// --- Rust linker extern "C" functions for Phase 2 ---
+extern "C" void linker_rust_add_search_path(const char* path);
+extern "C" void linker_rust_set_dlsym_fallback(void* (*fallback)(const char*));
+extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
+                                         const char* const* hook_names, void* const* hook_vals,
+                                         size_t hook_count);
 
 extern "C" {
 
@@ -245,6 +260,10 @@ int mc_load_core_libraries(const char* lib_dir) {
     //    This must match the original main.cpp: update_LD_LIBRARY_PATH with the lib dir
     std::string libDir = _ZN10PathHelper8pathInfoE.gameDir + "lib/" + MinecraftUtils::getLibraryAbi();
     linker_update_LD_LIBRARY_PATH(libDir.c_str());
+
+    // Also register the search path and C++ dlsym fallback for the Rust linker
+    linker_rust_add_search_path(libDir.c_str());
+    linker_rust_set_dlsym_fallback(linker_cpp_dlsym_fallback);
 
     return 0;
 }

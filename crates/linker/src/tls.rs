@@ -38,7 +38,7 @@ static G_STATIC_TLS_FINISHED: AtomicBool = AtomicBool::new(false);
 static NEXT_GENERATION: AtomicUsize = AtomicUsize::new(TLS_GENERATION_FIRST);
 static G_TLS_MODULES: Mutex<Vec<TlsModule>> = Mutex::new(Vec::new());
 
-fn register_tls_module(soinfo_base: usize, segment: &TlsSegment) -> usize {
+pub fn register_tls_module(soinfo_base: usize, segment: &TlsSegment) -> usize {
     let new_generation = NEXT_GENERATION.fetch_add(1, Ordering::Release) + 1;
     let mut modules = G_TLS_MODULES.lock().unwrap();
     let idx = {

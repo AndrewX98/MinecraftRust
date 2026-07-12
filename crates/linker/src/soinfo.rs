@@ -52,6 +52,7 @@ pub struct SoInfo {
     pub is_stub: bool,
     pub tls_segment: Option<TlsSegment>,
     pub tls_module_id: usize,
+    pub pt_gnu_relro: Option<(usize, usize)>,
     pub dt_flags_1: u64,
     pub rtld_flags: i32,
     pub primary_namespace: Option<String>,

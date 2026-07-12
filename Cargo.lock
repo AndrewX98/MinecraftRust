@@ -1837,6 +1837,7 @@ dependencies = [
  "goblin",
  "libc",
  "log",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

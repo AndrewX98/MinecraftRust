@@ -18,6 +18,11 @@
 #include <libc_shim.h>
 #include <stdexcept>
 #include <cstring>
+
+// Rust linker extern "C" function for Phase 2 diagnostic trial load
+extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
+                                         const char* const* hook_names,
+                                         void* const* hook_vals, size_t hook_count);
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
@@ -952,7 +957,35 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     hooks.emplace_back(mcpelauncher_hook_t{nullptr, nullptr});
     extinfo.flags = ANDROID_DLEXT_MCPELAUNCHER_HOOKS;
     extinfo.mcpelauncher_hooks = hooks.data();
-    void* handle = linker::dlopen_ext("libminecraftpe.so", 0, &extinfo);
+
+    // Phase 2: Try Rust linker first (diagnostic), fall back to C++ on failure
+    void* handle = nullptr;
+    {
+        // Build parallel arrays for Rust FFI
+        size_t hook_count = 0;
+        for (auto& h : hooks) {
+            if (h.name == nullptr) break;
+            hook_count++;
+        }
+        std::vector<const char*> hook_names(hook_count);
+        std::vector<void*> hook_vals(hook_count);
+        for (size_t i = 0; i < hook_count; i++) {
+            hook_names[i] = hooks[i].name;
+            hook_vals[i] = hooks[i].value;
+        }
+
+        size_t rust_handle = linker_rust_dlopen_ext("libminecraftpe.so", 0,
+                                                     hook_names.data(), hook_vals.data(),
+                                                     hook_count);
+        if (rust_handle != 0) {
+            Log::info("MinecraftUtils", "Rust linker loaded libminecraftpe.so (handle=%zu)", rust_handle);
+        } else {
+            Log::warn("MinecraftUtils", "Rust linker failed to load libminecraftpe.so, falling back to C++");
+        }
+    }
+
+    // Always use C++ path for now — Rust handle is incompatible with C++ dlsym expectations
+    handle = linker::dlopen_ext("libminecraftpe.so", 0, &extinfo);
     if(libc) {
         linker::dlclose(libc);
     }
