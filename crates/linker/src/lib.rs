@@ -295,7 +295,18 @@ fn load_library_internal(
                         false
                     };
 
-                    // Apply RELRO (make read-only after relocations)
+                    // Restore segment protections per original LOAD flags
+                    for &(seg_addr, seg_size, seg_prot) in &loaded.soinfo.load_segments {
+                        unsafe {
+                            libc::mprotect(
+                                seg_addr as *mut libc::c_void,
+                                seg_size,
+                                seg_prot,
+                            );
+                        }
+                    }
+
+                    // Apply RELRO (make read-only after relocations) on top
                     if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
                         unsafe {
                             libc::mprotect(
@@ -304,15 +315,6 @@ fn load_library_internal(
                                 libc::PROT_READ,
                             );
                         }
-                    }
-
-                    // Restore segment protections for executable segments
-                    unsafe {
-                        libc::mprotect(
-                            loaded.soinfo.base as *mut libc::c_void,
-                            loaded.soinfo.size,
-                            libc::PROT_READ | libc::PROT_EXEC,
-                        );
                     }
 
                     // Register TLS module if present
@@ -555,6 +557,19 @@ pub fn get_library_code_region(handle: Handle) -> (usize, usize) {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_get_library_code_region(
+    handle: usize,
+    base: *mut usize,
+    size: *mut usize,
+) {
+    let (b, s) = get_library_code_region(handle);
+    unsafe {
+        if !base.is_null() { *base = b; }
+        if !size.is_null() { *size = s; }
+    }
+}
+
 pub fn add_symbols(handle: Handle, symbols: &HashMap<String, *mut std::ffi::c_void>) {
     let mut state = STATE.write().unwrap();
     if let Some(lib) = state.libraries_by_handle.get_mut(&handle) {
@@ -619,16 +634,9 @@ unsafe fn c_arrays_to_hashmap(
     map
 }
 
-extern "C" {
-    fn mcpelauncher_linker_cpp_init();
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn linker_init_rust() {
-    // Initialize C++ bionic linker state first (solist, libdl.so stub in C++ state)
-    // The game library still uses the C++ linker; this keeps its state alive.
-    unsafe { mcpelauncher_linker_cpp_init() };
-    // Also initialize Rust linker state
+    // Initialize Rust linker state only
     init();
 }
 
@@ -749,6 +757,36 @@ pub unsafe extern "C" fn linker_rust_dlsym(
         Some(addr) => addr,
         None => std::ptr::null_mut(),
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlopen(
+    name: *const libc::c_char,
+    _flags: i32,
+) -> usize {
+    if name.is_null() {
+        return 0;
+    }
+    let s = match std::ffi::CStr::from_ptr(name).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    dlopen(s, _flags).unwrap_or(0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlclose(handle: usize) -> i32 {
+    dlclose(handle)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_get_library_base(handle: usize) -> usize {
+    get_library_base(handle)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlerror() -> *const libc::c_char {
+    std::ptr::null()
 }
 
 /// Same as load_library_internal but skips calling init/init_array constructors.

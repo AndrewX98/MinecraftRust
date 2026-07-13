@@ -49,12 +49,13 @@ fn find_symbol_gnu<'a>(soinfo: &'a SoInfo, name: &str) -> Option<(usize, &'a [u8
 
     let bucket_idx = (h % gnu_bucket.len() as u32) as usize;
     let mut sym_idx = gnu_bucket.get(bucket_idx).copied().unwrap_or(0) as usize;
-    if sym_idx == 0 {
+    let symoffset = soinfo.gnu_symoffset;
+    if sym_idx < symoffset {
         return None;
     }
 
     loop {
-        let chain_val = gnu_chain.get(sym_idx - soinfo.gnu_bucket.len()).copied().unwrap_or(0);
+        let chain_val = gnu_chain.get(sym_idx - symoffset).copied().unwrap_or(0);
         if (chain_val | 1) == (h | 1) {
             if let Some(strtab_bytes) = soinfo.strtab.map(|s| unsafe {
                 let ptr = s as *const u8;

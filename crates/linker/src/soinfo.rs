@@ -41,6 +41,7 @@ pub struct SoInfo {
     pub bucket_count: usize,
     pub bucket: Vec<u32>,
     pub chain: Vec<u32>,
+    pub gnu_symoffset: usize,
     pub gnu_bucket: Vec<u32>,
     pub gnu_chain: Vec<u32>,
     pub gnu_bloom_filter: Vec<usize>,
@@ -64,6 +65,7 @@ pub struct SoInfo {
     pub tls_segment: Option<TlsSegment>,
     pub tls_module_id: usize,
     pub pt_gnu_relro: Option<(usize, usize)>,
+    pub load_segments: Vec<(usize, usize, i32)>, // (addr, size, prot_flags)
     pub dt_flags_1: u64,
     pub rtld_flags: i32,
     pub primary_namespace: Option<String>,

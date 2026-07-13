@@ -71,10 +71,13 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     }
     base = addr as usize;
 
+    let mut load_segments: Vec<(usize, usize, i32)> = Vec::new();
+
     for phdr in &phdrs {
         let seg_start = base + phdr.p_vaddr as usize;
         let seg_memsz = phdr.p_memsz as usize;
         let final_prot = phdr_flags_to_prot(phdr.p_flags);
+        load_segments.push((seg_start, seg_memsz, final_prot));
         // Map RW initially to allow copying data; caller sets final prot
         let map_prot = final_prot | libc::PROT_WRITE;
 
@@ -122,6 +125,8 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     let mut strtab: Option<u64> = None;
     let mut strtab_size: usize = 0;
     let mut symtab: Option<u64> = None;
+    let mut gnu_hash_addr: Option<u64> = None;
+    let mut sysv_hash_addr: Option<u64> = None;
     let mut pltrel: Option<(u64, u64)> = None;
     let mut pltrel_type = RelocType::Rela;
     let mut rela: Option<(u64, u64)> = None;
@@ -188,6 +193,8 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
                     dependencies.push(entry.d_val);
                 }
                 elf::dynamic::DT_SONAME => soname_idx = Some(entry.d_val),
+                elf::dynamic::DT_GNU_HASH => gnu_hash_addr = Some(entry.d_val),
+                elf::dynamic::DT_HASH => sysv_hash_addr = Some(entry.d_val),
                 _ => {}
             }
         }
@@ -239,6 +246,81 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     soinfo.rel = rel.map(|(o, s)| (base + o as usize, s as usize));
     soinfo.rela = rela.map(|(o, s)| (base + o as usize, s as usize));
 
+    // Parse hash tables from .dynamic section (DT_GNU_HASH / DT_HASH)
+    if let Some(gnu_off) = gnu_hash_addr {
+        let gnu_hash_ptr = base + gnu_off as usize;
+        soinfo.gnu_hash = Some(gnu_hash_ptr);
+        unsafe {
+            let header = *(gnu_hash_ptr as *const [u32; 4]);
+            let nbuckets = header[0] as usize;
+            let symoffset = header[1] as usize;
+            let bloom_size = header[2] as usize;
+            let bloom_shift = header[3];
+            if bloom_size > 0 && bloom_size.is_power_of_two() {
+                let bloom_filter_ptr = (gnu_hash_ptr as *const u8).add(16) as *const usize;
+                let buckets_ptr = bloom_filter_ptr.add(bloom_size) as *const u32;
+                let bloom_filter =
+                    std::slice::from_raw_parts(bloom_filter_ptr, bloom_size);
+                let buckets = std::slice::from_raw_parts(buckets_ptr, nbuckets);
+
+                // Compute dynsym count from hash section size.
+                // .gnu.hash and .dynstr are adjacent in the ELF, so:
+                //   hash_section_size = strtab_vaddr - gnu_hash_vaddr
+                //   chains_len = (hash_section_size - 16 - bloom_size*8 - nbuckets*4) / 4
+                //   dynsym_count = symoffset + chains_len
+                let dynsym_count = if let (Some(gh), Some(st)) = (gnu_hash_addr, strtab) {
+                    if st > gh {
+                        let hash_section_size = (st - gh) as usize;
+                        let chains_data = hash_section_size
+                            .saturating_sub(16 + bloom_size * 8 + nbuckets * 4);
+                        let chains_len = chains_data / 4;
+                        symoffset + chains_len
+                    } else {
+                        // Fallback: approximate from second-to-last bucket chain end
+                        symoffset
+                    }
+                } else {
+                    symoffset
+                };
+                let chains_len = if dynsym_count > symoffset {
+                    dynsym_count - symoffset
+                } else {
+                    0
+                };
+                let chains = if chains_len > 0 {
+                    let chains_ptr = buckets_ptr.add(nbuckets);
+                    std::slice::from_raw_parts(chains_ptr, chains_len)
+                } else {
+                    &[]
+                };
+
+                soinfo.gnu_symoffset = symoffset;
+                soinfo.gnu_bloom_filter = bloom_filter.to_vec();
+                soinfo.gnu_bloom_shift = bloom_shift as usize;
+                soinfo.gnu_bloom_n = bloom_size;
+                soinfo.gnu_bucket = buckets.to_vec();
+                soinfo.gnu_chain = chains.to_vec();
+                soinfo.set_gnu_hash_flag();
+            }
+        }
+    } else if let Some(sysv_off) = sysv_hash_addr {
+        let sysv_hash_ptr = base + sysv_off as usize;
+        soinfo.sysv_hash = Some(sysv_hash_ptr);
+        unsafe {
+            let nbuckets = *(sysv_hash_ptr as *const u32);
+            let nchains = *((sysv_hash_ptr as *const u32).add(1));
+            if nbuckets > 0 && nchains > 0 {
+                let buckets_ptr = (sysv_hash_ptr as *const u32).add(2);
+                let chains_ptr = buckets_ptr.add(nbuckets as usize);
+                let buckets = std::slice::from_raw_parts(buckets_ptr, nbuckets as usize);
+                let chains = std::slice::from_raw_parts(chains_ptr, nchains as usize);
+                soinfo.bucket_count = nbuckets as usize;
+                soinfo.bucket = buckets.to_vec();
+                soinfo.chain = chains.to_vec();
+            }
+        }
+    }
+
     if let Some(tls) = tls_phdr {
         soinfo.tls_segment = Some(TlsSegment {
             size: tls.p_memsz as usize,
@@ -251,6 +333,8 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     if let Some(relro) = relro_phdr {
         soinfo.pt_gnu_relro = Some((base + relro.p_vaddr as usize, relro.p_memsz as usize));
     }
+
+    soinfo.load_segments = load_segments;
 
     Ok(LoadedElf {
         soinfo,
