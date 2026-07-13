@@ -236,16 +236,6 @@ fn load_library_internal(
                     // Re-acquire lock for remainder
                     let mut state = STATE.write().unwrap();
 
-                    // Make all segments writable for relocation
-                    let prot = libc::PROT_READ | libc::PROT_WRITE;
-                    unsafe {
-                        libc::mprotect(
-                            loaded.soinfo.base as *mut libc::c_void,
-                            loaded.soinfo.size,
-                            prot,
-                        );
-                    }
-
                     // Apply relocations
                     let resolve = |sym_name: &str| -> Option<usize> {
                         if let Some(&addr) = state.global_symbols.get(sym_name) {
@@ -295,12 +285,19 @@ fn load_library_internal(
                         false
                     };
 
-                    // Restore segment protections per original LOAD flags
+                    // Restore segment protections per original LOAD flags.
+                    // Use page-aligned addresses/sizes to match kernel mprotect requirements.
+                    const PAGE_MASK: usize = 0xfff;
+                    const PAGE_SIZE: usize = 0x1000;
                     for &(seg_addr, seg_size, seg_prot) in &loaded.soinfo.load_segments {
+                        let aligned_start = seg_addr & !PAGE_MASK;
+                        let end = seg_addr + seg_size;
+                        let aligned_end = (end + PAGE_MASK) & !PAGE_MASK;
+                        let aligned_len = aligned_end - aligned_start;
                         unsafe {
                             libc::mprotect(
-                                seg_addr as *mut libc::c_void,
-                                seg_size,
+                                aligned_start as *mut libc::c_void,
+                                aligned_len,
                                 seg_prot,
                             );
                         }
@@ -308,10 +305,14 @@ fn load_library_internal(
 
                     // Apply RELRO (make read-only after relocations) on top
                     if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
+                        let aligned_start = relro_addr & !PAGE_MASK;
+                        let end = relro_addr + relro_size;
+                        let aligned_end = (end + PAGE_MASK) & !PAGE_MASK;
+                        let aligned_len = aligned_end - aligned_start;
                         unsafe {
                             libc::mprotect(
-                                relro_addr as *mut libc::c_void,
-                                relro_size,
+                                aligned_start as *mut libc::c_void,
+                                aligned_len,
                                 libc::PROT_READ,
                             );
                         }
