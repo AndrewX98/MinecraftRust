@@ -987,11 +987,12 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     }
 
     if (rust_handle != 0) {
-        // Rust linker loaded the game — skip C++ dlopen_ext, use Rust dlsym for hooks
+        // Rust linker loaded the game — handle is a C++-compatible soinfo handle
+        // (linker_rust_dlopen_ext registered a C++ soinfo internally).
         handle = reinterpret_cast<void*>(rust_handle);
         for(auto&& h : hooks) {
             if(h.name) {
-                void* addr = linker_rust_dlsym(rust_handle, h.name);
+                void* addr = linker::dlsym(handle, h.name);
                 printf("Found hook: %s @ %p\n", h.name, addr);
                 if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
                     printf("with value: %p\n", h.value);

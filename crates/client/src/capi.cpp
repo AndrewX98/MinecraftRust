@@ -182,12 +182,15 @@ int mc_get_libc_symbols(shim_shimmed_symbol* buf, int max_entries) {
 }
 
 extern "C" void linker_init_rust();
+extern "C" void mcpelauncher_linker_cpp_init();
 
 /// Runs the core init sequence that the original main.cpp performs.
 /// Call this AFTER mc_setup_paths and mc_init_version.
 int mc_load_core_libraries(const char* lib_dir) {
-    // 0) Initialize Rust linker (primary). Also initializes C++ bionic linker
-    //    state internally so game library loading via C++ linker still works.
+    // 0) Initialize C++ bionic linker (solist, stubs) then Rust linker.
+    //    solist_init() MUST run before any soinfo_alloc → solist_add_soinfo
+    //    or the global solist stays empty and soinfo_free will abort.
+    mcpelauncher_linker_cpp_init();
     linker_init_rust();
 
     // 1) Register libc symbols with the C++ linker

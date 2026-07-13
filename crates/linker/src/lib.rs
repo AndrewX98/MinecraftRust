@@ -736,8 +736,99 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
 
     log::info!("linker: Rust dlopen_ext attempting '{}' with {} hooks", path, symbols.len());
 
-    // Call load_library_internal but skip constructors (safe for diagnostic trial)
-    load_library_internal_no_ctors(path, &symbols, false)
+    // Load the library (no constructors run yet)
+    let rust_handle = load_library_internal_no_ctors(path, &symbols, false);
+    if rust_handle == 0 {
+        return 0;
+    }
+
+    // Register with C++ bionic linker so C++ APIs (HookManager, linker::dlsym) work.
+    // Skip stub libraries — they are pre-registered by the C++ linker already.
+    let (is_stub, base) = {
+        let state = STATE.read().unwrap();
+        match state.libraries_by_handle.get(&rust_handle) {
+            None => (true, 0),
+            Some(lib) => (lib.is_stub, lib.soinfo.base),
+        }
+    };
+
+    if !is_stub && base != 0 {
+        extern "C" {
+            fn mcpelauncher_linker_register_loaded_library(
+                name: *const libc::c_char,
+                base: usize,
+                rust_handle: usize,
+            ) -> usize;
+        }
+        let cpp_handle =
+            mcpelauncher_linker_register_loaded_library(filename, base, rust_handle);
+        if cpp_handle != 0 {
+            return cpp_handle; // C++ handle — all C++ APIs work natively
+        }
+    }
+
+    // Return 0 if stub or registration failed — C++ side falls back to C++ linker.
+    0
+}
+
+/// Symbol-lookup data exported from Rust SoInfo to C++ for direct soinfo
+/// field population (bypasses prelink_image for Rust-loaded ELFs).
+#[repr(C)]
+pub struct SoInfoSymbolData {
+    strtab: *const u8,
+    strtab_size: usize,
+    symtab: *const u8,
+    // GNU hash fields
+    gnu_nbucket: usize,
+    gnu_bucket: *const u32,
+    gnu_chain: *const u32,
+    gnu_maskwords: u32,
+    gnu_shift2: u32,
+    gnu_bloom_filter: *const usize,
+    // SysV hash fields
+    nbucket: usize,
+    nchain: usize,
+    bucket: *const u32,
+    chain: *const u32,
+    has_gnu_hash: bool,
+}
+
+/// Populates a C struct with symbol-lookup data from the Rust SoInfo for
+/// the library identified by `handle`. Returns false if handle is invalid.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_get_soinfo_symbol_data(
+    handle: usize,
+    data: *mut SoInfoSymbolData,
+) -> bool {
+    if data.is_null() {
+        return false;
+    }
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let si = match state.libraries_by_handle.get(&handle) {
+        Some(l) => &l.soinfo,
+        None => return false,
+    };
+    let symdata = SoInfoSymbolData {
+        strtab: si.strtab.map_or(std::ptr::null(), |a| a as *const u8),
+        strtab_size: si.strtab_size,
+        symtab: si.symtab.map_or(std::ptr::null(), |a| a as *const u8),
+        has_gnu_hash: si.gnu_hash.is_some(),
+        gnu_nbucket: si.gnu_bucket.len(),
+        gnu_bucket: si.gnu_bucket.as_ptr(),
+        gnu_chain: si.gnu_chain.as_ptr(),
+        gnu_maskwords: si.gnu_bloom_n as u32,
+        gnu_shift2: si.gnu_bloom_shift as u32,
+        gnu_bloom_filter: si.gnu_bloom_filter.as_ptr(),
+        nbucket: si.bucket.len(),
+        nchain: si.chain.len(),
+        bucket: si.bucket.as_ptr(),
+        chain: si.chain.as_ptr(),
+    };
+    *data = symdata;
+    true
 }
 
 /// C-exported dlsym for Rust-loaded libraries.
@@ -940,8 +1031,12 @@ fn load_library_internal_no_ctors(
                 libc::PROT_READ | libc::PROT_WRITE,
             );
         }
-        // Resolver: global symbols → external hooks → loaded libs → C++ dlsym → builtin
+        // Resolver: self-symbols → global symbols → external hooks → loaded libs → C++ dlsym → builtin
         let resolve = |sym_name: &str| -> Option<usize> {
+            // Check the library itself first (covers intra-library relocations)
+            if let Some((addr, _)) = symbol::find_symbol(&loaded.soinfo, sym_name) {
+                if addr != 0 { return Some(addr); }
+            }
             if let Some(&addr) = state.global_symbols.get(sym_name) {
                 return Some(addr);
             }

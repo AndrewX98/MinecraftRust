@@ -448,6 +448,36 @@ public:
     void** orig;
   };
   std::unordered_map<std::string, std::shared_ptr<HookEntry>> symbols;
+
+  // Populate symbol-lookup tables from Rust linker SoInfo data
+  // (bypasses prelink_image for Rust-loaded ELFs).
+  void set_rust_symbol_data(const char* strtab, size_t strtab_size,
+                            const ElfW(Sym)* symtab,
+                            size_t gnu_nbucket, uint32_t* gnu_bucket,
+                            const uint32_t* gnu_chain,
+                            uint32_t gnu_maskwords, uint32_t gnu_shift2,
+                            ElfW(Addr)* gnu_bloom_filter,
+                            size_t nbucket, size_t nchain,
+                            uint32_t* bucket, uint32_t* chain,
+                            bool has_gnu_hash) {
+    strtab_ = strtab;
+    strtab_size_ = strtab_size;
+    symtab_ = const_cast<ElfW(Sym)*>(symtab);
+    if (has_gnu_hash) {
+      gnu_nbucket_ = gnu_nbucket;
+      gnu_bucket_ = gnu_bucket;
+      gnu_chain_ = const_cast<uint32_t*>(gnu_chain);
+      gnu_maskwords_ = gnu_maskwords;
+      gnu_shift2_ = gnu_shift2;
+      gnu_bloom_filter_ = gnu_bloom_filter;
+      flags_ |= FLAG_GNU_HASH;
+    } else {
+      nbucket_ = nbucket;
+      nchain_ = nchain;
+      bucket_ = bucket;
+      chain_ = chain;
+    }
+  }
 };
 
 // This function is used by dlvsym() to calculate hash of sym_ver
