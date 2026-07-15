@@ -400,6 +400,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     s: *mut c_void,
     game_create_func: *mut c_void,
     game_activity_ptr: *mut c_void,
+    callbacks_ptr: *mut c_void,
     asset_manager: *mut c_void,
     stbi_load: *mut c_void,
     stbi_image_free: *mut c_void,
@@ -408,6 +409,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     let gameOnCreate: unsafe extern "C" fn(*mut GameActivity, *mut c_void, usize) =
         std::mem::transmute(game_create_func);
     let ga = game_activity_ptr as *mut GameActivity;
+    let cpp_callbacks = callbacks_ptr as *mut GameActivityCallbacks;
 
     // Get Baron JVM from C++ JniSupport
     let jvm = jni_support_get_jvm(s);
@@ -420,12 +422,21 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     let baron_env = fake_jni_local_frame_get_env(frame) as *mut JNIEnv;
     set_baron_env(baron_env);
 
-    // Attach libraries — calls JNI_OnLoad for each (CrashManager registration etc.)
-    // Use CString for each lib since byte slices have different lengths
-    let libs = [CString::new("libfmod.so").unwrap(), CString::new("libminecraftpe.so").unwrap(), CString::new("libPlayFabMultiplayer.so").unwrap()];
-    for lib in &libs {
-        fake_jni_jvm_attach_library(jvm, lib.as_ptr());
+    // Call DT_INIT and DT_INIT_ARRAY constructors for libminecraftpe.so.
+    // The Rust linker explicitly skips constructors at load time because
+    // they require a JNI environment that isn't available until now
+    // (see load_library_internal_no_ctors comment in linker/src/lib.rs:748-753).
+    // These constructors set up global state (e.g., vtable pointers, static
+    // initializers) that the game expects before its code runs. Without this,
+    // function pointers resolve to base+0 (ELF header) because the global
+    // ctors that should have populated them never executed.
+    extern "C" {
+        fn linker_rust_call_init_functions(name: *const c_char) -> bool;
     }
+    let game_lib_name = CString::new("libminecraftpe.so").unwrap();
+    log::info!("jni_support: calling linker_rust_call_init_functions for libminecraftpe.so");
+    let inits_ok = linker_rust_call_init_functions(game_lib_name.as_ptr());
+    log::info!("jni_support: linker_rust_call_init_functions returned {}", inits_ok);
 
     // Set up MainActivity fields matching C++ startGame
     let dir = path_helper_get_primary_data_directory();
@@ -438,11 +449,19 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     jnivm_set_stbi_image_free(stbi_image_free);
     xbox_live_helper_set_jvm(jvm);
 
+    // Attach game libraries to Baron JVM — matches C++ JniSupport::startGame (jni_support.cpp:357-359).
+    // Without this, the Baron JVM can't resolve native methods in these libraries (uses system dlsym
+    // but libraries were loaded by the bionic linker). Missing this causes SIGSEGV when the game's
+    // lifecycle callbacks (onStart, onNativeWindowCreated) try JNI calls through the Baron env.
+    fake_jni_jvm_attach_library(jvm, b"libfmod.so\0" as *const _ as *const c_char);
+    fake_jni_jvm_attach_library(jvm, b"libminecraftpe.so\0" as *const _ as *const c_char);
+    fake_jni_jvm_attach_library(jvm, b"libPlayFabMultiplayer.so\0" as *const _ as *const c_char);
+
     // Set up GameActivity with Baron values
-    // NOTE: (*ga).callbacks already points to Rust-allocated GameActivityCallbacks
-    // from jni_support_start_game. The game will write into Rust memory.
+    // Use the C++ GameActivityCallbacks — the game will populate these
+    (*ga).callbacks = cpp_callbacks;
     (*ga).vm = jni_support_get_java_vm_ptr(s) as *mut JavaVM;
-    (*ga).env = get_env();
+    (*ga).env = baron_env;
     (*ga).asset_manager = asset_manager;
     (*ga).java_game_activity = jni_support_get_activity_ref(s);
     (*ga).sdk_version = 32;
@@ -454,34 +473,90 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     (*ga).internal_data_path = internal_path as *const c_char;
     (*ga).external_data_path = external_path as *const c_char;
 
-    // Call GameActivity_onCreate — game caches Baron vm/env from ga.
+    // Call nativeRegisterThis on MainActivity through Baron env
+    // BEFORE gameOnCreate, matching C++ JniSupport::startGame (jni_support.cpp:410-413).
+    // The game's nativeRegisterThis sets up the MainActivity binding in the game library
+    // so the game thread spawned by GameActivity_onCreate can find its Java activity ref.
+    // Must NOT use jni_call! macro (would return early on null) — call JNI manually.
+    let iface = get_iface(baron_env);
+    if !iface.is_null() {
+        let iface = &*iface;
+        if let Some(find_class) = iface.FindClass {
+            let main_cls = find_class(baron_env,
+                b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char);
+            if !main_cls.is_null() {
+                if let Some(get_mid) = iface.GetMethodID {
+                    let register_mid = get_mid(baron_env, main_cls,
+                        b"nativeRegisterThis\0".as_ptr() as *const c_char,
+                        b"()V\0".as_ptr() as *const c_char);
+                    if !register_mid.is_null() {
+                        if let Some(call_void) = iface.CallVoidMethod {
+                            log::info!("jni_support: calling nativeRegisterThis on Baron MainActivity");
+                            call_void(baron_env, (*ga).java_game_activity, register_mid);
+                            log::info!("jni_support: nativeRegisterThis completed");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+// Call GameActivity_onCreate — game caches Baron vm/env from ga.
     // Also triggers FakeLooper::prepare → JniSupport::onWindowCreated which sets window.
+    eprintln!("=== About to call gameOnCreate (GameActivity_onCreate) ===");
     gameOnCreate(ga, std::ptr::null_mut(), 0);
+    eprintln!("=== gameOnCreate returned ===");
 
     // Copy game instance to C++ JniSupport's gameActivity for FakeLooper dispatch
+    eprintln!("=== About to call jni_support_set_game_activity_instance ===");
     jni_support_set_game_activity_instance(s, (*ga).instance);
+    eprintln!("=== jni_support_set_game_activity_instance returned ===");
 
     // Read window from C++ JniSupport (set by FakeLooper::prepare during gameOnCreate)
+    eprintln!("=== About to call jni_support_get_window_ptr ===");
     let win = jni_support_get_window_ptr(s);
     eprintln!("=== Rust read window from JniSupport after gameOnCreate: {:p} ===", win);
 
-    // Read callbacks from the Rust-allocated GameActivity (populated by game during gameOnCreate)
-    let cb = &*(*ga).callbacks;
+    // Read callbacks from the C++ GameActivityCallbacks (populated by game during gameOnCreate)
+    let cb = &*cpp_callbacks;
 
-    eprintln!("=== Rust calling onStart (fn={:?}) ===", cb.on_start.map(|f| f as *const c_void));
+    fn fmt_ptr(opt: Option<*const c_void>) -> String {
+        match opt {
+            Some(p) => format!("{:p}", p),
+            None => "NULL".to_string(),
+        }
+    }
+
+    eprintln!("=== C++ callbacks struct: on_start={} on_native_window_created={} ===",
+              fmt_ptr(cb.on_start.map(|f| f as *const c_void)), fmt_ptr(cb.on_native_window_created.map(|f| f as *const c_void)));
+    eprintln!("=== GameActivity struct: vm={:p} env={:p} callbacks={:p} instance={:p} ===", 
+              (*ga).vm, (*ga).env, (*ga).callbacks, (*ga).instance);
+    eprintln!("=== C++ callbacks struct: on_start={} on_native_window_created={} ===",
+              fmt_ptr(cb.on_start.map(|f| f as *const c_void)), fmt_ptr(cb.on_native_window_created.map(|f| f as *const c_void)));
+    // Match the C++ JniSupport::startGame ordering (jni_support.cpp:421-428):
+    // the game thread spawned by GameActivity_onCreate -> android_main expects
+    // onStart and onNativeWindowCreated to have primed the window/lifecycle
+    // state before it enters its event loop. Skipping these triggers a SEGV
+    // shortly after android_main starts (file-doallocate / vtable-mismatch
+    // backtrace from glibc on an uninitialized window resource).
+    eprintln!("=== Rust calling onStart (fn={}) ===",
+              fmt_ptr(cb.on_start.map(|f| f as *const c_void)));
     if let Some(f) = cb.on_start {
         f(ga);
+    } else {
+        eprintln!("=== WARNING: onStart is NULL ===");
     }
-
-    eprintln!("=== Rust calling onNativeWindowCreated (fn={:?} window={:p}) ===",
-              cb.on_native_window_created.map(|f| f as *const c_void), win);
+    eprintln!("=== Rust calling onNativeWindowCreated (fn={} window={:p}) ===",
+              fmt_ptr(cb.on_native_window_created.map(|f| f as *const c_void)), win);
     if let Some(f) = cb.on_native_window_created {
         f(ga, win);
+    } else {
+        eprintln!("=== WARNING: onNativeWindowCreated is NULL ===");
     }
-
-    eprintln!("=== Rust callbacks done ===");
+    eprintln!("=== Rust callbacks DONE ===");
 
     // Destroy LocalFrame — env pointer becomes invalid after this (matching C++ behavior)
+    // C++ calls onStart/onNativeWindowCreated INSIDE the LocalFrame, so we do the same
     fake_jni_local_frame_destroy(frame);
 }
 
@@ -565,32 +640,9 @@ pub unsafe extern "C" fn jni_support_start_game(
 
     // Storage dir is set inside jni_support_start_game_with_baron via path_helper_get_primary_data_directory()
 
-    // Create the GameActivity struct (leaked, will live for the program's lifetime)
-    let callbacks = Box::into_raw(Box::new(std::mem::zeroed::<GameActivityCallbacks>()));
-    let internal_path = CString::new("/internal").unwrap();
-    let external_path = CString::new("/external").unwrap();
-    let obb_path = CString::new("").unwrap();
-
-    let mut game_act = Box::new(GameActivity {
-        callbacks,
-        vm: support.vm.0,
-        env: support.env.0,
-        java_game_activity: activity_ref,
-        internal_data_path: internal_path.as_ptr(),
-        external_data_path: external_path.as_ptr(),
-        sdk_version: 32,
-        instance: std::ptr::null_mut(),
-        asset_manager: std::ptr::null_mut(),
-        obb_path: obb_path.as_ptr(),
-    });
-
-    support.game_activity = SendPtr(Box::into_raw(game_act));
-    support.game_callbacks = SendPtr(callbacks);
-
-    // Leak the strings so they live for the program's lifetime
-    Box::leak(Box::new(internal_path));
-    Box::leak(Box::new(external_path));
-    Box::leak(Box::new(obb_path));
+    // Get C++ GameActivity and callbacks pointers — the game will populate these
+    let cpp_game_activity = jni_support_get_game_activity_ptr(cpp_support) as *mut GameActivity;
+    let cpp_callbacks = jni_support_get_game_activity_callbacks_ptr(cpp_support) as *mut GameActivityCallbacks;
 
     // Set the asset manager (FakeAssetManager instance)
     extern "C" {
@@ -608,7 +660,8 @@ pub unsafe extern "C" fn jni_support_start_game(
     jni_support_start_game_with_baron(
         cpp_support,
         game_create,
-        support.game_activity.0 as *mut c_void,
+        cpp_game_activity as *mut c_void,
+        cpp_callbacks as *mut c_void,
         am,
         stbi_load,
         stbi_image_free,
@@ -631,6 +684,10 @@ pub unsafe extern "C" fn jni_support_start_game(
 
     // Set game activity flag on support
     support.is_game_activity = true;
+
+    // Store pointers to C++ GameActivity and callbacks for event dispatch
+    support.game_activity = SendPtr(cpp_game_activity);
+    support.game_callbacks = SendPtr(cpp_callbacks);
 
     // Initialize the Rust TextInputHandler global (replaces C++ TextInputHandler)
     let text_handler = crate::text_input_handler::TextInputHandler::new();

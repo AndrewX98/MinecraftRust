@@ -11,9 +11,14 @@ cargo build -p client
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.
 
-No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 13 static libs built there; `client/build.rs` only emits link directives.
+No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 13 static libs built there; `client/build.rs` only emits link directives. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
 
-**WARNING: `cargo build -p client` takes ~3 minutes on initial build, ~2.5 min on C++ changes, ~0.3s on pure Rust changes.** Do not run full builds unless necessary. After editing C++ sources, force C++ recompilation with:
+- **Initial build:** ~3 min (all C++ files compiled)
+- **Single C++ file change:** ~2s (hash-based incremental)
+- **Header change:** ~2s (only `.cpp` tracked; `cargo clean -p cpp-bridge-sys` if headers affect many files)
+- **Pure Rust change:** ~0.3s
+
+After mass C++ or header changes, force full recompilation:
 ```bash
 cargo clean -p cpp-bridge-sys
 cargo build -p client

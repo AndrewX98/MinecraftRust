@@ -86,16 +86,63 @@ namespace linker {
 // Forward declarations for bionic linker functions
 extern "C" void __loader_android_update_LD_LIBRARY_PATH(const char*);
 extern "C" void* __loader_android_dlopen_ext(const char*, int, const void*, const void*);
+extern "C" void* __loader_dlopen(const char* filename, int flags, const void* caller_addr);
 extern "C" void* __loader_dlsym(void* handle, const char* symbol, const void* caller_addr);
 static void linker_update_LD_LIBRARY_PATH(const char* path) {
     __loader_android_update_LD_LIBRARY_PATH(path);
 }
 
+// Bionic RTLD_NOLOAD (same value as glibc). Do not use system RTLD_GLOBAL
+// values — they differ from bionic and are not needed here.
+#ifndef MCPE_RTLD_NOLOAD
+#define MCPE_RTLD_NOLOAD 0x4
+#endif
+
 /// C++ dlsym fallback — called by Rust linker when a symbol isn't found
-/// in the Rust linker state. Uses the C++ bionic linker's dlsym to resolve.
+/// in the Rust linker state.
+///
+/// IMPORTANT: bionic `dlsym(RTLD_DEFAULT, …)` skips libraries that were not
+/// opened with RTLD_GLOBAL when target SDK ≥ 23. MinecraftUtils preloads
+/// libc++_shared / libfmod / etc. with flags=0 (RTLD_LOCAL), so they are
+/// invisible to RTLD_DEFAULT. Search those handles explicitly via RTLD_NOLOAD
+/// so JUMP_SLOTs resolve into the *healthy* C++-loaded images instead of a
+/// second broken Rust remapping.
 extern "C" void* linker_cpp_dlsym_fallback(const char* name) {
-    // Use RTLD_DEFAULT to search all loaded libraries in the C++ linker
-    return __loader_dlsym(RTLD_DEFAULT, name, __builtin_return_address(0));
+    struct CachedLib {
+        const char* soname;
+        void* handle;
+        bool tried;
+    };
+    static CachedLib libs[] = {
+        {"libc++_shared.so", nullptr, false},
+        {"libfmod.so", nullptr, false},
+        {"libpairipcore.so", nullptr, false},
+        {"libsqliteX.so", nullptr, false},
+        {"libc.so", nullptr, false},
+        {"libm.so", nullptr, false},
+        {"libdl.so", nullptr, false},
+        {"liblog.so", nullptr, false},
+        {"libz.so", nullptr, false},
+        {"libandroid.so", nullptr, false},
+        {"libGLESv2.so", nullptr, false},
+        {"libEGL.so", nullptr, false},
+        {"libOpenSLES.so", nullptr, false},
+        {"libstdc++.so", nullptr, false},
+    };
+    for (auto& lib : libs) {
+        if (!lib.tried) {
+            lib.tried = true;
+            lib.handle = __loader_dlopen(lib.soname, MCPE_RTLD_NOLOAD, nullptr);
+        }
+        if (!lib.handle) {
+            continue;
+        }
+        if (void* sym = __loader_dlsym(lib.handle, name, nullptr)) {
+            return sym;
+        }
+    }
+    // Global-group leftovers (and anything opened with RTLD_GLOBAL).
+    return __loader_dlsym(RTLD_DEFAULT, name, nullptr);
 }
 
 // Handle for libGLESv2.so soinfo, saved so that mc_relocate_glesv2_symbols
@@ -106,6 +153,13 @@ static void* g_glesv2_handle = nullptr;
 // Functions for mirroring C++ linker state to the Rust linker.
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
+
+// Android log hooks defined in hybris_android_log_hook.cpp; need their addresses
+// to mirror to the Rust linker's global_symbols table.
+extern "C" void __android_log_print();
+extern "C" void __android_log_vprint();
+extern "C" void __android_log_write();
+extern "C" void __android_log_assert();
 
 /// Helper: mirror a C++ linker::load_library call to the Rust linker state.
 /// Call this AFTER the corresponding C++ linker::load_library().
@@ -249,9 +303,12 @@ int mc_load_core_libraries(const char* lib_dir) {
     // mc_setup_android_hooks() — call it from Rust AFTER mc_load_core_libraries
     // but BEFORE mc_load_minecraft.
     {
-        auto empty = std::unordered_map<std::string, void*>();
-        linker::load_library("liblog.so", empty);
-        mirror_rust_load("liblog.so", empty);
+        std::unordered_map<std::string, void*> log_syms;
+        log_syms["__android_log_print"] = (void*)__android_log_print;
+        log_syms["__android_log_vprint"] = (void*)__android_log_vprint;
+        log_syms["__android_log_write"] = (void*)__android_log_write;
+        log_syms["__android_log_assert"] = (void*)__android_log_assert;
+        mirror_rust_load("liblog.so", log_syms);
     }
     {
         auto empty = std::unordered_map<std::string, void*>();

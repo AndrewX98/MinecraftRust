@@ -105,6 +105,28 @@ pub fn init() {
     });
 }
 
+/// Libraries the C++ bionic linker already loads before Rust loads
+/// `libminecraftpe.so` (see `MinecraftUtils::loadMinecraftLib`).
+///
+/// Re-mapping a second copy in the Rust linker is catastrophic: the second
+/// image cannot resolve its libc imports cleanly (thousands of unresolved
+/// JUMP_SLOTs), so its constructors and C++ runtime are half-broken. Game
+/// DT_INIT_ARRAY then jumps into that broken image (e.g. `shared_timed_mutex`
+/// ctor → SIGSEGV at a raw ELF offset like `0x12a3e6`).
+///
+/// Skip re-load; symbol lookup falls through to `DLSYM_FALLBACK` (C++ bionic
+/// `RTLD_DEFAULT`), which returns addresses in the healthy first image.
+fn is_cpp_preloaded_dependency(name: &str) -> bool {
+    matches!(
+        name,
+        "libc++_shared.so"
+            | "libfmod.so"
+            | "libpairipcore.so"
+            | "libsqliteX.so"
+            | "libsqlite3.so"
+    )
+}
+
 fn load_dependencies(
     soinfo: &mut SoInfo,
     _data: &[u8],
@@ -123,6 +145,14 @@ fn load_dependencies(
         if dep_name == "libGLESv2.so" || dep_name == "libOpenSLES.so" || dep_name == "libstdc++.so" {
             continue;
         }
+        if is_cpp_preloaded_dependency(dep_name) {
+            log::info!(
+                "linker: skipping dependency '{}' for '{}' (already loaded by C++ bionic linker)",
+                dep_name,
+                name
+            );
+            continue;
+        }
         if is_loaded(dep_name) {
             continue;
         }
@@ -134,6 +164,63 @@ fn load_dependencies(
 fn is_loaded(name: &str) -> bool {
     let state = STATE.read().unwrap();
     state.libraries_by_name.contains_key(name)
+}
+
+/// Register defined GLOBAL/WEAK non-TLS symbols into `global_symbols`.
+///
+/// Must NOT register `SHN_UNDEF` imports: those have `st_value == 0`, so
+/// `base + 0 == base` would poison the table. That caused JUMP_SLOT entries
+/// (e.g. `__cxa_guard_acquire`) to point at the ELF header and SIGSEGV when
+/// DT_INIT_ARRAY constructors ran.
+fn register_global_exports(state: &mut LinkerState, soinfo: &SoInfo) {
+    const SHN_UNDEF: u16 = 0;
+    const STB_GLOBAL: u8 = 1;
+    const STB_WEAK: u8 = 2;
+    const STT_TLS: u8 = 6;
+
+    let (Some(symtab), Some(strtab)) = (soinfo.symtab, soinfo.strtab) else {
+        return;
+    };
+    let base = soinfo.base;
+    let end = base + soinfo.size;
+    let mut i = 0usize;
+    loop {
+        let entry_addr = symtab.wrapping_add(i * 24);
+        if entry_addr >= end || entry_addr < symtab {
+            break;
+        }
+        unsafe {
+            let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
+            // Heuristic end of symbol table (null-ish entry).
+            if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
+                break;
+            }
+            if sym.st_name == 0 || (sym.st_name as usize) >= soinfo.strtab_size {
+                i += 1;
+                continue;
+            }
+            // Skip undefined imports — never publish base+0 as a symbol address.
+            if sym.st_shndx == SHN_UNDEF {
+                i += 1;
+                continue;
+            }
+            let bind = sym.st_info >> 4;
+            let typ = sym.st_info & 0xf;
+            if typ == STT_TLS || (bind != STB_GLOBAL && bind != STB_WEAK) {
+                i += 1;
+                continue;
+            }
+            let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
+            let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
+            if let Ok(s) = cstr.to_str() {
+                if !s.is_empty() {
+                    let addr = base.wrapping_add(sym.st_value as usize);
+                    state.global_symbols.entry(s.to_string()).or_insert(addr);
+                }
+            }
+        }
+        i += 1;
+    }
 }
 
 pub fn load_library(name: &str, symbols: &HashMap<String, *mut std::ffi::c_void>) -> Handle {
@@ -303,20 +390,8 @@ fn load_library_internal(
                         }
                     }
 
-                    // Apply RELRO (make read-only after relocations) on top
-                    if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
-                        let aligned_start = relro_addr & !PAGE_MASK;
-                        let end = relro_addr + relro_size;
-                        let aligned_end = (end + PAGE_MASK) & !PAGE_MASK;
-                        let aligned_len = aligned_end - aligned_start;
-                        unsafe {
-                            libc::mprotect(
-                                aligned_start as *mut libc::c_void,
-                                aligned_len,
-                                libc::PROT_READ,
-                            );
-                        }
-                    }
+                    // Save RELRO range -- applied AFTER constructors run (below)
+                    let relro = loaded.soinfo.pt_gnu_relro;
 
                     // Register TLS module if present
                     if let Some(ref tls_seg) = loaded.soinfo.tls_segment {
@@ -331,37 +406,8 @@ fn load_library_internal(
                         );
                     }
 
-                    // Add all exported symbols to global_symbols for cross-library resolution
-                    if let Some(symtab) = loaded.soinfo.symtab {
-                        if let Some(strtab) = loaded.soinfo.strtab {
-                            let base = loaded.soinfo.base;
-                            let end = base + loaded.soinfo.size;
-                            let mut i = 0usize;
-                            loop {
-                                let entry_addr = symtab.wrapping_add(i * 24);
-                                if entry_addr >= end || entry_addr < symtab {
-                                    break;
-                                }
-                                unsafe {
-                                    let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
-                                    if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
-                                        break;
-                                    }
-                                    if sym.st_name != 0 && (sym.st_name as usize) < loaded.soinfo.strtab_size {
-                                        let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
-                                        let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
-                                        if let Ok(s) = cstr.to_str() {
-                                            let addr = base + sym.st_value as usize;
-                                            if addr != 0 {
-                                                state.global_symbols.entry(s.to_string()).or_insert(addr);
-                                            }
-                                        }
-                                    }
-                                }
-                                i += 1;
-                            }
-                        }
-                    }
+                    // Add defined exports only (never SHN_UNDEF — see register_global_exports).
+                    register_global_exports(&mut state, &loaded.soinfo);
 
                     loaded.soinfo.is_stub = false;
 
@@ -380,6 +426,21 @@ fn load_library_internal(
                         }
                     } else {
                         log::warn!("linker: skipping init for {} due to unresolved symbols", name);
+                    }
+
+                    // Apply RELRO after constructors have finished (they may write GOT entries)
+                    if let Some((relro_addr, relro_size)) = relro {
+                        let aligned_start = relro_addr & !PAGE_MASK;
+                        let end = relro_addr + relro_size;
+                        let aligned_end = (end + PAGE_MASK) & !PAGE_MASK;
+                        let aligned_len = aligned_end - aligned_start;
+                        unsafe {
+                            libc::mprotect(
+                                aligned_start as *mut libc::c_void,
+                                aligned_len,
+                                libc::PROT_READ,
+                            );
+                        }
                     }
 
                     let soname = loaded.soinfo.soname.clone();
@@ -742,6 +803,13 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
         return 0;
     }
 
+    // NOTE: We skip calling init functions (DT_INIT and DT_INIT_ARRAY) for
+    // libminecraftpe.so because its constructors require a JNI environment
+    // that isn't available at this point in the startup sequence. The game
+    // will lazily initialize its global state when needed. The C++ bionic
+    // linker also marks constructors as called without running them when
+    // registering Rust-loaded libraries.
+
     // Register with C++ bionic linker so C++ APIs (HookManager, linker::dlsym) work.
     // Skip stub libraries — they are pre-registered by the C++ linker already.
     let (is_stub, base) = {
@@ -828,6 +896,87 @@ pub unsafe extern "C" fn linker_rust_get_soinfo_symbol_data(
         chain: si.chain.as_ptr(),
     };
     *data = symdata;
+    true
+}
+
+/// Calls DT_INIT and DT_INIT_ARRAY constructors for a Rust-loaded library
+/// identified by name. Temporarily makes RELRO writable so constructors
+/// can update GOT entries, then re-applies RELRO read-only.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_call_init_functions(name: *const libc::c_char) -> bool {
+    let Ok(name_str) = unsafe { std::ffi::CStr::from_ptr(name) }.to_str() else {
+        return false;
+    };
+    let name = if name_str.ends_with(".so") {
+        name_str.to_string()
+    } else {
+        format!("lib{}.so", name_str)
+    };
+    let (has_init, has_init_array, relro_info) = {
+        let state = match STATE.read() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(handle) = state.libraries_by_name.get(name.as_str()) else {
+            log::warn!("linker: library '{}' not found for init functions", name);
+            return false;
+        };
+        let Some(lib) = state.libraries_by_handle.get(handle) else {
+            return false;
+        };
+        let has_init = lib.soinfo.init.is_some();
+        let has_init_array = lib.soinfo.init_array.is_some();
+        let relro_info = lib.soinfo.pt_gnu_relro;
+        (has_init, has_init_array, relro_info)
+    };
+    if !has_init && !has_init_array {
+        log::info!("linker: no init functions for '{}'", name);
+        return true;
+    }
+    // Temporarily make RELRO writable — the no-ctors loader applied RELRO
+    // before constructors ran, but constructors may write GOT entries.
+    if let Some((relro_addr, relro_size)) = relro_info {
+        const PAGE_SIZE: usize = 0x1000;
+        let aligned_start = relro_addr & !(PAGE_SIZE - 1);
+        let offset = relro_addr - aligned_start;
+        let aligned_size = ((relro_size + offset + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)).max(PAGE_SIZE);
+        unsafe {
+            libc::mprotect(aligned_start as *mut libc::c_void, aligned_size,
+                           libc::PROT_READ | libc::PROT_WRITE);
+        }
+        log::info!("linker: made RELRO writable for '{}' (addr={:#x} size={})",
+                   name, relro_addr, relro_size);
+    }
+    // Call constructors with RELRO writable
+    log::info!("linker: calling init functions for '{}'", name);
+    let (init_addr, init_array_len) = {
+        let state = STATE.read().unwrap();
+        if let Some(handle) = state.libraries_by_name.get(name.as_str()) {
+            if let Some(lib) = state.libraries_by_handle.get(handle) {
+                let init_addr = lib.soinfo.init;
+                let init_array_len = lib.soinfo.init_array.map(|(_, sz)| sz);
+                unsafe { lib.soinfo.call_init_functions(); }
+                (init_addr, init_array_len)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        }
+    };
+    log::info!("linker: init functions done for '{}' (init={:#x?}, init_array_size={:?})",
+               name, init_addr, init_array_len);
+    // Re-apply RELRO read-only
+    if let Some((relro_addr, relro_size)) = relro_info {
+        const PAGE_SIZE: usize = 0x1000;
+        let aligned_start = relro_addr & !(PAGE_SIZE - 1);
+        let offset = relro_addr - aligned_start;
+        let aligned_size = ((relro_size + offset + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)).max(PAGE_SIZE);
+        unsafe {
+            libc::mprotect(aligned_start as *mut libc::c_void, aligned_size, libc::PROT_READ);
+        }
+        log::info!("linker: re-applied RELRO read-only for '{}'", name);
+    }
     true
 }
 
@@ -983,37 +1132,9 @@ fn load_library_internal_no_ctors(
             loaded.soinfo.external_symbols.insert(k.clone(), *v as usize);
         }
 
-        // Register exported symbols early so dependencies can resolve them
-        let base = loaded.soinfo.base;
-        let seg_end = base + loaded.soinfo.size;
-        if let Some(symtab) = loaded.soinfo.symtab {
-            if let Some(strtab) = loaded.soinfo.strtab {
-                let mut i = 0usize;
-                loop {
-                    let entry_addr = symtab.wrapping_add(i * 24);
-                    if entry_addr >= seg_end || entry_addr < symtab {
-                        break;
-                    }
-                    unsafe {
-                        let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
-                        if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
-                            break;
-                        }
-                        if sym.st_name != 0 && (sym.st_name as usize) < loaded.soinfo.strtab_size {
-                            let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
-                            let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
-                            if let Ok(s) = cstr.to_str() {
-                                let addr = base + sym.st_value as usize;
-                                if addr != 0 {
-                                    state.global_symbols.entry(s.to_string()).or_insert(addr);
-                                }
-                            }
-                        }
-                    }
-                    i += 1;
-                }
-            }
-        }
+        // Register defined exports early so dependencies can resolve them.
+        // Must not publish SHN_UNDEF imports as base+0 (see register_global_exports).
+        register_global_exports(&mut state, &loaded.soinfo);
 
         // Drop lock before loading deps (load_library_internal needs it)
         drop(state);
@@ -1069,6 +1190,14 @@ fn load_library_internal_no_ctors(
             let other_count = errs.len() - sym_count;
             if sym_count > 0 {
                 log::warn!("linker: {} unresolved symbols in {} ({} other errors)", sym_count, name, other_count);
+                // Log individual names for small failure sets (game lib is ~18 when healthy).
+                if sym_count <= 64 {
+                    for e in &errs {
+                        if let reloc::RelocError::SymbolNotFound(sym) = e {
+                            log::warn!("linker: unresolved symbol in {}: {}", name, sym);
+                        }
+                    }
+                }
             }
             if other_count > 0 {
                 for e in &errs {
@@ -1078,20 +1207,26 @@ fn load_library_internal_no_ctors(
                 }
             }
         }
-        // Apply RELRO (make read-only after relocations)
-        if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
+        // Restore per-segment protections (text -> r-x, data -> rw-, etc.)
+        // mprotect(2) requires addr to be page-aligned, so align each segment.
+        const PAGE_SIZE: usize = 0x1000;
+        for &(seg_addr, seg_size, seg_prot) in &loaded.soinfo.load_segments {
+            let aligned_start = seg_addr & !(PAGE_SIZE - 1);
+            let offset = seg_addr - aligned_start;
+            let aligned_size = ((seg_size + offset + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)).max(PAGE_SIZE);
             unsafe {
-                libc::mprotect(relro_addr as *mut libc::c_void, relro_size, libc::PROT_READ);
+                libc::mprotect(aligned_start as *mut libc::c_void, aligned_size, seg_prot);
             }
         }
 
-        // Restore segment protections for executable segments
-        unsafe {
-            libc::mprotect(
-                loaded.soinfo.base as *mut libc::c_void,
-                loaded.soinfo.size,
-                libc::PROT_READ | libc::PROT_EXEC,
-            );
+        // Apply RELRO on top of segment protections (limits RELRO range to read-only)
+        if let Some((relro_addr, relro_size)) = loaded.soinfo.pt_gnu_relro {
+            let relro_aligned_start = relro_addr & !(PAGE_SIZE - 1);
+            let relro_offset = relro_addr - relro_aligned_start;
+            let relro_aligned_size = ((relro_size + relro_offset + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)).max(PAGE_SIZE);
+            unsafe {
+                libc::mprotect(relro_aligned_start as *mut libc::c_void, relro_aligned_size, libc::PROT_READ);
+            }
         }
 
         // Register TLS module if present
@@ -1104,38 +1239,8 @@ fn load_library_internal_no_ctors(
             );
         }
 
-        // Add all exported symbols to global_symbols for cross-library resolution
-        if let Some(symtab) = loaded.soinfo.symtab {
-            if let Some(strtab) = loaded.soinfo.strtab {
-                // Iterate until we go past the mapped segment to avoid reading garbage
-                let base = loaded.soinfo.base;
-                let end = base + loaded.soinfo.size;
-                let mut i = 0;
-                loop {
-                    let entry_addr = symtab.wrapping_add(i * 24);
-                    if entry_addr >= end || entry_addr < symtab {
-                        break;
-                    }
-                    unsafe {
-                        let sym = *(entry_addr as *const crate::soinfo::Elf64_Sym);
-                        if sym.st_name == 0 && sym.st_shndx == 0 && sym.st_value == 0 && i > 0 {
-                            break;
-                        }
-                        if sym.st_name != 0 && (sym.st_name as usize) < loaded.soinfo.strtab_size {
-                            let name_ptr = (strtab as *const u8).add(sym.st_name as usize);
-                            let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
-                            if let Ok(s) = cstr.to_str() {
-                                let addr = base + sym.st_value as usize;
-                                if addr != 0 {
-                                    state.global_symbols.entry(s.to_string()).or_insert(addr);
-                                }
-                            }
-                        }
-                    }
-                    i += 1;
-                }
-            }
-        }
+        // Re-publish defined exports after relocations (deps may have filled more).
+        register_global_exports(&mut state, &loaded.soinfo);
 
         loaded.soinfo.is_stub = false;
 
