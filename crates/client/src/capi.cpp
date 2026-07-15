@@ -269,6 +269,15 @@ int mc_load_core_libraries(const char* lib_dir) {
     MinecraftUtils::setupHybris();
 
     // 4) Register stub libraries that libminecraftpe.so depends on
+    //
+    // libHttpClient.Android.so MUST be stubbed before the game loads. If the
+    // real ELF is mapped by the Rust linker, internal JUMP_SLOTs (e.g.
+    // HCTraceInit@plt) stay unbound and the game SIGSEGVs at the lazy PLT
+    // trampoline (IP 0x49dd6) during MinecraftGame::init.
+    {
+        extern void http_client_register_stubs();
+        http_client_register_stubs();
+    }
     {
         auto empty = std::unordered_map<std::string, void*>();
         linker::load_library("libOpenSLES.so", empty);

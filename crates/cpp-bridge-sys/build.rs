@@ -578,6 +578,9 @@ fn main() {
         "uuid_stub.cpp",
         "pulseaudio_stub.cpp",
         "sdl3audio_stub.cpp",
+        // Prevents loading the real libHttpClient.Android.so (broken under
+        // the Rust linker — HCTraceInit@plt SIGSEGV at 0x49dd6).
+        "http_client_stubs.cpp",
     ];
     for f in &stub_files {
         let path = client_dir.join("src").join(f);

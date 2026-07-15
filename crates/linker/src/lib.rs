@@ -324,18 +324,30 @@ fn load_library_internal(
                     let mut state = STATE.write().unwrap();
 
                     // Apply relocations
+                    // Order matches load_library_internal_no_ctors: self first so
+                    // intra-library JUMP_SLOTs (e.g. HCTraceInit@plt in HttpClient)
+                    // bind to the local definition instead of leaving the GOT as
+                    // an unrelocated lazy-stub offset (SIGSEGV at bare 0x49dd6).
                     let resolve = |sym_name: &str| -> Option<usize> {
+                        if let Some((addr, _)) = symbol::find_symbol(&loaded.soinfo, sym_name) {
+                            if addr != 0 {
+                                return Some(addr);
+                            }
+                        }
                         if let Some(&addr) = state.global_symbols.get(sym_name) {
                             return Some(addr);
                         }
                         if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
                             return Some(addr);
                         }
-                        // Search other loaded libs
+                        // Search other loaded libs (include stubs: their symbols
+                        // live in external_symbols / were also published to
+                        // global_symbols at registration time).
                         for (_, lib) in &state.libraries_by_handle {
-                            if lib.is_stub { continue; }
                             if let Some((addr, _)) = symbol::find_symbol(&lib.soinfo, sym_name) {
-                                if addr != 0 { return Some(addr); }
+                                if addr != 0 {
+                                    return Some(addr);
+                                }
                             }
                             if let Some(&addr) = lib.soinfo.external_symbols.get(sym_name) {
                                 return Some(addr);
@@ -1152,11 +1164,13 @@ fn load_library_internal_no_ctors(
                 libc::PROT_READ | libc::PROT_WRITE,
             );
         }
-        // Resolver: self-symbols → global symbols → external hooks → loaded libs → C++ dlsym → builtin
+        // Resolver: self-symbols → global symbols → external hooks → loaded libs → C++ dlsym
         let resolve = |sym_name: &str| -> Option<usize> {
             // Check the library itself first (covers intra-library relocations)
             if let Some((addr, _)) = symbol::find_symbol(&loaded.soinfo, sym_name) {
-                if addr != 0 { return Some(addr); }
+                if addr != 0 {
+                    return Some(addr);
+                }
             }
             if let Some(&addr) = state.global_symbols.get(sym_name) {
                 return Some(addr);
@@ -1164,10 +1178,14 @@ fn load_library_internal_no_ctors(
             if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
                 return Some(addr);
             }
+            // Include stubs: their exports are in external_symbols (and mirrored
+            // into global_symbols at registration). Skipping is_stub used to
+            // leave JUMP_SLOTs unbound when a stub was the only provider.
             for (_, lib) in &state.libraries_by_handle {
-                if lib.is_stub { continue; }
                 if let Some((addr, _)) = symbol::find_symbol(&lib.soinfo, sym_name) {
-                    if addr != 0 { return Some(addr); }
+                    if addr != 0 {
+                        return Some(addr);
+                    }
                 }
                 if let Some(&addr) = lib.soinfo.external_symbols.get(sym_name) {
                     return Some(addr);
