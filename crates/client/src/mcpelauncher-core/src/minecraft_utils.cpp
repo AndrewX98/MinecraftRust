@@ -989,11 +989,14 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     if (rust_handle != 0) {
         // Rust linker loaded the game — handle is a C++-compatible soinfo handle
         // (linker_rust_dlopen_ext registered a C++ soinfo internally).
+        // Hooks were applied during Rust relocation (external_symbols preferred).
+        // Note: C++ linker::dlsym below may still show the game's own exports
+        // for defined symbols; the JUMP_SLOTs were already patched by Rust.
         handle = reinterpret_cast<void*>(rust_handle);
         for(auto&& h : hooks) {
             if(h.name) {
                 void* addr = linker::dlsym(handle, h.name);
-                printf("Found hook: %s @ %p\n", h.name, addr);
+                printf("Found hook: %s @ %p (stub=%p)\n", h.name, addr, h.value);
                 if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
                     printf("with value: %p\n", h.value);
                     res->second.callback(res->second.user, h.value);

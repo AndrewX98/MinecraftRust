@@ -323,21 +323,21 @@ fn load_library_internal(
                     // Re-acquire lock for remainder
                     let mut state = STATE.write().unwrap();
 
-                    // Apply relocations
-                    // Order matches load_library_internal_no_ctors: self first so
-                    // intra-library JUMP_SLOTs (e.g. HCTraceInit@plt in HttpClient)
-                    // bind to the local definition instead of leaving the GOT as
-                    // an unrelocated lazy-stub offset (SIGSEGV at bare 0x49dd6).
+                    // Apply relocations.
+                    // mcpelauncher hooks (external_symbols) must beat self-exports so
+                    // JUMP_SLOTs for defined symbols like SwappyGL_* bind to stubs —
+                    // matching C++ bionic's si_->symbols override. reloc::resolve_sym
+                    // also checks external first; keep get_symbol consistent.
                     let resolve = |sym_name: &str| -> Option<usize> {
+                        if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
+                            return Some(addr);
+                        }
                         if let Some((addr, _)) = symbol::find_symbol(&loaded.soinfo, sym_name) {
                             if addr != 0 {
                                 return Some(addr);
                             }
                         }
                         if let Some(&addr) = state.global_symbols.get(sym_name) {
-                            return Some(addr);
-                        }
-                        if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
                             return Some(addr);
                         }
                         // Search other loaded libs (include stubs: their symbols
@@ -1164,18 +1164,18 @@ fn load_library_internal_no_ctors(
                 libc::PROT_READ | libc::PROT_WRITE,
             );
         }
-        // Resolver: self-symbols → global symbols → external hooks → loaded libs → C++ dlsym
+        // Resolver: hooks → self → global → other libs → C++ dlsym
+        // Hooks override defined exports (SwappyGL_*, AppPlatform mouse, …).
         let resolve = |sym_name: &str| -> Option<usize> {
-            // Check the library itself first (covers intra-library relocations)
+            if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
+                return Some(addr);
+            }
             if let Some((addr, _)) = symbol::find_symbol(&loaded.soinfo, sym_name) {
                 if addr != 0 {
                     return Some(addr);
                 }
             }
             if let Some(&addr) = state.global_symbols.get(sym_name) {
-                return Some(addr);
-            }
-            if let Some(&addr) = loaded.soinfo.external_symbols.get(sym_name) {
                 return Some(addr);
             }
             // Include stubs: their exports are in external_symbols (and mirrored

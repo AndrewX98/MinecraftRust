@@ -92,10 +92,13 @@ pub(crate) unsafe fn eglutChooseConfig(api_mask: i32, attribs_surface_type: EGLi
         api = EGL_OPENVG_API;
     }
     eglBindAPI(api);
-    let attribs: [EGLint; 15] = [
+    // Match upstream eglut: min channel sizes + 8-bit stencil (RenderDragon UI/post
+    // paths often need a stencil attachment; without it draws can stay black).
+    let attribs: [EGLint; 17] = [
         EGL_SURFACE_TYPE, attribs_surface_type,
-        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-        EGL_DEPTH_SIZE, 24,
+        EGL_RED_SIZE, 1, EGL_GREEN_SIZE, 1, EGL_BLUE_SIZE, 1, EGL_ALPHA_SIZE, 1,
+        EGL_DEPTH_SIZE, 1,
+        EGL_STENCIL_SIZE, 8,
         EGL_RENDERABLE_TYPE, renderable_type,
         EGL_NONE,
     ];
@@ -103,9 +106,22 @@ pub(crate) unsafe fn eglutChooseConfig(api_mask: i32, attribs_surface_type: EGLi
     let mut num_config: EGLint = 0;
     eglChooseConfig(dpy, attribs.as_ptr(), &mut config, 1, &mut num_config);
     if num_config == 0 {
-        println!("eglutInit: no matching EGL config found");
-        eglChooseConfig(dpy, attribs.as_ptr(), std::ptr::null_mut(), 0, &mut num_config);
-        println!("  ... total matching configs: {}", num_config);
+        // Fallback without stencil (some drivers)
+        let attribs_fb: [EGLint; 15] = [
+            EGL_SURFACE_TYPE, attribs_surface_type,
+            EGL_RED_SIZE, 1, EGL_GREEN_SIZE, 1, EGL_BLUE_SIZE, 1, EGL_ALPHA_SIZE, 1,
+            EGL_DEPTH_SIZE, 1,
+            EGL_RENDERABLE_TYPE, renderable_type,
+            EGL_NONE,
+        ];
+        eglChooseConfig(dpy, attribs_fb.as_ptr(), &mut config, 1, &mut num_config);
+        if num_config == 0 {
+            println!("eglutInit: no matching EGL config found");
+            eglChooseConfig(dpy, attribs.as_ptr(), std::ptr::null_mut(), 0, &mut num_config);
+            println!("  ... total matching configs: {}", num_config);
+        } else {
+            println!("eglutInit: using fallback EGL config without stencil");
+        }
     }
     let mut vid: EGLint = 0;
     eglGetConfigAttrib(dpy, config, EGL_NATIVE_VISUAL_ID, &mut vid);
@@ -173,10 +189,29 @@ pub unsafe extern "C" fn eglutShowWindow() {
     }
 }
 
+/// Match upstream eglut: `eglutMakeCurrent(int win)`. win == -1 unbinds.
+/// GameWindow::makeCurrent calls this with winId or -1.
 #[no_mangle]
-pub unsafe extern "C" fn eglutMakeCurrent() {
-    if let Some(win) = &STATE.current_window {
-        eglMakeCurrent(STATE.egl_dpy, win.surface, win.surface, win.context);
+pub unsafe extern "C" fn eglutMakeCurrent(win: i32) {
+    if win < 0 {
+        eglMakeCurrent(STATE.egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        return;
+    }
+    if let Some(w) = &STATE.current_window {
+        if !w.surface.is_null() && !w.context.is_null() {
+            let ok = eglMakeCurrent(STATE.egl_dpy, w.surface, w.surface, w.context);
+            if ok == EGL_FALSE {
+                eprintln!(
+                    "eglutMakeCurrent: eglMakeCurrent failed for win={} surf={:p} ctx={:p}",
+                    win, w.surface, w.context
+                );
+            }
+        } else {
+            eprintln!(
+                "eglutMakeCurrent: null surface/context surf={:p} ctx={:p}",
+                w.surface, w.context
+            );
+        }
     }
 }
 

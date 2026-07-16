@@ -707,7 +707,39 @@ pub static REAL_GL_DRAW_ELEMENTS: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::n
 pub static REAL_GL_BIND_FRAMEBUFFER: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static REAL_GL_USE_PROGRAM: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
+pub static GL_CLEAR_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static GL_DRAW_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+unsafe extern "C" fn debug_gl_clear(mask: u32) {
+    GL_CLEAR_COUNT.fetch_add(1, Ordering::Relaxed);
+    if let Some(f) = REAL_GL_CLEAR.load(Ordering::SeqCst).as_ref() {
+        let real: extern "C" fn(u32) = std::mem::transmute(f);
+        real(mask);
+    }
+}
+
+unsafe extern "C" fn debug_gl_clear_color(r: f32, g: f32, b: f32, a: f32) {
+    if let Some(f) = REAL_GL_CLEAR_COLOR.load(Ordering::SeqCst).as_ref() {
+        let real: extern "C" fn(f32, f32, f32, f32) = std::mem::transmute(f);
+        real(r, g, b, a);
+    }
+}
+
+unsafe extern "C" fn debug_gl_draw_arrays(mode: u32, first: i32, count: i32) {
+    GL_DRAW_COUNT.fetch_add(1, Ordering::Relaxed);
+    if let Some(f) = REAL_GL_DRAW_ARRAYS.load(Ordering::SeqCst).as_ref() {
+        let real: extern "C" fn(u32, i32, i32) = std::mem::transmute(f);
+        real(mode, first, count);
+    }
+}
+
+unsafe extern "C" fn debug_gl_draw_elements(mode: u32, count: i32, typ: u32, indices: *const c_void) {
+    GL_DRAW_COUNT.fetch_add(1, Ordering::Relaxed);
+    if let Some(f) = REAL_GL_DRAW_ELEMENTS.load(Ordering::SeqCst).as_ref() {
+        let real: extern "C" fn(u32, i32, u32, *const c_void) = std::mem::transmute(f);
+        real(mode, count, typ, indices);
+    }
+}
 
 // Per-thread context tracking
 pub static THREAD_CONTEXTS: LazyLock<Mutex<HashMap<ThreadId, SendPtr<c_void>>>> =
@@ -757,61 +789,57 @@ fn init_gl_debug_functions() {
     }
 }
 
-// === GL debug wrappers ===
+// === GL stubs / diagnostics ===
 
+/// True no-op for glInvalidateFramebuffer (void return).
 #[no_mangle]
-pub unsafe extern "C" fn fake_egl_debug_clear_color(red: f32, green: f32, blue: f32, alpha: f32) {
-    init_gl_debug_functions();
-    if let Some(f) = REAL_GL_CLEAR_COLOR.load(Ordering::SeqCst).as_ref() {
-        let func: extern "C" fn(f32, f32, f32, f32) = std::mem::transmute(f);
-        func(red, green, blue, alpha);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn fake_egl_debug_clear(mask: u32) {
-    init_gl_debug_functions();
-    if let Some(f) = REAL_GL_CLEAR.load(Ordering::SeqCst).as_ref() {
-        let func: extern "C" fn(u32) = std::mem::transmute(f);
-        func(mask);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn fake_egl_debug_draw_arrays(mode: u32, first: i32, count: i32) {
-    init_gl_debug_functions();
-    if let Some(f) = REAL_GL_DRAW_ARRAYS.load(Ordering::SeqCst).as_ref() {
-        let func: extern "C" fn(u32, i32, i32) = std::mem::transmute(f);
-        func(mode, first, count);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn fake_egl_debug_draw_elements(
-    mode: u32, count: i32, typ: u32, indices: *const c_void,
+pub unsafe extern "C" fn fake_egl_gl_invalidate_framebuffer_stub(
+    _target: u32, _num: i32, _attachments: *const u32,
 ) {
-    init_gl_debug_functions();
-    if let Some(f) = REAL_GL_DRAW_ELEMENTS.load(Ordering::SeqCst).as_ref() {
-        let func: extern "C" fn(u32, i32, u32, *const c_void) = std::mem::transmute(f);
-        func(mode, count, typ, indices);
-    }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn fake_egl_debug_bind_framebuffer(target: u32, framebuffer: u32) {
-    init_gl_debug_functions();
-    if let Some(f) = REAL_GL_BIND_FRAMEBUFFER.load(Ordering::SeqCst).as_ref() {
-        let func: extern "C" fn(u32, u32) = std::mem::transmute(f);
-        func(target, framebuffer);
+fn log_gl_info_once() {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DONE.load(Ordering::SeqCst) {
+        return;
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn fake_egl_debug_use_program(program: u32) {
     init_gl_debug_functions();
-    if let Some(f) = REAL_GL_USE_PROGRAM.load(Ordering::SeqCst).as_ref() {
-        let func: extern "C" fn(u32) = std::mem::transmute(f);
-        func(program);
+    unsafe {
+        let resolver_ptr = HOST_PROC_ADDR_FN.load(Ordering::SeqCst);
+        if resolver_ptr.is_null() {
+            log::warn!("[FakeEGL] log_gl_info_once: HOST_PROC_ADDR_FN not set yet");
+            return;
+        }
+        let resolver: extern "C" fn(*const c_char) -> *mut c_void =
+            std::mem::transmute(resolver_ptr);
+        let get_string: Option<extern "C" fn(u32) -> *const c_char> =
+            resolver(c"glGetString".as_ptr()).as_ref().map(|p| std::mem::transmute(p));
+        if let Some(gs) = get_string {
+            const GL_VENDOR: u32 = 0x1F00;
+            const GL_RENDERER: u32 = 0x1F01;
+            const GL_VERSION: u32 = 0x1F02;
+            let mut any = false;
+            for (label, name) in [
+                ("Vendor", GL_VENDOR),
+                ("Renderer", GL_RENDERER),
+                ("Version", GL_VERSION),
+            ] {
+                let s = gs(name);
+                if !s.is_null() {
+                    any = true;
+                    log::warn!(
+                        "[FakeEGL] GL {}: {}",
+                        label,
+                        CStr::from_ptr(s).to_string_lossy()
+                    );
+                }
+            }
+            if any {
+                DONE.store(true, Ordering::SeqCst);
+            } else {
+                log::warn!("[FakeEGL] log_gl_info_once: glGetString returned null (no current context?)");
+            }
+        }
     }
 }
 
@@ -892,7 +920,33 @@ pub extern "C" fn fake_egl_get_config_attrib(
     _display: *mut c_void, _config: *mut c_void, attribute: i32, value: *mut i32,
 ) -> i32 {
     match attribute {
-        EGL_NATIVE_VISUAL_ID => unsafe { *value = 0; EGL_TRUE },
+        EGL_NATIVE_VISUAL_ID => {
+            // SAFETY: REAL_EGL_GET_CONFIG_ATTRIB is populated from dlsym in
+            // fake_egl_install_library; the function pointer is valid and matches
+            // the EGL signature. SAVED_EGL_DISPLAY is a valid EGL display from
+            // the real libEGL. _config is the real EGL config (returned by
+            // fake_egl_choose_config which forwards SAVED_EGL_CONFIG).
+            let ret = unsafe {
+                let f = REAL_EGL_GET_CONFIG_ATTRIB.load(Ordering::SeqCst);
+                if f.is_null() {
+                    None
+                } else {
+                    let func: extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> i32 =
+                        std::mem::transmute(f);
+                    let dpy = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
+                    if dpy.is_null() {
+                        None
+                    } else {
+                        Some(func(dpy, _config, attribute, value))
+                    }
+                }
+            };
+            if let Some(result) = ret {
+                return result;
+            }
+            unsafe { *value = 0; }
+            EGL_TRUE
+        },
         n if n == 0x3024 || n == 0x3023 || n == 0x3022 || n == 0x3021 || n == 0x3025 || n == 0x3026 => {
             // EGL_RED_SIZE, GREEN_SIZE, BLUE_SIZE, ALPHA_SIZE, DEPTH_SIZE, STENCIL_SIZE
             unsafe { *value = 8; }
@@ -994,157 +1048,55 @@ fn get_or_create_thread_context() -> *mut c_void {
 
 #[no_mangle]
 pub unsafe extern "C" fn fake_egl_make_current(
-    display: *mut c_void, draw: *mut c_void, read: *mut c_void, context: *mut c_void,
+    display: *mut c_void, draw: *mut c_void, _read: *mut c_void, _context: *mut c_void,
 ) -> i32 {
-    log::warn!("[FakeEGL] eglMakeCurrent display={:p} draw={:p} read={:p} context={:p} tid={:?}",
-               display, draw, read, context, std::thread::current().id());
+    // Match upstream FakeEGL: surface handle is GameWindow*; bind via GameWindow.
+    extern "C" {
+        fn game_window_make_current(w: *mut c_void, active: i32);
+    }
+    static MAKE_CURRENT_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = MAKE_CURRENT_LOG.fetch_add(1, Ordering::Relaxed);
+    if n < 8 {
+        log::warn!(
+            "[FakeEGL] eglMakeCurrent display={:p} draw={:p} tid={:?} n={}",
+            display,
+            draw,
+            std::thread::current().id(),
+            n
+        );
+    }
 
     if !draw.is_null() {
-        let mut target_ctx = SAVED_EGL_CONTEXT.load(Ordering::SeqCst);
-        let mut target_surface = SAVED_EGL_SURFACE.load(Ordering::SeqCst);
-        let mut use_direct = true;
-
-        let tid = std::thread::current().id();
-        {
-            let contexts = THREAD_CONTEXTS.lock().unwrap();
-            if let Some(ctx) = contexts.get(&tid) {
-                target_ctx = ctx.0;
-                use_direct = false;
-            }
-            if let Some(surf) = THREAD_SURFACES.lock().unwrap().get(&tid) {
-                target_surface = surf.0;
-            }
-        }
-
-        let real_make_current: Option<extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32> =
-            REAL_EGL_MAKE_CURRENT.load(Ordering::SeqCst).as_ref().map(|p| std::mem::transmute(p));
-
-        // If no saved handles, use eglut's handles directly
-        if target_ctx.is_null() {
-            unsafe {
-                let egl_dpy = crate::eglut::state::STATE.egl_dpy;
-                let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
-                if let Some(eglut_win) = win_ref.as_ref() {
-                    target_ctx = eglut_win.context;
-                    target_surface = eglut_win.surface;
-                    // Populate ALL saved handles from eglut state.
-                    // The Rust eglut does NOT call eglMakeCurrent in eglutCreateWindow,
-                    // so saveCurrentWindowHandle gets NULL for all handles.
-                    // This is needed so that:
-                    // 1) real_eglMakeCurrent can be called (needs display + surface + context)
-                    // 2) get_or_create_thread_context can create a shared context
-                    //    if direct real_eglMakeCurrent fails (EGL_BAD_ACCESS from Mesa
-                    //    X11 thread affinity — context created on main thread but used
-                    //    on game thread).
-                    SAVED_EGL_DISPLAY.store(egl_dpy as *mut c_void, Ordering::SeqCst);
-                    SAVED_EGL_SURFACE.store(eglut_win.surface as *mut c_void, Ordering::SeqCst);
-                    SAVED_EGL_CONTEXT.store(eglut_win.context as *mut c_void, Ordering::SeqCst);
-                    SAVED_EGL_CONFIG.store(eglut_win.config as *mut c_void, Ordering::SeqCst);
-                    log::warn!("[FakeEGL]   fallback to eglut handles: dpy={:p} surf={:p} ctx={:p}",
-                               egl_dpy, eglut_win.surface, eglut_win.context);
-                }
-            }
-        }
-
-        // If no primary context exists yet, create EGL context + surface on THIS
-        // thread. Mesa's X11 EGL backend has thread affinity — objects created on
-        // one thread cannot be made current on another thread (EGL_BAD_ACCESS).
-        // Deferring creation to the game/render thread avoids this entirely.
-        if target_ctx.is_null() {
-            let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-            let saved_cfg = SAVED_EGL_CONFIG.load(Ordering::SeqCst);
-            let native_win = SAVED_NATIVE_WINDOW.load(Ordering::SeqCst);
-            if !saved_disp.is_null() && !saved_cfg.is_null() && !native_win.is_null() {
-                if let Some(create_ctx_f) = REAL_EGL_CREATE_CONTEXT.load(Ordering::SeqCst).as_ref() {
-                    let create_ctx_fn: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void =
-                        std::mem::transmute(create_ctx_f);
-                    let ctx_attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE, 0];
-                    let new_ctx = create_ctx_fn(saved_disp, saved_cfg, std::ptr::null_mut(), ctx_attrs.as_ptr());
-                    if !new_ctx.is_null() {
-                        if let Some(create_surf_f) = REAL_EGL_CREATE_WINDOW_SURFACE.load(Ordering::SeqCst).as_ref() {
-                            let create_surf_fn: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void =
-                                std::mem::transmute(create_surf_f);
-                            let surf_attribs = [EGL_NONE, 0];
-                            let new_surf = create_surf_fn(saved_disp, saved_cfg, native_win, surf_attribs.as_ptr());
-                            if !new_surf.is_null() {
-                                log::warn!("[FakeEGL]   created primary context+surface on thread {:?}: ctx={:p} surf={:p}",
-                                           tid, new_ctx, new_surf);
-                                target_ctx = new_ctx;
-                                target_surface = new_surf;
-                                use_direct = true;
-                                SAVED_EGL_CONTEXT.store(new_ctx, Ordering::SeqCst);
-                                SAVED_EGL_SURFACE.store(new_surf, Ordering::SeqCst);
-                                THREAD_CONTEXTS.lock().unwrap().insert(tid, SendPtr(new_ctx));
-                                THREAD_SURFACES.lock().unwrap().insert(tid, SendPtr(new_surf));
-                                // Keep eglut window handles in sync so eglutSwapBuffers /
-                                // eglutMakeCurrent (host path) can present the same surface.
-                                let win_ref = &mut *std::ptr::addr_of_mut!(crate::eglut::state::STATE.current_window);
-                                if let Some(eglut_win) = win_ref.as_mut() {
-                                    eglut_win.context = new_ctx as *mut _;
-                                    eglut_win.surface = new_surf as *mut _;
-                                }
-                            } else {
-                                log::warn!("[FakeEGL]   failed to create primary surface on thread {:?}", tid);
-                            }
-                        }
-                    } else {
-                        log::warn!("[FakeEGL]   failed to create primary context on thread {:?}", tid);
-                    }
-                }
-            }
-        }
-
-        if let Some(make_cur) = real_make_current {
-            let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-            if !target_ctx.is_null() && !saved_disp.is_null() {
-                if !use_direct {
-                    log::warn!("[FakeEGL]   using per-thread shared ctx={:p} surf={:p}", target_ctx, target_surface);
-                }
-                log::warn!("[FakeEGL]   calling real_eglMakeCurrent(disp={:p}, surf={:p}, ctx={:p})",
-                           saved_disp, target_surface, target_ctx);
-                let ok = make_cur(saved_disp, target_surface, target_surface, target_ctx);
-                if ok != 0 {
-                    CURRENT_DRAW_SURFACE.store(draw, Ordering::SeqCst);
-                    TLS_REAL_SURFACE.with(|s| s.store(target_surface, Ordering::SeqCst));
-                    log::warn!("[FakeEGL]   real_eglMakeCurrent SUCCEEDED, tls_real_surface={:p}", target_surface);
-                    return EGL_TRUE;
-                }
-                let egl_err = if let Some(f) = REAL_EGL_GET_ERROR.load(Ordering::SeqCst).as_ref() {
-                    let func: extern "C" fn() -> i32 = std::mem::transmute(f);
-                    func()
-                } else { -1 };
-                log::warn!("[FakeEGL]   real eglMakeCurrent failed, err=0x{:x}, creating shared context", egl_err);
-                let new_ctx = get_or_create_thread_context();
-                if !new_ctx.is_null() && new_ctx != target_ctx {
-                    // Use per-thread surface if one was just created by get_or_create_thread_context
-                    if let Some(surf) = THREAD_SURFACES.lock().unwrap().get(&tid) {
-                        target_surface = surf.0;
-                    }
-                    let ok2 = make_cur(saved_disp, target_surface, target_surface, new_ctx);
-                    if ok2 != 0 {
-                        log::warn!("[FakeEGL]   made shared context current on this thread, surf={:p}", target_surface);
-                        CURRENT_DRAW_SURFACE.store(draw, Ordering::SeqCst);
-                        TLS_REAL_SURFACE.with(|s| s.store(target_surface, Ordering::SeqCst));
-                        return EGL_TRUE;
-                    }
-                    let err2 = if let Some(f) = REAL_EGL_GET_ERROR.load(Ordering::SeqCst).as_ref() {
-                        let func: extern "C" fn() -> i32 = std::mem::transmute(f);
-                        func()
-                    } else { -1 };
-                    log::warn!("[FakeEGL]   shared context eglMakeCurrent also failed, err=0x{:x}", err2);
-                }
-            }
-        }
-        log::warn!("[FakeEGL]   could not make context current, returning EGL_TRUE anyway");
+        game_window_make_current(draw, 1);
         CURRENT_DRAW_SURFACE.store(draw, Ordering::SeqCst);
+        // Track eglut's real surface for diagnostics / host path.
+        let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
+        if let Some(eglut_win) = win_ref.as_ref() {
+            if !eglut_win.surface.is_null() {
+                TLS_REAL_SURFACE.with(|s| s.store(eglut_win.surface as *mut c_void, Ordering::SeqCst));
+            }
+            if !eglut_win.context.is_null() {
+                SAVED_EGL_CONTEXT.store(eglut_win.context as *mut c_void, Ordering::SeqCst);
+            }
+            if !eglut_win.surface.is_null() {
+                SAVED_EGL_SURFACE.store(eglut_win.surface as *mut c_void, Ordering::SeqCst);
+            }
+        }
+        log_gl_info_once();
         EGL_TRUE
     } else {
-        if let Some(f) = REAL_EGL_MAKE_CURRENT.load(Ordering::SeqCst).as_ref() {
-            let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-            if !saved_disp.is_null() {
-                let make_cur: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32 =
-                    std::mem::transmute(f);
-                make_cur(saved_disp, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        let prev = CURRENT_DRAW_SURFACE.load(Ordering::SeqCst);
+        if !prev.is_null() {
+            game_window_make_current(prev, 0);
+        } else {
+            // Unbind via real EGL if we have no cached GameWindow.
+            if let Some(f) = REAL_EGL_MAKE_CURRENT.load(Ordering::SeqCst).as_ref() {
+                let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
+                if !saved_disp.is_null() {
+                    let make_cur: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32 =
+                        std::mem::transmute(f);
+                    make_cur(saved_disp, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                }
             }
         }
         CURRENT_DRAW_SURFACE.store(std::ptr::null_mut(), Ordering::SeqCst);
@@ -1164,118 +1116,94 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
         }
     }
 
-    let real_swap = REAL_EGL_SWAP_BUFFERS.load(Ordering::SeqCst);
-    if !real_swap.is_null() {
-        let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-        let mut tls_surf = TLS_REAL_SURFACE.with(|s| s.load(Ordering::SeqCst));
-        // If the game swapped after an unbind, re-bind the primary surface so we
-        // still present rather than silently no-op / fall through.
-        if tls_surf.is_null() {
-            tls_surf = SAVED_EGL_SURFACE.load(Ordering::SeqCst);
-            if tls_surf.is_null() {
-                if let Some(surf) = THREAD_SURFACES.lock().unwrap().get(&std::thread::current().id()) {
-                    tls_surf = surf.0;
-                }
-            }
-            if !tls_surf.is_null() && !saved_disp.is_null() {
-                let ctx = {
-                    let tid = std::thread::current().id();
-                    THREAD_CONTEXTS.lock().unwrap().get(&tid).map(|c| c.0)
-                        .unwrap_or_else(|| SAVED_EGL_CONTEXT.load(Ordering::SeqCst))
-                };
-                if !ctx.is_null() {
-                    if let Some(f) = REAL_EGL_MAKE_CURRENT.load(Ordering::SeqCst).as_ref() {
-                        let make_cur: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32 =
-                            std::mem::transmute(f);
-                        if make_cur(saved_disp, tls_surf, tls_surf, ctx) != 0 {
-                            TLS_REAL_SURFACE.with(|s| s.store(tls_surf, Ordering::SeqCst));
-                        }
-                    }
-                }
-            }
-        }
-        if !saved_disp.is_null() && !tls_surf.is_null() {
-            // Sample default framebuffer before present (diagnose black screen).
-            static SWAP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = SWAP_COUNT.fetch_add(1, Ordering::Relaxed);
-            if n == 30 || n == 120 || n == 600 {
-                init_gl_debug_functions();
-                if let (Some(gi), Some(rp), Some(ge)) = (
-                    REAL_GL_GET_INTEGERV.load(Ordering::SeqCst).as_ref(),
-                    REAL_GL_READ_PIXELS.load(Ordering::SeqCst).as_ref(),
-                    REAL_GL_GET_ERROR.load(Ordering::SeqCst).as_ref(),
-                ) {
-                    let get_int: extern "C" fn(u32, *mut i32) = std::mem::transmute(gi);
-                    let read_px: extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void) =
-                        std::mem::transmute(rp);
-                    let get_err: extern "C" fn() -> u32 = std::mem::transmute(ge);
-                    let mut vp = [0i32; 4];
-                    let mut fbo = 0i32;
-                    get_int(GL_VIEWPORT, vp.as_mut_ptr());
-                    get_int(GL_FRAMEBUFFER_BINDING, &mut fbo);
-                    // Read center of viewport (or 0,0 if viewport empty)
-                    let rx = if vp[2] > 0 { vp[0] + vp[2] / 2 } else { 0 };
-                    let ry = if vp[3] > 0 { vp[1] + vp[3] / 2 } else { 0 };
-                    let mut px = [0u8; 4];
-                    while get_err() != 0 {}
-                    read_px(rx, ry, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.as_mut_ptr() as *mut c_void);
-                    let err = get_err();
-                    log::warn!(
-                        "[FakeEGL] pre-swap sample n={} vp={:?} fbo={} px=[{},{},{},{}] glerr=0x{:x}",
-                        n, vp, fbo, px[0], px[1], px[2], px[3], err
-                    );
-                } else {
-                    log::warn!(
-                        "[FakeEGL] pre-swap sample n={}: GL debug fns missing getInt={:p} readPx={:p}",
-                        n,
-                        REAL_GL_GET_INTEGERV.load(Ordering::SeqCst),
-                        REAL_GL_READ_PIXELS.load(Ordering::SeqCst)
-                    );
-                }
-            }
+    // Upstream FakeEGL: ((GameWindow*)surface)->swapBuffers()
+    extern "C" {
+        fn game_window_swap_buffers(w: *mut c_void);
+    }
 
-            let swap_fn: extern "C" fn(*mut c_void, *mut c_void) -> i32 = std::mem::transmute(real_swap);
-            let ok = swap_fn(saved_disp, tls_surf);
-            if ok == 0 {
-                let egl_err = if let Some(f) = REAL_EGL_GET_ERROR.load(Ordering::SeqCst).as_ref() {
-                    let func: extern "C" fn() -> i32 = std::mem::transmute(f);
-                    func()
-                } else { -1 };
-                log::warn!("[FakeEGL] eglSwapBuffers FAILED: display={:p} tls_surf={:p} err=0x{:x} tid={:?} n={}",
-                           saved_disp, tls_surf, egl_err, std::thread::current().id(), n);
-            } else if n < 5 || n % 300 == 0 {
-                log::warn!("[FakeEGL] eglSwapBuffers ok n={} surf={:p} tid={:?}",
-                           n, tls_surf, std::thread::current().id());
+    static SWAP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SWAP_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    let win = if !surface.is_null() {
+        surface
+    } else {
+        CURRENT_DRAW_SURFACE.load(Ordering::SeqCst)
+    };
+
+    if n == 30 || n == 120 || n == 600 {
+        init_gl_debug_functions();
+        if let (Some(gi), Some(rp), Some(ge)) = (
+            REAL_GL_GET_INTEGERV.load(Ordering::SeqCst).as_ref(),
+            REAL_GL_READ_PIXELS.load(Ordering::SeqCst).as_ref(),
+            REAL_GL_GET_ERROR.load(Ordering::SeqCst).as_ref(),
+        ) {
+            let get_int: extern "C" fn(u32, *mut i32) = std::mem::transmute(gi);
+            let read_px: extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void) =
+                std::mem::transmute(rp);
+            let get_err: extern "C" fn() -> u32 = std::mem::transmute(ge);
+            let mut vp = [0i32; 4];
+            let mut fbo = 0i32;
+            get_int(GL_VIEWPORT, vp.as_mut_ptr());
+            get_int(GL_FRAMEBUFFER_BINDING, &mut fbo);
+            let rx = if vp[2] > 0 { vp[0] + vp[2] / 2 } else { 0 };
+            let ry = if vp[3] > 0 { vp[1] + vp[3] / 2 } else { 0 };
+            let mut px = [0u8; 4];
+            while get_err() != 0 {}
+            read_px(rx, ry, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.as_mut_ptr() as *mut c_void);
+            let err = get_err();
+            log::warn!(
+                "[FakeEGL] pre-swap sample n={} vp={:?} fbo={} px=[{},{},{},{}] glerr=0x{:x} clears={} draws={}",
+                n, vp, fbo, px[0], px[1], px[2], px[3], err,
+                GL_CLEAR_COUNT.load(Ordering::Relaxed),
+                GL_DRAW_COUNT.load(Ordering::Relaxed),
+            );
+        }
+        // One-shot presentation probe: clear green then read back after a
+        // later sample to separate "game draws black" from "swap broken".
+        if n == 30 {
+            if let (Some(cc), Some(cl), Some(rp), Some(ge)) = (
+                REAL_GL_CLEAR_COLOR.load(Ordering::SeqCst).as_ref(),
+                REAL_GL_CLEAR.load(Ordering::SeqCst).as_ref(),
+                REAL_GL_READ_PIXELS.load(Ordering::SeqCst).as_ref(),
+                REAL_GL_GET_ERROR.load(Ordering::SeqCst).as_ref(),
+            ) {
+                let clear_color: extern "C" fn(f32, f32, f32, f32) = std::mem::transmute(cc);
+                let clear: extern "C" fn(u32) = std::mem::transmute(cl);
+                let read_px: extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void) =
+                    std::mem::transmute(rp);
+                let get_err: extern "C" fn() -> u32 = std::mem::transmute(ge);
+                while get_err() != 0 {}
+                clear_color(0.0, 1.0, 0.0, 1.0);
+                clear(0x00004000); // GL_COLOR_BUFFER_BIT
+                let mut px = [0u8; 4];
+                read_px(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.as_mut_ptr() as *mut c_void);
+                log::warn!(
+                    "[FakeEGL] post-force-clear green sample px=[{},{},{},{}] glerr=0x{:x}",
+                    px[0], px[1], px[2], px[3], get_err()
+                );
             }
-            return ok;
         }
     }
 
-    log::warn!("[FakeEGL] eglSwapBuffers display={:p} surface={:p} (fallback) tid={:?}",
-               display, surface, std::thread::current().id());
-    let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-    let saved_surf = SAVED_EGL_SURFACE.load(Ordering::SeqCst);
-    if !saved_disp.is_null() && !saved_surf.is_null() {
-        if let Some(f) = REAL_EGL_SWAP_BUFFERS.load(Ordering::SeqCst).as_ref() {
-            let swap_fn: extern "C" fn(*mut c_void, *mut c_void) -> i32 = std::mem::transmute(f);
-            return swap_fn(saved_disp, saved_surf);
+    if !win.is_null() {
+        game_window_swap_buffers(win);
+        if n < 5 || n % 300 == 0 {
+            log::warn!(
+                "[FakeEGL] eglSwapBuffers ok n={} win={:p} tid={:?}",
+                n,
+                win,
+                std::thread::current().id()
+            );
         }
+        return EGL_TRUE;
     }
-    // If no saved handles, try eglut's display and surface directly
-    unsafe {
-        let egl_dpy = crate::eglut::state::STATE.egl_dpy;
-        let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
-        if let Some(eglut_win) = win_ref.as_ref() {
-            if !egl_dpy.is_null() && !eglut_win.surface.is_null() {
-                if let Some(f) = REAL_EGL_SWAP_BUFFERS.load(Ordering::SeqCst).as_ref() {
-                    let swap_fn: extern "C" fn(*mut c_void, *mut c_void) -> i32 = std::mem::transmute(f);
-                    log::warn!("[FakeEGL]   using eglut display/surface: dpy={:p} surf={:p}",
-                               egl_dpy, eglut_win.surface);
-                    return swap_fn(egl_dpy as *mut c_void, eglut_win.surface as *mut c_void);
-                }
-            }
-        }
-    }
+
+    log::warn!(
+        "[FakeEGL] eglSwapBuffers with null GameWindow display={:p} surface={:p} tid={:?}",
+        display,
+        surface,
+        std::thread::current().id()
+    );
     EGL_TRUE
 }
 
@@ -1286,44 +1214,40 @@ pub extern "C" fn fake_egl_swap_interval(_display: *mut c_void, _interval: i32) 
 
 #[no_mangle]
 pub extern "C" fn fake_egl_query_surface(
-    _display: *mut c_void, _surface: *mut c_void, attribute: i32, value: *mut i32,
+    _display: *mut c_void, surface: *mut c_void, attribute: i32, value: *mut i32,
 ) -> i32 {
     if attribute == EGL_WIDTH || attribute == EGL_HEIGHT {
-        let saved_win = SAVED_NATIVE_WINDOW.load(Ordering::SeqCst);
-        if !saved_win.is_null() {
-            unsafe {
-                extern "C" {
-                    fn eglutGetDisplay() -> *mut c_void;
-                    fn eglutGetWindowHandle() -> u64;
-                }
-                let dpy = eglutGetDisplay();
-                if !dpy.is_null() {
-                    let display: *mut c_void = dpy;
-                    let win = saved_win;
-                    let mut root: u64 = 0;
-                    let mut x: i32 = 0;
-                    let mut y: i32 = 0;
-                    let mut w: u32 = 0;
-                    let mut h: u32 = 0;
-                    let mut border: u32 = 0;
-                    let mut depth: u32 = 0;
-                    extern "C" {
-                        fn XGetGeometry(
-                            display: *mut c_void, win: u64,
-                            root_return: *mut u64,
-                            x_return: *mut i32, y_return: *mut i32,
-                            width_return: *mut u32, height_return: *mut u32,
-                            border_width_return: *mut u32, depth_return: *mut u32,
-                        ) -> i32;
-                    }
-                    if XGetGeometry(display, win as u64, &mut root, &mut x, &mut y, &mut w, &mut h, &mut border, &mut depth) != 0 {
-                        *value = if attribute == EGL_WIDTH { w as i32 } else { h as i32 };
-                        return EGL_TRUE;
-                    }
-                }
-            }
+        // Upstream: ((GameWindow*)surface)->getWindowSize
+        extern "C" {
+            fn game_window_get_size(w: *mut c_void, out_w: *mut i32, out_h: *mut i32);
         }
-        unsafe { *value = 32; }
+        let win = if !surface.is_null() {
+            surface
+        } else {
+            CURRENT_DRAW_SURFACE.load(Ordering::SeqCst)
+        };
+        if !win.is_null() {
+            let mut w = 0i32;
+            let mut h = 0i32;
+            unsafe { game_window_get_size(win, &mut w, &mut h) };
+            unsafe {
+                *value = if attribute == EGL_WIDTH { w } else { h };
+            }
+            return EGL_TRUE;
+        }
+        // Fallback: eglut window size
+        unsafe {
+            let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
+            if let Some(eglut_win) = win_ref.as_ref() {
+                *value = if attribute == EGL_WIDTH {
+                    eglut_win.width
+                } else {
+                    eglut_win.height
+                };
+                return EGL_TRUE;
+            }
+            *value = 32;
+        }
         return EGL_TRUE;
     }
     log::warn!("[FakeEGL] eglQuerySurface {:x}", attribute);
@@ -1448,20 +1372,65 @@ pub unsafe extern "C" fn fake_egl_install_library() {
 pub unsafe extern "C" fn fake_egl_setup_gl_overrides() {
     let mut overrides = HOST_PROC_OVERRIDES.lock().unwrap();
 
-    // MESA 23.1 blackscreen workarounds
-    overrides.insert("glDrawElementsInstancedOES".into(), SendPtr(std::ptr::null_mut()));
-    overrides.insert("glDrawArraysInstancedOES".into(), SendPtr(std::ptr::null_mut()));
-    overrides.insert("glVertexAttribDivisorOES".into(), SendPtr(std::ptr::null_mut()));
-    // NVIDIA stub
-    overrides.insert("glInvalidateFramebuffer".into(), SendPtr(fake_egl_wait_client as *mut c_void));
+    // MESA 23.1+ blackscreen workaround (RenderDragon 1.18.30+).
+    // Game uses instanced-draw extensions that draw black on Mesa; null the
+    // entry points so eglGetProcAddress reports them unavailable and the game
+    // falls back to non-instanced paths. Cover OES / EXT / core names — newer
+    // GLES resolves the non-OES symbols even when only OES was historically
+    // patched (see mcpelauncher-client#66 and MESA_EXTENSION_OVERRIDE docs).
+    for name in [
+        "glDrawElementsInstancedOES",
+        "glDrawArraysInstancedOES",
+        "glVertexAttribDivisorOES",
+        "glDrawElementsInstancedEXT",
+        "glDrawArraysInstancedEXT",
+        "glVertexAttribDivisorEXT",
+        "glDrawElementsInstanced",
+        "glDrawArraysInstanced",
+        "glVertexAttribDivisor",
+        "glDrawElementsInstancedANGLE",
+        "glDrawArraysInstancedANGLE",
+        "glVertexAttribDivisorANGLE",
+        "glDrawElementsInstancedNV",
+        "glDrawArraysInstancedNV",
+        "glVertexAttribDivisorNV",
+    ] {
+        overrides.insert(name.into(), SendPtr(std::ptr::null_mut()));
+    }
+    // NVIDIA stub (void glInvalidateFramebuffer(...); stub must not return a value
+    // via an unrelated EGL function — use a true no-op).
+    overrides.insert(
+        "glInvalidateFramebuffer".into(),
+        SendPtr(fake_egl_gl_invalidate_framebuffer_stub as *mut c_void),
+    );
 
-    // Debug wrappers
-    overrides.insert("glClearColor".into(), SendPtr(fake_egl_debug_clear_color as *mut c_void));
-    overrides.insert("glClear".into(), SendPtr(fake_egl_debug_clear as *mut c_void));
-    overrides.insert("glDrawArrays".into(), SendPtr(fake_egl_debug_draw_arrays as *mut c_void));
-    overrides.insert("glDrawElements".into(), SendPtr(fake_egl_debug_draw_elements as *mut c_void));
-    overrides.insert("glBindFramebuffer".into(), SendPtr(fake_egl_debug_bind_framebuffer as *mut c_void));
-    overrides.insert("glUseProgram".into(), SendPtr(fake_egl_debug_use_program as *mut c_void));
+    // Count-only wrappers: call through to real GL (never drop draws). Used to
+    // diagnose whether the game issues clears/draws to the default framebuffer.
+    init_gl_debug_functions();
+    if !REAL_GL_CLEAR.load(Ordering::SeqCst).is_null() {
+        overrides.insert(
+            "glClear".into(),
+            SendPtr(debug_gl_clear as *mut c_void),
+        );
+    }
+    if !REAL_GL_CLEAR_COLOR.load(Ordering::SeqCst).is_null() {
+        overrides.insert(
+            "glClearColor".into(),
+            SendPtr(debug_gl_clear_color as *mut c_void),
+        );
+    }
+    if !REAL_GL_DRAW_ARRAYS.load(Ordering::SeqCst).is_null() {
+        overrides.insert(
+            "glDrawArrays".into(),
+            SendPtr(debug_gl_draw_arrays as *mut c_void),
+        );
+    }
+    if !REAL_GL_DRAW_ELEMENTS.load(Ordering::SeqCst).is_null() {
+        overrides.insert(
+            "glDrawElements".into(),
+            SendPtr(debug_gl_draw_elements as *mut c_void),
+        );
+    }
 
     drop(overrides);
 

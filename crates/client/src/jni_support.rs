@@ -438,10 +438,21 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     let inits_ok = linker_rust_call_init_functions(game_lib_name.as_ptr());
     log::info!("jni_support: linker_rust_call_init_functions returned {}", inits_ok);
 
-    // Set up MainActivity fields matching C++ startGame
+    // Set up MainActivity fields matching C++ startGame.
+    // Critical: Baron FakeJni MainActivity::storageDirectory must be set — the game
+    // calls getExternalStoragePath via the Baron VM (ga->vm), not only Rust JNI.
+    // Without this, AppPlatform logs CurrentFileStoragePath is now '' and paths break.
     let dir = path_helper_get_primary_data_directory();
     if !dir.is_null() {
         jnivm_set_storage_dir(dir);
+        extern "C" {
+            fn jni_support_set_activity_storage_dir(s: *mut c_void, dir: *const c_char);
+        }
+        jni_support_set_activity_storage_dir(s, dir);
+        let dir_str = CStr::from_ptr(dir).to_string_lossy();
+        log::info!("jni_support: storage directory set to {:?}", dir_str);
+    } else {
+        log::warn!("jni_support: path_helper_get_primary_data_directory returned null");
     }
     // C++ setters for activity stbi function pointers
     extern "C" { fn jnivm_set_stbi_load_from_memory(fn_ptr: *mut c_void); fn jnivm_set_stbi_image_free(fn_ptr: *mut c_void); }

@@ -26,6 +26,17 @@ fn main() {
     // that only ship C / C.UTF-8.
     std::env::set_var("LC_ALL", "C");
 
+    // Mesa 23.1+ black screen with RenderDragon: hide instanced-array extension
+    // so the game does not enable the broken path. Complements FakeEGL nulling
+    // of glDraw*Instanced* / glVertexAttribDivisor* in eglGetProcAddress.
+    // Official mcpelauncher troubleshooting recommendation.
+    if std::env::var_os("MESA_EXTENSION_OVERRIDE").is_none() {
+        std::env::set_var(
+            "MESA_EXTENSION_OVERRIDE",
+            "-GL_EXT_instanced_arrays,-GL_ANGLE_instanced_arrays,-GL_NV_instanced_arrays,-GL_EXT_draw_instanced",
+        );
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();

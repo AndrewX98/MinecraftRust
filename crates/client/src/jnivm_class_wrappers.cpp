@@ -292,16 +292,17 @@ static void register_network_monitor_class(JNIEnv* env) {
 
 // Global state shared by MainActivity (window, storage dir, text input)
 // These are set by JniSupport before the game starts.
+// NOTE: jnivm_set/get_storage_dir live in Rust (jnivm_globals.rs) — do not
+// re-define them here (duplicate symbols; empty Baron path was a prior symptom).
 static void* g_main_window = nullptr;
-static char g_storage_dir[4096] = "/tmp";
 
 static void* g_asset_manager = nullptr;
 
 extern "C" void jnivm_set_main_window(void* window) { g_main_window = window; }
-extern "C" void jnivm_set_storage_dir(const char* dir) {
-    if (dir) { strncpy(g_storage_dir, dir, sizeof(g_storage_dir) - 1); }
-}
 extern "C" void jnivm_set_asset_manager(void* mgr) { g_asset_manager = mgr; }
+
+// Storage dir is owned by Rust jnivm_globals.rs
+extern "C" const char* jnivm_get_storage_dir();
 
 // stbi image loading function pointers — set by Rust jni_support_start_game()
 static void* g_stbi_load_from_memory = nullptr;
@@ -312,7 +313,6 @@ extern "C" void jnivm_set_stbi_image_free(void* fn) { g_stbi_image_free = fn; }
 
 // Getters for Rust main_activity module
 extern "C" void* jnivm_get_main_window() { return g_main_window; }
-extern "C" const char* jnivm_get_storage_dir() { return g_storage_dir; }
 extern "C" void* jnivm_get_asset_manager() { return g_asset_manager; }
 extern "C" void* jnivm_get_stbi_load_from_memory() { return g_stbi_load_from_memory; }
 extern "C" void* jnivm_get_stbi_image_free() { return g_stbi_image_free; }
@@ -358,7 +358,12 @@ extern "C" jstring JNICALL MainActivity_getDeviceModel(JNIEnv* env, jobject self
 
 extern "C" jobject JNICALL MainActivity_getFilesDir(JNIEnv* env, jobject self) {
     auto* f = new FileObject();
-    strncpy(f->path, g_storage_dir, sizeof(f->path) - 1);
+    const char* dir = jnivm_get_storage_dir();
+    if (dir) {
+        strncpy(f->path, dir, sizeof(f->path) - 1);
+    } else {
+        strncpy(f->path, "/tmp", sizeof(f->path) - 1);
+    }
     return (jobject)f;
 }
 
@@ -367,7 +372,8 @@ extern "C" jobject JNICALL MainActivity_getCacheDir(JNIEnv* env, jobject self) {
 }
 
 extern "C" jstring JNICALL MainActivity_getExternalStoragePath(JNIEnv* env, jobject self) {
-    return env->NewStringUTF(g_storage_dir);
+    const char* dir = jnivm_get_storage_dir();
+    return env->NewStringUTF(dir ? dir : "/tmp");
 }
 
 extern "C" jstring JNICALL MainActivity_getInternalStoragePath(JNIEnv* env, jobject self) {

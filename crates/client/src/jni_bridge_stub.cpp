@@ -245,6 +245,23 @@ extern "C" void fake_looper_window_start_text_input(void* w) {
 extern "C" void fake_looper_window_stop_text_input(void* w) {
     ((GameWindow*)w)->stopTextInput();
 }
+// Upstream FakeEGL path: surface handle IS the GameWindow* (eglCreateWindowSurface
+// returns the native_window pointer). makeCurrent/swapBuffers go through GameWindow.
+extern "C" void game_window_make_current(void* w, int active) {
+    if (!w) return;
+    ((GameWindow*)w)->makeCurrent(active != 0);
+}
+extern "C" void game_window_swap_buffers(void* w) {
+    if (!w) return;
+    ((GameWindow*)w)->swapBuffers();
+}
+extern "C" void game_window_get_size(void* w, int* out_w, int* out_h) {
+    if (!w) return;
+    int ww = 0, hh = 0;
+    ((GameWindow*)w)->getWindowSize(ww, hh);
+    if (out_w) *out_w = ww;
+    if (out_h) *out_h = hh;
+}
 extern "C" bool fake_input_queue_has_events(void* q) {
     return ((FakeInputQueue*)q)->hasEvents();
 }
@@ -428,6 +445,14 @@ extern "C" void* jni_support_new_cpp() {
 
 extern "C" void jni_support_init_activity(void* s) {
     ((JniSupport*)s)->initActivity();
+}
+
+/// Set Baron FakeJni MainActivity::storageDirectory (used by getExternalStoragePath /
+/// getFilesDir). The Rust path previously only updated jnivm_set_storage_dir, so
+/// AppPlatform saw CurrentFileStoragePath = ''.
+extern "C" void jni_support_set_activity_storage_dir(void* s, const char* dir) {
+    if (!s || !dir) return;
+    ((JniSupport*)s)->setActivityStorageDir(dir);
 }
 
 extern "C" void jni_support_delete(void* s) {

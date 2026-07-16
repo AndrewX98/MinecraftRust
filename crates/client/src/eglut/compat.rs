@@ -136,18 +136,38 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
         }
     }
 
-    // NOTE: EGL context and surface are NOT created here. Mesa's X11 EGL
-    // backend has thread affinity — a context/surface created on one thread
-    // cannot be made current on another thread (EGL_BAD_ACCESS). Since the
-    // game uses a separate render thread, we defer real EGL object creation
-    // to fake_egl_make_current on the game/render thread itself.
+    // Create EGL context + window surface on this (main) thread, matching upstream
+    // eglut. FakeEGL will make this context current on the game thread via
+    // GameWindow::makeCurrent → eglutMakeCurrent (same path as mcpelauncher-client).
+    eglBindAPI(EGL_OPENGL_ES_API);
+    let context = eglCreateContext(
+        egl_dpy,
+        config,
+        EGL_NO_CONTEXT,
+        [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE].as_ptr(),
+    );
+    let surface = eglCreateWindowSurface(
+        egl_dpy,
+        config,
+        xwin as EGLNativeWindowType,
+        [EGL_NONE].as_ptr(),
+    );
+    if context.is_null() || surface.is_null() {
+        eprintln!(
+            "eglutCreateWindow: EGL create failed ctx={:p} surf={:p}",
+            context, surface
+        );
+    } else {
+        eglMakeCurrent(egl_dpy, surface, surface, context);
+        eglSwapInterval(egl_dpy, 1);
+    }
 
     let win_idx = STATE.num_windows;
     STATE.num_windows += 1;
     STATE.current_window = Some(Box::new(EglutWindow {
         xwin, width, height, x: 0, y: 0,
-        context: std::ptr::null_mut(),
-        surface: std::ptr::null_mut(),
+        context,
+        surface,
         config,
         index: win_idx,
         reshape_cb: None, display_cb: None, keyboard_cb: None, drop_cb: None,
