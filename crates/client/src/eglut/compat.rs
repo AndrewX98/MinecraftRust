@@ -113,6 +113,28 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
     let mut wm_delete = XInternAtom(dpy, "WM_DELETE_WINDOW\0".as_ptr() as *const c_char, 0);
     XSetWMProtocols(dpy, xwin, &mut wm_delete, 1);
     XMapWindow(dpy, xwin);
+    XFlush(dpy);
+    // Wait briefly for MapNotify so the first game-thread eglCreateWindowSurface
+    // sees a mapped window (some Mesa paths present black until mapped).
+    {
+        let mut mapped = false;
+        for _ in 0..50 {
+            while XPending(dpy) != 0 {
+                let mut ev: XEvent = std::mem::zeroed();
+                XNextEvent(dpy, &mut ev);
+                if ev.get_type() == MapNotify {
+                    mapped = true;
+                }
+            }
+            if mapped {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !mapped {
+            eprintln!("eglutCreateWindow: MapNotify not seen yet (continuing)");
+        }
+    }
 
     // NOTE: EGL context and surface are NOT created here. Mesa's X11 EGL
     // backend has thread affinity — a context/surface created on one thread

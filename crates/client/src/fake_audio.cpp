@@ -45,10 +45,12 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
         builder->dataCallback = callback;
         builder->dataCallbackUser = userData;
     };
-    // Real signature: aaudio_result_t AAudioStream_getXRunCount(AAudioStream*, int32_t* outCount)
-    syms["AAudioStream_getXRunCount"] = (void*)+[](FakeAudioStream*, int32_t* outCount) -> aaudio_result_t {
-        if (outCount) *outCount = 0;
-        return AAUDIO_OK;
+    // Real AAudio API (API 26+): int32_t AAudioStream_getXRunCount(AAudioStream*)
+    // Returns the underrun/overrun count — NOT an out-pointer write. The previous
+    // (stream, int32_t* outCount) stub treated the next register as a pointer
+    // (often garbage like 0x81) and SIGSEGV'd on FMOD's main-thread poll.
+    syms["AAudioStream_getXRunCount"] = (void*)+[](FakeAudioStream*) -> int32_t {
+        return 0;
     };
     // Missing on older FakeAudio ports — FMOD 1.26+ may dlsym these.
     syms["AAudioStream_getDeviceId"] = (void*)+[](FakeAudioStream*) -> int32_t {
@@ -74,15 +76,19 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     syms["AAudioStream_getBufferSizeInFrames"] = (void*)+[](FakeAudioStream* stream) -> int32_t {
         return stream->bufferSize;
     };
-    syms["AAudioStream_close"] = (void*)+[](FakeAudioStream* stream) {
+    // Real: aaudio_result_t AAudioStream_close(AAudioStream*)
+    syms["AAudioStream_close"] = (void*)+[](FakeAudioStream* stream) -> aaudio_result_t {
+        if (!stream) return AAUDIO_OK;
         free(stream->audioBuffer);
         stream->audioBuffer = nullptr;
         stream->audioBufferSize = 0;
+        return AAUDIO_OK;
     };
     syms["AAudioStreamBuilder_setDirection"] = (void*)+[](FakeAudioStreamBuilder*, aaudio_direction_t) {
     };
-    // Real API returns the applied size (int32_t), not void.
-    syms["AAudioStream_setBufferSizeInFrames"] = (void*)+[](FakeAudioStream* stream, int32_t newSize) -> int32_t {
+    // Real: returns actual buffer size in frames, or a negative error (aaudio_result_t).
+    syms["AAudioStream_setBufferSizeInFrames"] = (void*)+[](FakeAudioStream* stream, int32_t newSize) -> aaudio_result_t {
+        if (!stream || newSize <= 0) return -1;
         stream->bufferSize = newSize;
         stream->audioBufferSize = stream->bufferSize * stream->channelCount * stream->getBytesPerSample();
         stream->audioBuffer = realloc(stream->audioBuffer, stream->audioBufferSize);
@@ -94,12 +100,17 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     syms["AAudioStream_getFramesPerBurst"] = (void*)+[](FakeAudioStream* stream) -> int32_t {
         return stream->bufferSize;
     };
-    syms["AAudioStreamBuilder_delete"] = (void*)+[]() {
+    // Real: void AAudioStreamBuilder_delete(AAudioStreamBuilder*)
+    syms["AAudioStreamBuilder_delete"] = (void*)+[](FakeAudioStreamBuilder* builder) {
+        delete builder;
     };
-    syms["AAudioStream_requestStop"] = (void*)+[](FakeAudioStream* stream) {
+    // Real: aaudio_result_t AAudioStream_requestStop(AAudioStream*)
+    syms["AAudioStream_requestStop"] = (void*)+[](FakeAudioStream* stream) -> aaudio_result_t {
+        if (!stream) return AAUDIO_OK;
         SDL_AudioStream* s = stream->s;
         stream->s = nullptr;
-        SDL_DestroyAudioStream(s);
+        if (s) SDL_DestroyAudioStream(s);
+        return AAUDIO_OK;
     };
     syms["AAudioStream_getBufferCapacityInFrames"] = (void*)+[](FakeAudioStream* stream) -> int32_t {
         return stream->bufferCap;
@@ -109,7 +120,10 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     syms["AAudioStream_getSampleRate"] = (void*)+[](FakeAudioStream* stream) -> int32_t {
         return stream->sampleRate;
     };
-    syms["AAudioStream_read"] = (void*)+[]() {
+    // Real: aaudio_result_t AAudioStream_read(stream, buffer, numFrames, timeoutNanos)
+    // Callback-driven output streams don't use read; return 0 frames.
+    syms["AAudioStream_read"] = (void*)+[](FakeAudioStream*, void*, int32_t, int64_t) -> aaudio_result_t {
+        return 0;
     };
     syms["AAudioStreamBuilder_setPerformanceMode"] = (void*)+[](FakeAudioStreamBuilder*, aaudio_performance_mode_t) -> void {
     };

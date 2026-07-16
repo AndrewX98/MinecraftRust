@@ -33,7 +33,8 @@ thread_local! {
     static TEXT_INPUT: Cell<bool> = const { Cell::new(false) };
 }
 
-const ALOOPER_POLL_TIMEOUT: i32 = -1;
+// Matches android/looper.h — NOT -1 (that is ALOOPER_POLL_WAKE).
+const ALOOPER_POLL_TIMEOUT: i32 = -3;
 
 extern "C" {
     fn mc_register_android_hook(map: *mut c_void, name: *const i8, fn_ptr: *mut c_void);
