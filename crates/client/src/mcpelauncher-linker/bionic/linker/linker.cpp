@@ -2178,6 +2178,12 @@ static std::string android_dlextinfo_to_string(const android_dlextinfo* info) {
 void* do_dlopen(const char* name, int flags,
                 const android_dlextinfo* extinfo,
                 const void* caller_addr) {
+  if (name && (strstr(name, "aaudio") || strstr(name, "fmod") || strstr(name, "OpenSLES") || strstr(name, "oboe"))) {
+    soinfo* const caller_dbg = find_containing_library(caller_addr);
+    fprintf(stderr, "=== do_dlopen(%s) caller=%s flags=0x%x ===\n",
+            name, caller_dbg ? caller_dbg->get_realpath() : "(null)", flags);
+    fflush(stderr);
+  }
 #if 0
 // macOS compat
   std::string trace_prefix = std::string("dlopen: ") + (name == nullptr ? "(nullptr)" : name);
@@ -2299,12 +2305,21 @@ void* do_dlopen(const char* name, int flags,
       }
     }
     failure_guard.Disable();
+    if (name && strstr(name, "aaudio")) {
+      fprintf(stderr, "=== do_dlopen(%s) SUCCESS: handle=%p soname=%s base=%p ===\n",
+              name, handle, si->get_soname(), (void*)si->base);
+      fflush(stderr);
+    }
     LD_LOG(kLogDlopen,
            "... dlopen successful: realpath=\"%s\", soname=\"%s\", handle=%p",
            si->get_realpath(), si->get_soname(), handle);
     return handle;
   }
 
+  if (name && strstr(name, "aaudio")) {
+    fprintf(stderr, "=== do_dlopen(%s) FAILED: %s ===\n", name, linker_get_error_buffer());
+    fflush(stderr);
+  }
   return nullptr;
 }
 

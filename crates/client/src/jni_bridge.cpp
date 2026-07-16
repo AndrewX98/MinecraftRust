@@ -4,6 +4,7 @@
 #include "fake_looper.h"
 #include "fake_inputqueue.h"
 #include "fake_egl.h"
+#include "fake_audio.h"
 #include "core_patches.h"
 #include <game_window.h>
 #include <game_window_manager.h>
@@ -80,6 +81,22 @@ extern "C" void mc_setup_android_hooks() {
     }
 
     linker::load_library("libandroid.so", android_syms);
+
+    // Register libaaudio.so with FakeAudio AAudio shim (SDL3 backend).
+    // FMOD's setOutput hook forces AAudio mode; FMOD then dlopen's libaaudio.so
+    // and calls AAudio_createStreamBuilder / AAudioStreamBuilder_openStream etc.
+    // Without this shim, FMOD's "Streaming Pool" thread SIGSEGVs on the first
+    // AAudio call (rax=0x1003, call *0x10(%rax)).
+    {
+        std::unordered_map<std::string, void*> audio_syms;
+        FakeAudio::initHybrisHooks(audio_syms);
+        linker::load_library("libaaudio.so", audio_syms);
+    }
+    {
+        std::unordered_map<std::string, void*> audio_syms;
+        FakeAudio::initHybrisHooks(audio_syms);
+        linker::load_library("libaaudio.so.2", audio_syms);
+    }
 
     // loadGameWindowLibrary registers callbacks into a linker symbol map.
     // It's called here (by side effect) via the extern "C" wrapper.

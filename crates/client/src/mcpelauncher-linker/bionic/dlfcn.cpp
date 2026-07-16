@@ -158,10 +158,20 @@ void* __loader_android_dlopen_ext(const char* filename,
                            int flags,
                            const android_dlextinfo* extinfo,
                            const void* caller_addr) {
+  if (filename && strstr(filename, "aaudio")) {
+    fprintf(stderr, "=== __loader_android_dlopen_ext(%s) flags=0x%x caller=%p ===\n",
+            filename, flags, caller_addr);
+    fflush(stderr);
+  }
   return dlopen_ext(filename, flags, extinfo, caller_addr);
 }
 
 void* __loader_dlopen(const char* filename, int flags, const void* caller_addr) {
+  if (filename && strstr(filename, "aaudio")) {
+    fprintf(stderr, "=== __loader_dlopen(%s) flags=0x%x caller=%p ===\n",
+            filename, flags, caller_addr);
+    fflush(stderr);
+  }
   return dlopen_ext(filename, flags, nullptr, caller_addr);
 }
 

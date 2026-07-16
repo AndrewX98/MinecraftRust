@@ -20,6 +20,12 @@ extern "C" {
 }
 
 fn main() {
+    // MinecraftUtils::workaroundLocaleBug — force a locale that MCPE's libc++
+    // can construct. Without this, collate_byname throws on Android-style
+    // names like "en.UTF-8" (from getLocale() "en" + ".UTF-8") on Linux hosts
+    // that only ship C / C.UTF-8.
+    std::env::set_var("LC_ALL", "C");
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();

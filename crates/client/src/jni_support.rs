@@ -1099,8 +1099,22 @@ mod locale {
     unsafe impl Sync for LocaleObject {}
 
     unsafe extern "C" fn locale_getDefault(env: *mut JNIEnv, _clazz: jclass) -> jobject {
-        let name = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
-        let cstr = CString::new(name).unwrap_or(CString::new("en_US").unwrap());
+        // Prefer a stable BCP-47-ish name. Avoid raw LANG values like "C.UTF-8"
+        // or Android-style "en.UTF-8" that break host std::locale / collate.
+        let name = std::env::var("LANG")
+            .ok()
+            .filter(|s| {
+                let s = s.as_str();
+                s.contains('_')
+                    && !s.eq_ignore_ascii_case("C")
+                    && !s.eq_ignore_ascii_case("C.UTF-8")
+                    && !s.eq_ignore_ascii_case("C.utf8")
+                    && !s.eq_ignore_ascii_case("POSIX")
+            })
+            .unwrap_or_else(|| "en_US".to_string());
+        // Strip encoding suffix if present ("en_US.UTF-8" → "en_US")
+        let name = name.split('.').next().unwrap_or("en_US").to_string();
+        let cstr = CString::new(name).unwrap_or_else(|_| CString::new("en_US").unwrap());
         Box::into_raw(Box::new(LocaleObject { name: cstr })) as jobject
     }
     unsafe extern "C" fn locale_toString(env: *mut JNIEnv, this: jobject) -> jobject {

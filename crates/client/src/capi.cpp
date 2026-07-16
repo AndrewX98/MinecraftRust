@@ -127,6 +127,8 @@ extern "C" void* linker_cpp_dlsym_fallback(const char* name) {
         {"libGLESv2.so", nullptr, false},
         {"libEGL.so", nullptr, false},
         {"libOpenSLES.so", nullptr, false},
+        {"libaaudio.so", nullptr, false},
+        {"libaaudio.so.2", nullptr, false},
         {"libstdc++.so", nullptr, false},
     };
     for (auto& lib : libs) {

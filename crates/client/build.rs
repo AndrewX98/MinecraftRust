@@ -5,7 +5,7 @@ fn main() {
     static DYLIB_NAMES: &[&str] = &[
         "stdc++", "pthread", "dl", "m", "z",
         "GL", "EGL", "curl", "crypto", "ssl",
-        "SDL2-2.0", "pulse", "pulse-simple",
+        "SDL2-2.0", "SDL3", "pulse", "pulse-simple",
         "X11", "evdev", "png", "udev",
     ];
     for name in DYLIB_NAMES {

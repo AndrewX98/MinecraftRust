@@ -11,6 +11,7 @@
 #include "fake_looper.h"
 #include "fake_inputqueue.h"
 #include "fake_egl.h"
+#include "fake_audio.h"
 #include "xbox_live_helper.h"
 #include <game_window.h>
 #include <game_window_manager.h>
@@ -134,6 +135,23 @@ extern "C" void mc_setup_android_hooks() {
 
     linker::load_library("libandroid.so", android_syms);
     mirror_rust_load("libandroid.so", android_syms);
+
+    // FMOD setOutput is stubbed to keep AAudio; FMOD then dlopen's libaaudio.so
+    // and calls AAudio_* symbols. Without this shim, do_dlopen fails or the
+    // Streaming Pool thread SIGSEGVs on null AAudio function pointers.
+    {
+        std::unordered_map<std::string, void*> audio_syms;
+        FakeAudio::initHybrisHooks(audio_syms);
+        linker::load_library("libaaudio.so", audio_syms);
+        mirror_rust_load("libaaudio.so", audio_syms);
+    }
+    {
+        std::unordered_map<std::string, void*> audio_syms;
+        FakeAudio::initHybrisHooks(audio_syms);
+        linker::load_library("libaaudio.so.2", audio_syms);
+        mirror_rust_load("libaaudio.so.2", audio_syms);
+    }
+
     CorePatches::loadGameWindowLibrary();
 }
 

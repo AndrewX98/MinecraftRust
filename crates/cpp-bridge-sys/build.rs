@@ -528,8 +528,9 @@ fn main() {
         "ecdsa.cpp",
         "store.cpp",
         "uuid.cpp",
+        // pulseaudio.cpp excluded: conflicts with sdl3audio AudioDevice when
+        // HAVE_SDL3AUDIO is set. AAudio (fake_audio.cpp) is the primary path.
         "pulseaudio.cpp",
-        "sdl3audio.cpp",
         "xbox_live.cpp",
     ]
     .into_iter()
@@ -578,6 +579,8 @@ fn main() {
         "uuid_stub.cpp",
         "pulseaudio_stub.cpp",
         "sdl3audio_stub.cpp",
+        // AAudio shim — FMOD forces AAudio via setOutput hook, then dlopen's libaaudio.so
+        "fake_audio.cpp",
         // Prevents loading the real libHttpClient.Android.so (broken under
         // the Rust linker — HCTraceInit@plt SIGSEGV at 0x49dd6).
         "http_client_stubs.cpp",
@@ -651,5 +654,8 @@ fn main() {
         b.define("JNI_RETURN_NON_ZERO", "1");
         b.define("JNIVM_FAKE_JNI_SYNTAX", "0");
         b.define("JNIVM_FAKE_JNI_MINECRAFT_LINUX_COMPAT", "1");
+        // FMOD AAudio path: enables AudioDevice registration + matches upstream
+        // mcpelauncher-client. FakeAudio (libaaudio.so) is always linked.
+        b.define("HAVE_SDL3AUDIO", "1");
     });
 }
