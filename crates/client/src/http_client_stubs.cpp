@@ -13,8 +13,21 @@ extern "C" {
 static constexpr long S_OK = 0;
 static constexpr long E_FAIL = 0x80004005l;
 
+// Fake opaque handles so callers that store queue/call pointers don't NPE
+// immediately after a successful init. Real I/O still returns E_FAIL.
+static uint64_t g_next_handle = 0x1000;
+static uint64_t g_process_task_queue = 0;
+
+static uint64_t alloc_handle() {
+    return ++g_next_handle;
+}
+
 // ---- HC (HTTP Client) symbols ----
 
+// Prefer E_FAIL: if XalInitialize is not patched, failing HC hard-fails
+// with Xal::Exception rather than continuing into half-broken XAL state
+// (SIGSEGV). CorePatches patches XalInitialize → S_OK so this is unused
+// on the normal startup path.
 long HCInitialize(uint64_t, void*) {
     return E_FAIL;
 }
@@ -23,7 +36,7 @@ void HCCleanupAsync(uint64_t) {
 }
 
 long HCMemSetFunctions(void*, void*, void*, void*) {
-    return E_FAIL;
+    return S_OK;
 }
 
 long HCAddCallRoutedHandler(void*, void*, void*) {
@@ -42,7 +55,7 @@ void HCSettingsSetTraceLevel(uint32_t) {
 }
 
 long HCTraceInit(void*, void*) {
-    return E_FAIL;
+    return S_OK;
 }
 
 void HCTraceCleanup() {
@@ -58,12 +71,19 @@ uint64_t HCTraceImplScopeId(const char*) {
 void HCTraceSetPlatformCallbacks(void*, void*, void*) {
 }
 
-long HCHttpCallCreate(uint64_t, uint64_t*) {
-    return E_FAIL;
+long HCHttpCallCreate(uint64_t, uint64_t* out) {
+    // Allow call objects to be created; PerformAsync still fails offline.
+    if (out) {
+        *out = alloc_handle();
+    }
+    return S_OK;
 }
 
-long HCHttpCallDuplicateHandle(uint64_t, uint64_t*) {
-    return E_FAIL;
+long HCHttpCallDuplicateHandle(uint64_t handle, uint64_t* out) {
+    if (out) {
+        *out = handle ? handle : alloc_handle();
+    }
+    return S_OK;
 }
 
 long HCHttpCallCloseHandle(uint64_t) {
@@ -252,16 +272,25 @@ long HCGetWebSocketSendMessageResult(uint64_t, uint64_t, uint64_t*) {
 
 // ---- XTaskQueue symbols ----
 
-long XTaskQueueCreate(uint32_t, uint32_t, uint64_t*) {
-    return E_FAIL;
+long XTaskQueueCreate(uint32_t, uint32_t, uint64_t* out) {
+    if (out) {
+        *out = alloc_handle();
+    }
+    return S_OK;
 }
 
-long XTaskQueueCreateComposite(uint64_t, uint64_t, uint64_t*) {
-    return E_FAIL;
+long XTaskQueueCreateComposite(uint64_t, uint64_t, uint64_t* out) {
+    if (out) {
+        *out = alloc_handle();
+    }
+    return S_OK;
 }
 
-long XTaskQueueDuplicateHandle(uint64_t, uint64_t*) {
-    return E_FAIL;
+long XTaskQueueDuplicateHandle(uint64_t handle, uint64_t* out) {
+    if (out) {
+        *out = handle ? handle : alloc_handle();
+    }
+    return S_OK;
 }
 
 long XTaskQueueCloseHandle(uint64_t) {
@@ -269,34 +298,51 @@ long XTaskQueueCloseHandle(uint64_t) {
 }
 
 long XTaskQueueTerminate(uint64_t, bool, void*, void*) {
-    return E_FAIL;
+    return S_OK;
 }
 
-void XTaskQueueSetCurrentProcessTaskQueue(uint64_t) {
+void XTaskQueueSetCurrentProcessTaskQueue(uint64_t queue) {
+    g_process_task_queue = queue;
 }
 
-long XTaskQueueGetCurrentProcessTaskQueue(uint64_t*) {
-    return E_FAIL;
+long XTaskQueueGetCurrentProcessTaskQueue(uint64_t* out) {
+    if (out) {
+        if (!g_process_task_queue) {
+            g_process_task_queue = alloc_handle();
+        }
+        *out = g_process_task_queue;
+    }
+    return S_OK;
 }
 
 long XTaskQueueDispatch(uint64_t, uint32_t, uint64_t) {
-    return 0;
+    return 0; // false: nothing to dispatch
 }
 
-long XTaskQueueGetPort(uint64_t, uint32_t, uint64_t*) {
-    return E_FAIL;
+long XTaskQueueGetPort(uint64_t, uint32_t, uint64_t* out) {
+    if (out) {
+        *out = alloc_handle();
+    }
+    return S_OK;
 }
 
-long XTaskQueueRegisterMonitor(uint64_t, void*, void*, uint64_t*) {
-    return E_FAIL;
+long XTaskQueueRegisterMonitor(uint64_t, void*, void*, uint64_t* out) {
+    if (out) {
+        *out = alloc_handle();
+    }
+    return S_OK;
 }
 
 long XTaskQueueUnregisterMonitor(uint64_t, uint64_t) {
-    return E_FAIL;
+    return S_OK;
 }
 
-long XTaskQueueSubmitDelayedCallback(uint64_t, uint64_t, void*, void*, uint64_t*) {
-    return E_FAIL;
+long XTaskQueueSubmitDelayedCallback(uint64_t, uint64_t, void*, void*, uint64_t* out) {
+    if (out) {
+        *out = alloc_handle();
+    }
+    // Accept the submit but never run the callback (offline stub).
+    return S_OK;
 }
 
 // ---- XAsync symbols ----
@@ -306,11 +352,11 @@ long XAsyncBegin(uint64_t, void*, void*, const char*) {
 }
 
 long XAsyncCancel(uint64_t) {
-    return E_FAIL;
+    return S_OK;
 }
 
 long XAsyncComplete(uint64_t, long, uint32_t) {
-    return E_FAIL;
+    return S_OK;
 }
 
 long XAsyncGetStatus(uint64_t, bool) {

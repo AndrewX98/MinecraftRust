@@ -270,15 +270,17 @@ int mc_load_core_libraries(const char* lib_dir) {
 
     // 4) Register stub libraries that libminecraftpe.so depends on
     //
-    // libHttpClient.Android.so MUST be stubbed before the game loads. If the
-    // real ELF is mapped by the Rust linker, internal JUMP_SLOTs (e.g.
-    // HCTraceInit@plt) stay unbound and the game SIGSEGVs at the lazy PLT
-    // trampoline (IP 0x49dd6) during MinecraftGame::init.
+    // libHttpClient.Android.so is stubbed before the game loads. Loading the
+    // real ELF currently still SIGSEGVs during XAL init (bad object pointer
+    // 0x20 after PlayGames), even with JUMP_SLOT self-resolution. Stubs keep
+    // the game offline-capable; HCInitialize returns S_OK so XAL does not
+    // throw Xal::Exception on hard-fail init.
     {
         extern void http_client_register_stubs();
         http_client_register_stubs();
     }
     {
+
         auto empty = std::unordered_map<std::string, void*>();
         linker::load_library("libOpenSLES.so", empty);
         mirror_rust_load("libOpenSLES.so", empty);

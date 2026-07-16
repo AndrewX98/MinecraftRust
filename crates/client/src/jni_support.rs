@@ -1254,6 +1254,10 @@ mod certificate {
 // ================================================================
 // ECDSA — com/microsoft/xal/crypto/Ecdsa, EccPubKey
 // ================================================================
+//
+// libjnivm AllocObject/NewObject only allocate a 1-byte handle. Instance
+// state MUST live in side tables (same pattern as http_client.rs). Casting
+// `this` to a large struct was heap-corrupting XAL during key generation.
 
 mod ecdsa_impl {
     use libjnivm_sys::*;
@@ -1262,24 +1266,31 @@ mod ecdsa_impl {
         EncodedPoint,
     };
     use rand_core::OsRng;
+    use std::collections::HashMap;
     use std::ffi::{c_char, c_void, CStr, CString};
+    use std::sync::{Mutex, OnceLock};
 
-    #[repr(C)]
-    struct EcdsaObject {
-        unique_id: CString,
+    struct EcdsaState {
+        unique_id: String,
         d: [u8; 32],
         has_key: bool,
     }
-    unsafe impl Send for EcdsaObject {}
-    unsafe impl Sync for EcdsaObject {}
 
-    #[repr(C)]
-    struct PubKeyObject {
-        x: CString,
-        y: CString,
+    struct PubKeyState {
+        x: String,
+        y: String,
     }
-    unsafe impl Send for PubKeyObject {}
-    unsafe impl Sync for PubKeyObject {}
+
+    static ECDSA_STATES: OnceLock<Mutex<HashMap<usize, EcdsaState>>> = OnceLock::new();
+    static PUBKEY_STATES: OnceLock<Mutex<HashMap<usize, PubKeyState>>> = OnceLock::new();
+
+    fn ecdsa_states() -> &'static Mutex<HashMap<usize, EcdsaState>> {
+        ECDSA_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    fn pubkey_states() -> &'static Mutex<HashMap<usize, PubKeyState>> {
+        PUBKEY_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
 
     fn signing_key_from(d: &[u8; 32]) -> Option<SigningKey> {
         let secret = p256::SecretKey::from_slice(&d[..]).ok()?;
@@ -1300,77 +1311,163 @@ mod ecdsa_impl {
         Some((x, y))
     }
 
-    fn base64url(data: &[u8]) -> CString {
+    /// Android Base64.NO_PADDING | NO_WRAP | URL_SAFE
+    fn base64url(data: &[u8]) -> String {
         let b64 = util::base64::encode(data, false);
-        let url: String = b64.chars().map(|c| match c {
-            '+' => '-',
-            '/' => '_',
-            _ => c,
-        }).collect();
-        CString::new(url).unwrap_or_default()
+        b64.chars()
+            .map(|c| match c {
+                '+' => '-',
+                '/' => '_',
+                _ => c,
+            })
+            .collect()
     }
 
-    unsafe extern "C" fn ecdsa_init(_env: *mut JNIEnv, _this: jobject) {
+    fn new_jstring(env: *mut JNIEnv, s: &str) -> jobject {
+        let iface = unsafe { *(env as *mut *mut JNINativeInterface) };
+        let f = match unsafe { (*iface).NewStringUTF } {
+            Some(f) => f,
+            None => return std::ptr::null_mut(),
+        };
+        let c = CString::new(s).unwrap_or_default();
+        unsafe { f(env, c.as_ptr()) as jobject }
+    }
+
+    /// libjnivm jbyteArray is a Box<Vec<jbyte>>.
+    fn new_jbyte_array(data: &[u8]) -> jobject {
+        let v: Vec<i8> = data.iter().map(|&b| b as i8).collect();
+        Box::into_raw(Box::new(v)) as jobject
+    }
+
+    /// Opaque 1-byte handle matching libjnivm AllocObject layout.
+    fn new_handle() -> jobject {
+        Box::into_raw(Box::new(1u8)) as jobject
+    }
+
+    unsafe extern "C" fn ecdsa_init(_env: *mut JNIEnv, this: jobject) {
+        if this.is_null() {
+            return;
+        }
+        if let Ok(mut map) = ecdsa_states().lock() {
+            map.insert(
+                this as usize,
+                EcdsaState {
+                    unique_id: String::new(),
+                    d: [0u8; 32],
+                    has_key: false,
+                },
+            );
+        }
+        log::debug!("ecdsa: <init> this={:p}", this);
     }
 
     unsafe extern "C" fn ecdsa_generateKey(
-        env: *mut JNIEnv, this: jobject, unique_id: jstring,
+        env: *mut JNIEnv,
+        this: jobject,
+        unique_id: jstring,
     ) {
-        let obj = &mut *(this as *mut EcdsaObject);
-        let sk = SigningKey::random(&mut OsRng);
-        obj.d = sk.to_bytes().into();
-        obj.has_key = true;
-        let iface = *(env as *mut *mut JNINativeInterface);
-        let chars = match (*iface).GetStringUTFChars {
-            Some(f) => f(env, unique_id, std::ptr::null_mut()),
-            None => return,
-        };
-        if !chars.is_null() {
-            obj.unique_id = CString::new(CStr::from_ptr(chars).to_bytes()).unwrap_or_default();
-            let release = (*iface).ReleaseStringUTFChars;
-            if let Some(f) = release { f(env, unique_id, chars); }
+        if this.is_null() {
+            return;
         }
+        let sk = SigningKey::random(&mut OsRng);
+        let d: [u8; 32] = sk.to_bytes().into();
+
+        let mut uid = String::new();
+        if !unique_id.is_null() {
+            let iface = *(env as *mut *mut JNINativeInterface);
+            if let Some(get_chars) = (*iface).GetStringUTFChars {
+                let chars = get_chars(env, unique_id, std::ptr::null_mut());
+                if !chars.is_null() {
+                    uid = CStr::from_ptr(chars).to_string_lossy().into_owned();
+                    if let Some(release) = (*iface).ReleaseStringUTFChars {
+                        release(env, unique_id, chars);
+                    }
+                }
+            }
+        }
+
+        if let Ok(mut map) = ecdsa_states().lock() {
+            map.insert(
+                this as usize,
+                EcdsaState {
+                    unique_id: uid.clone(),
+                    d,
+                    has_key: true,
+                },
+            );
+        }
+        log::info!("ecdsa: generateKey this={:p} unique_id={}", this, uid);
     }
 
     unsafe extern "C" fn ecdsa_sign(
-        env: *mut JNIEnv, this: jobject, data: jbyteArray,
+        env: *mut JNIEnv,
+        this: jobject,
+        data: jbyteArray,
     ) -> jobject {
-        let obj = &*(this as *const EcdsaObject);
-        if !obj.has_key { return std::ptr::null_mut(); }
-        let sk = match signing_key_from(&obj.d) {
+        if this.is_null() || data.is_null() {
+            return std::ptr::null_mut();
+        }
+        let (d, has_key) = {
+            let map = match ecdsa_states().lock() {
+                Ok(m) => m,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            match map.get(&(this as usize)) {
+                Some(s) if s.has_key => (s.d, true),
+                _ => {
+                    log::warn!("ecdsa: sign called without key this={:p}", this);
+                    return std::ptr::null_mut();
+                }
+            }
+        };
+        if !has_key {
+            return std::ptr::null_mut();
+        }
+        let sk = match signing_key_from(&d) {
             Some(sk) => sk,
             None => return std::ptr::null_mut(),
         };
+
         let iface = *(env as *mut *mut JNINativeInterface);
         let elems = match (*iface).GetByteArrayElements {
             Some(f) => f(env, data, std::ptr::null_mut()),
             None => return std::ptr::null_mut(),
         };
+        if elems.is_null() {
+            return std::ptr::null_mut();
+        }
         let len = match (*iface).GetArrayLength {
             Some(f) => f(env, data as jarray),
             None => return std::ptr::null_mut(),
         };
         let msg = std::slice::from_raw_parts(elems as *const u8, len as usize);
         let sig: Signature = sk.sign(msg);
-        let r_bytes = sig.r().to_bytes();
-        let s_bytes = sig.s().to_bytes();
-        let mut result = Vec::with_capacity(64);
-        result.extend_from_slice(&r_bytes);
-        result.extend_from_slice(&s_bytes);
-        // Release elements
+        // Fixed 64-byte r||s (P-256 field size), matching OpenSSL BN_bn2binpad path.
+        let sig_bytes = sig.to_bytes();
         if let Some(f) = (*iface).ReleaseByteArrayElements {
             f(env, data, elems, 0);
         }
-        let v: Vec<i8> = result.into_iter().map(|b| b as i8).collect();
-        Box::into_raw(Box::new(v)) as jobject
+        new_jbyte_array(sig_bytes.as_slice())
     }
 
     unsafe extern "C" fn ecdsa_getPublicKey(
-        _env: *mut JNIEnv, this: jobject,
+        _env: *mut JNIEnv,
+        this: jobject,
     ) -> jobject {
-        let obj = &*(this as *const EcdsaObject);
-        if !obj.has_key { return std::ptr::null_mut(); }
-        let sk = match signing_key_from(&obj.d) {
+        if this.is_null() {
+            return std::ptr::null_mut();
+        }
+        let d = {
+            let map = match ecdsa_states().lock() {
+                Ok(m) => m,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            match map.get(&(this as usize)) {
+                Some(s) if s.has_key => s.d,
+                _ => return std::ptr::null_mut(),
+            }
+        };
+        let sk = match signing_key_from(&d) {
             Some(sk) => sk,
             None => return std::ptr::null_mut(),
         };
@@ -1378,118 +1475,166 @@ mod ecdsa_impl {
             Some(c) => c,
             None => return std::ptr::null_mut(),
         };
-        Box::into_raw(Box::new(PubKeyObject {
-            x: base64url(&x),
-            y: base64url(&y),
-        })) as jobject
+        let handle = new_handle();
+        if let Ok(mut map) = pubkey_states().lock() {
+            map.insert(
+                handle as usize,
+                PubKeyState {
+                    x: base64url(&x),
+                    y: base64url(&y),
+                },
+            );
+        }
+        handle
     }
 
     unsafe extern "C" fn ecdsa_getUniqueId(
-        env: *mut JNIEnv, this: jobject,
+        env: *mut JNIEnv,
+        this: jobject,
     ) -> jobject {
-        let obj = &*(this as *const EcdsaObject);
-        let iface = *(env as *mut *mut JNINativeInterface);
-        let f = match (*iface).NewStringUTF {
-            Some(f) => f,
-            None => return std::ptr::null_mut(),
+        if this.is_null() {
+            return std::ptr::null_mut();
+        }
+        let uid = {
+            let map = match ecdsa_states().lock() {
+                Ok(m) => m,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            match map.get(&(this as usize)) {
+                Some(s) => s.unique_id.clone(),
+                None => String::new(),
+            }
         };
-        f(env, obj.unique_id.as_ptr()) as jobject
+        new_jstring(env, &uid)
     }
 
     unsafe extern "C" fn ecdsa_restoreKeyAndId(
-        _env: *mut JNIEnv, _clazz: jclass, _ctx: jobject,
+        _env: *mut JNIEnv,
+        _clazz: jclass,
+        _ctx: jobject,
     ) -> jobject {
+        // Upstream mcpelauncher also returns null — force generateKey path.
         std::ptr::null_mut()
     }
 
     // ---- EccPubKey methods ----
     unsafe extern "C" fn pubkey_getBase64UrlX(
-        env: *mut JNIEnv, this: jobject,
+        env: *mut JNIEnv,
+        this: jobject,
     ) -> jobject {
-        let obj = &*(this as *const PubKeyObject);
-        let iface = *(env as *mut *mut JNINativeInterface);
-        let f = match (*iface).NewStringUTF {
-            Some(f) => f,
-            None => return std::ptr::null_mut(),
+        if this.is_null() {
+            return std::ptr::null_mut();
+        }
+        let x = {
+            let map = match pubkey_states().lock() {
+                Ok(m) => m,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            match map.get(&(this as usize)) {
+                Some(s) => s.x.clone(),
+                None => return std::ptr::null_mut(),
+            }
         };
-        f(env, obj.x.as_ptr()) as jobject
+        new_jstring(env, &x)
     }
 
     unsafe extern "C" fn pubkey_getBase64UrlY(
-        env: *mut JNIEnv, this: jobject,
+        env: *mut JNIEnv,
+        this: jobject,
     ) -> jobject {
-        let obj = &*(this as *const PubKeyObject);
-        let iface = *(env as *mut *mut JNINativeInterface);
-        let f = match (*iface).NewStringUTF {
-            Some(f) => f,
-            None => return std::ptr::null_mut(),
+        if this.is_null() {
+            return std::ptr::null_mut();
+        }
+        let y = {
+            let map = match pubkey_states().lock() {
+                Ok(m) => m,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            match map.get(&(this as usize)) {
+                Some(s) => s.y.clone(),
+                None => return std::ptr::null_mut(),
+            }
         };
-        f(env, obj.y.as_ptr()) as jobject
+        new_jstring(env, &y)
     }
 
     fn reg(env: *mut JNIEnv, class_name: &[u8], methods: &[JNINativeMethod]) {
         let cls = unsafe { jnivm_find_class(env, class_name.as_ptr() as *const c_char) };
         if cls.is_null() {
-            log::warn!("ecdsa: FindClass failed: {:?}",
-                       std::str::from_utf8(class_name));
+            log::warn!(
+                "ecdsa: FindClass failed: {:?}",
+                std::str::from_utf8(class_name)
+            );
             return;
         }
-        if methods.is_empty() { return; }
-        let rc = unsafe { jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32) };
+        if methods.is_empty() {
+            return;
+        }
+        let rc =
+            unsafe { jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32) };
         if rc != 0 {
-            log::warn!("ecdsa: RegisterNatives failed for {:?}",
-                       std::str::from_utf8(class_name));
+            log::warn!(
+                "ecdsa: RegisterNatives failed for {:?}",
+                std::str::from_utf8(class_name)
+            );
         }
     }
 
     pub fn register(env: *mut JNIEnv) {
-        // Ecdsa class
-        reg(env, b"com/microsoft/xal/crypto/Ecdsa\0", &[
-            JNINativeMethod {
-                name: b"<init>\0".as_ptr() as *const c_char,
-                signature: b"()V\0".as_ptr() as *const c_char,
-                fnPtr: ecdsa_init as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"generateKey\0".as_ptr() as *const c_char,
-                signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
-                fnPtr: ecdsa_generateKey as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"sign\0".as_ptr() as *const c_char,
-                signature: b"([B)[B\0".as_ptr() as *const c_char,
-                fnPtr: ecdsa_sign as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"getPublicKey\0".as_ptr() as *const c_char,
-                signature: b"()Lcom/microsoft/xal/crypto/EccPubKey;\0".as_ptr() as *const c_char,
-                fnPtr: ecdsa_getPublicKey as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"getUniqueId\0".as_ptr() as *const c_char,
-                signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
-                fnPtr: ecdsa_getUniqueId as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"restoreKeyAndId\0".as_ptr() as *const c_char,
-                signature: b"(Landroid/content/Context;)Lcom/microsoft/xal/crypto/Ecdsa;\0".as_ptr() as *const c_char,
-                fnPtr: ecdsa_restoreKeyAndId as *mut c_void,
-            },
-        ]);
+        reg(
+            env,
+            b"com/microsoft/xal/crypto/Ecdsa\0",
+            &[
+                JNINativeMethod {
+                    name: b"<init>\0".as_ptr() as *const c_char,
+                    signature: b"()V\0".as_ptr() as *const c_char,
+                    fnPtr: ecdsa_init as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"generateKey\0".as_ptr() as *const c_char,
+                    signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
+                    fnPtr: ecdsa_generateKey as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"sign\0".as_ptr() as *const c_char,
+                    signature: b"([B)[B\0".as_ptr() as *const c_char,
+                    fnPtr: ecdsa_sign as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"getPublicKey\0".as_ptr() as *const c_char,
+                    signature: b"()Lcom/microsoft/xal/crypto/EccPubKey;\0".as_ptr() as *const c_char,
+                    fnPtr: ecdsa_getPublicKey as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"getUniqueId\0".as_ptr() as *const c_char,
+                    signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+                    fnPtr: ecdsa_getUniqueId as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"restoreKeyAndId\0".as_ptr() as *const c_char,
+                    signature: b"(Landroid/content/Context;)Lcom/microsoft/xal/crypto/Ecdsa;\0"
+                        .as_ptr() as *const c_char,
+                    fnPtr: ecdsa_restoreKeyAndId as *mut c_void,
+                },
+            ],
+        );
 
-        // EccPubKey class
-        reg(env, b"com/microsoft/xal/crypto/EccPubKey\0", &[
-            JNINativeMethod {
-                name: b"getBase64UrlX\0".as_ptr() as *const c_char,
-                signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
-                fnPtr: pubkey_getBase64UrlX as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"getBase64UrlY\0".as_ptr() as *const c_char,
-                signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
-                fnPtr: pubkey_getBase64UrlY as *mut c_void,
-            },
-        ]);
+        reg(
+            env,
+            b"com/microsoft/xal/crypto/EccPubKey\0",
+            &[
+                JNINativeMethod {
+                    name: b"getBase64UrlX\0".as_ptr() as *const c_char,
+                    signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+                    fnPtr: pubkey_getBase64UrlX as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"getBase64UrlY\0".as_ptr() as *const c_char,
+                    signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+                    fnPtr: pubkey_getBase64UrlY as *mut c_void,
+                },
+            ],
+        );
 
         log::info!("ecdsa: com/microsoft/xal/crypto/Ecdsa + EccPubKey registered");
     }

@@ -501,14 +501,44 @@ extern "C" void JNICALL MainActivity_setClipboard(JNIEnv* env, jobject self, jst
 
 extern "C" void JNICALL MainActivity_initializeXboxLive(JNIEnv* env, jobject self, jlong xalinit, jlong xblinit) {
     fprintf(stderr, "[MainActivity] initializeXboxLive\n");
+    jclass cls = env->GetObjectClass(self);
+    jmethodID mid = env->GetMethodID(cls, "nativeInitializeXboxLive", "(JJ)V");
+    if (mid) {
+        env->CallVoidMethod(self, mid, xalinit, xblinit);
+    } else {
+        fprintf(stderr, "[MainActivity] initializeXboxLive: nativeInitializeXboxLive not found\n");
+    }
+    env->DeleteLocalRef(cls);
 }
 
 extern "C" jlong JNICALL MainActivity_initializeXboxLive2(JNIEnv* env, jobject self, jlong xalinit, jlong xblinit) {
+    fprintf(stderr, "[MainActivity] initializeXboxLive2\n");
+    jclass cls = env->GetObjectClass(self);
+    jmethodID mid = env->GetMethodID(cls, "nativeInitializeXboxLive", "(JJ)V");
+    if (mid) {
+        env->CallVoidMethod(self, mid, xalinit, xblinit);
+    } else {
+        fprintf(stderr, "[MainActivity] initializeXboxLive2: nativeInitializeXboxLive not found\n");
+    }
+    env->DeleteLocalRef(cls);
     return 0;
 }
 
 extern "C" jlong JNICALL MainActivity_initializeLibHttpClient(JNIEnv* env, jobject self, jlong init) {
-    return 0;
+    fprintf(stderr, "[MainActivity] initializeLibHttpClient\n");
+    jclass cls = env->GetObjectClass(self);
+    jmethodID mid = env->GetMethodID(cls, "nativeinitializeLibHttpClient", "(J)J");
+    if (!mid) {
+        mid = env->GetMethodID(cls, "nativeInitializeLibHttpClient", "(J)J");
+    }
+    jlong ret = 0;
+    if (mid) {
+        ret = env->CallLongMethod(self, mid, init);
+    } else {
+        fprintf(stderr, "[MainActivity] initializeLibHttpClient: native method not found\n");
+    }
+    env->DeleteLocalRef(cls);
+    return ret;
 }
 
 extern "C" void JNICALL MainActivity_startPlayIntegrityCheck(JNIEnv* env, jobject self) {}

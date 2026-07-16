@@ -276,6 +276,46 @@ extern "C" {
     fn core_patches_hide_mouse_pointer();
 }
 
+/// Patch `XalInitialize` to an immediate `return S_OK` so Xbox Auth Library
+/// never runs CreateGlobalState. With stubbed libHttpClient, real XAL init
+/// either throws uncaught `Xal::Exception` (HCInitialize → E_FAIL) or
+/// SIGSEGVs on a bad object pointer. Offline / main-menu play does not need
+/// XAL; Xbox Live features remain unavailable until real HTTP+XAL work.
+unsafe fn patch_xal_initialize_noop(handle: *mut c_void) {
+    let sym = core_linker_dlsym(handle, c"XalInitialize".as_ptr());
+    if sym.is_null() {
+        log::warn!("CorePatches: XalInitialize not found — cannot soft-disable XAL");
+        return;
+    }
+    // xor eax, eax ; ret  →  S_OK (0)
+    let patch: [u8; 3] = [0x31, 0xc0, 0xc3];
+    let page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+    let addr = sym as usize;
+    let page = addr & !(page_size - 1);
+    let len = (addr + patch.len() + page_size - 1) & !(page_size - 1);
+    let len = len - page;
+    if libc::mprotect(
+        page as *mut c_void,
+        len,
+        libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+    ) != 0
+    {
+        log::warn!(
+            "CorePatches: mprotect failed for XalInitialize patch at {:p}: {}",
+            sym,
+            std::io::Error::last_os_error()
+        );
+        return;
+    }
+    std::ptr::copy_nonoverlapping(patch.as_ptr(), sym as *mut u8, patch.len());
+    // Best-effort restore RX (ignore failure — some kernels keep W^X)
+    let _ = libc::mprotect(page as *mut c_void, len, libc::PROT_READ | libc::PROT_EXEC);
+    log::info!(
+        "CorePatches: patched XalInitialize at {:p} → return S_OK (XAL disabled)",
+        sym
+    );
+}
+
 /// Installs vtable patches on the game library. Called from
 /// CorePatches::install() in core_patches_stub.cpp.
 #[no_mangle]
@@ -284,23 +324,25 @@ pub unsafe extern "C" fn core_patches_install_impl(handle: *mut c_void) {
     let vtable_ptr = core_linker_dlsym(handle, vtable_sym.as_ptr());
     if vtable_ptr.is_null() {
         log::warn!("CorePatches: vtable _ZTV21AppPlatform_android23 not found");
-        return;
-    }
-    let vta = (vtable_ptr as *mut *mut c_void).add(2);
-    // vta points to first virtual function entry (skipping typeinfo + offset)
+    } else {
+        let vta = (vtable_ptr as *mut *mut c_void).add(2);
+        // vta points to first virtual function entry (skipping typeinfo + offset)
 
-    core_vtable_replace(
-        handle,
-        vta,
-        c"_ZN11AppPlatform16hideMousePointerEv".as_ptr(),
-        core_patches_hide_mouse_pointer as *mut c_void,
-    );
-    core_vtable_replace(
-        handle,
-        vta,
-        c"_ZN11AppPlatform16showMousePointerEv".as_ptr(),
-        core_patches_show_mouse_pointer as *mut c_void,
-    );
+        core_vtable_replace(
+            handle,
+            vta,
+            c"_ZN11AppPlatform16hideMousePointerEv".as_ptr(),
+            core_patches_hide_mouse_pointer as *mut c_void,
+        );
+        core_vtable_replace(
+            handle,
+            vta,
+            c"_ZN11AppPlatform16showMousePointerEv".as_ptr(),
+            core_patches_show_mouse_pointer as *mut c_void,
+        );
+    }
+
+    patch_xal_initialize_noop(handle);
 }
 
 // === WindowCallbacks key mapping (ported from window_callbacks.cpp) ===
