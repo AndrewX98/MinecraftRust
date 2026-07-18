@@ -365,6 +365,10 @@ void mc_relocate_glesv2_symbols(void* (*resolver)(const char*)) {
         }
     }
     linker::relocate(g_glesv2_handle, syms);
+    // Mirror into Rust linker so the game (Rust-loaded) binds real GL entry points.
+    mirror_rust_add_symbols("libGLESv2.so", syms);
+    fprintf(stderr, "LAUNCHER: relocated %zu GLESv2 symbols into C++ and Rust linkers\n",
+            syms.size());
 }
 
 } // extern "C"

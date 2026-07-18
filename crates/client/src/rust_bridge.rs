@@ -1158,31 +1158,6 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
                 GL_DRAW_COUNT.load(Ordering::Relaxed),
             );
         }
-        // One-shot presentation probe: clear green then read back after a
-        // later sample to separate "game draws black" from "swap broken".
-        if n == 30 {
-            if let (Some(cc), Some(cl), Some(rp), Some(ge)) = (
-                REAL_GL_CLEAR_COLOR.load(Ordering::SeqCst).as_ref(),
-                REAL_GL_CLEAR.load(Ordering::SeqCst).as_ref(),
-                REAL_GL_READ_PIXELS.load(Ordering::SeqCst).as_ref(),
-                REAL_GL_GET_ERROR.load(Ordering::SeqCst).as_ref(),
-            ) {
-                let clear_color: extern "C" fn(f32, f32, f32, f32) = std::mem::transmute(cc);
-                let clear: extern "C" fn(u32) = std::mem::transmute(cl);
-                let read_px: extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void) =
-                    std::mem::transmute(rp);
-                let get_err: extern "C" fn() -> u32 = std::mem::transmute(ge);
-                while get_err() != 0 {}
-                clear_color(0.0, 1.0, 0.0, 1.0);
-                clear(0x00004000); // GL_COLOR_BUFFER_BIT
-                let mut px = [0u8; 4];
-                read_px(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.as_mut_ptr() as *mut c_void);
-                log::warn!(
-                    "[FakeEGL] post-force-clear green sample px=[{},{},{},{}] glerr=0x{:x}",
-                    px[0], px[1], px[2], px[3], get_err()
-                );
-            }
-        }
     }
 
     if !win.is_null() {
@@ -1368,35 +1343,105 @@ pub unsafe extern "C" fn fake_egl_install_library() {
     }
 }
 
+/// No-op for glVertexAttribDivisor* — safe if called with unused instance rates.
+#[no_mangle]
+pub unsafe extern "C" fn fake_egl_gl_vertex_attrib_divisor_stub(_index: u32, _divisor: u32) {}
+
+/// No-op for glDraw*Instanced* — used only if the host has no real entry point.
+#[no_mangle]
+pub unsafe extern "C" fn fake_egl_gl_draw_arrays_instanced_stub(
+    _mode: u32, _first: i32, _count: i32, _primcount: i32,
+) {
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fake_egl_gl_draw_elements_instanced_stub(
+    _mode: u32, _count: i32, _typ: u32, _indices: *const c_void, _primcount: i32,
+) {
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn fake_egl_setup_gl_overrides() {
     let mut overrides = HOST_PROC_OVERRIDES.lock().unwrap();
 
-    // MESA 23.1+ blackscreen workaround (RenderDragon 1.18.30+).
-    // Game uses instanced-draw extensions that draw black on Mesa; null the
-    // entry points so eglGetProcAddress reports them unavailable and the game
-    // falls back to non-instanced paths. Cover OES / EXT / core names — newer
-    // GLES resolves the non-OES symbols even when only OES was historically
-    // patched (see mcpelauncher-client#66 and MESA_EXTENSION_OVERRIDE docs).
+    // Minecraft 1.21+ / 1.26 calls glVertexAttribDivisor / glDraw*Instanced
+    // without null-checking eglGetProcAddress. Returning NULL (the old Mesa
+    // 23.1 blackscreen workaround) SIGSEGVs on the Rendering Pool thread.
+    // Prefer the real host entry points; only fall back to no-ops if missing.
+    // MESA_EXTENSION_OVERRIDE in main.rs still hides the extension string for
+    // drivers that need the non-instanced path.
+    let resolver_ptr = HOST_PROC_ADDR_FN.load(Ordering::SeqCst);
+    let resolve = |name: &CStr| -> *mut c_void {
+        if resolver_ptr.is_null() {
+            return std::ptr::null_mut();
+        }
+        let resolver: extern "C" fn(*const c_char) -> *mut c_void =
+            std::mem::transmute(resolver_ptr);
+        resolver(name.as_ptr())
+    };
+
+    let divisor = {
+        let p = resolve(c"glVertexAttribDivisor");
+        if p.is_null() { resolve(c"glVertexAttribDivisorOES") } else { p }
+    };
+    let divisor_fn = if divisor.is_null() {
+        fake_egl_gl_vertex_attrib_divisor_stub as *mut c_void
+    } else {
+        divisor
+    };
     for name in [
-        "glDrawElementsInstancedOES",
-        "glDrawArraysInstancedOES",
-        "glVertexAttribDivisorOES",
-        "glDrawElementsInstancedEXT",
-        "glDrawArraysInstancedEXT",
-        "glVertexAttribDivisorEXT",
-        "glDrawElementsInstanced",
-        "glDrawArraysInstanced",
         "glVertexAttribDivisor",
-        "glDrawElementsInstancedANGLE",
-        "glDrawArraysInstancedANGLE",
+        "glVertexAttribDivisorOES",
+        "glVertexAttribDivisorEXT",
         "glVertexAttribDivisorANGLE",
-        "glDrawElementsInstancedNV",
-        "glDrawArraysInstancedNV",
         "glVertexAttribDivisorNV",
     ] {
-        overrides.insert(name.into(), SendPtr(std::ptr::null_mut()));
+        overrides.insert(name.into(), SendPtr(divisor_fn));
     }
+
+    let draw_arrays_i = {
+        let p = resolve(c"glDrawArraysInstanced");
+        if p.is_null() { resolve(c"glDrawArraysInstancedOES") } else { p }
+    };
+    let draw_arrays_i_fn = if draw_arrays_i.is_null() {
+        fake_egl_gl_draw_arrays_instanced_stub as *mut c_void
+    } else {
+        draw_arrays_i
+    };
+    for name in [
+        "glDrawArraysInstanced",
+        "glDrawArraysInstancedOES",
+        "glDrawArraysInstancedEXT",
+        "glDrawArraysInstancedANGLE",
+        "glDrawArraysInstancedNV",
+    ] {
+        overrides.insert(name.into(), SendPtr(draw_arrays_i_fn));
+    }
+
+    let draw_elements_i = {
+        let p = resolve(c"glDrawElementsInstanced");
+        if p.is_null() { resolve(c"glDrawElementsInstancedOES") } else { p }
+    };
+    let draw_elements_i_fn = if draw_elements_i.is_null() {
+        fake_egl_gl_draw_elements_instanced_stub as *mut c_void
+    } else {
+        draw_elements_i
+    };
+    for name in [
+        "glDrawElementsInstanced",
+        "glDrawElementsInstancedOES",
+        "glDrawElementsInstancedEXT",
+        "glDrawElementsInstancedANGLE",
+        "glDrawElementsInstancedNV",
+    ] {
+        overrides.insert(name.into(), SendPtr(draw_elements_i_fn));
+    }
+
+    log::info!(
+        "[FakeEGL] instanced GL: divisor={:p} drawArraysI={:p} drawElementsI={:p} (null→stub)",
+        divisor_fn, draw_arrays_i_fn, draw_elements_i_fn
+    );
+
     // NVIDIA stub (void glInvalidateFramebuffer(...); stub must not return a value
     // via an unrelated EGL function — use a true no-op).
     overrides.insert(
