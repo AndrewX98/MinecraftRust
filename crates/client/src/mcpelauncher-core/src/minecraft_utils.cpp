@@ -996,9 +996,9 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         for(auto&& h : hooks) {
             if(h.name) {
                 void* addr = linker::dlsym(handle, h.name);
-                printf("Found hook: %s @ %p (stub=%p)\n", h.name, addr, h.value);
+                Log::trace("MinecraftUtils", "Found hook: %s @ %p (stub=%p)", h.name, addr, h.value);
                 if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
-                    printf("with value: %p\n", h.value);
+                    Log::trace("MinecraftUtils", "with value: %p", h.value);
                     res->second.callback(res->second.user, h.value);
                 }
             }
@@ -1027,9 +1027,9 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             }
             for(auto&& h : hooks) {
                 if(h.name) {
-                    printf("Found hook: %s @ %p\n", h.name, linker::dlsym(handle, h.name));
+                    Log::trace("MinecraftUtils", "Found hook: %s @ %p", h.name, linker::dlsym(handle, h.name));
                     if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
-                        printf("with value: %p\n", h.value);
+                        Log::trace("MinecraftUtils", "with value: %p", h.value);
                         res->second.callback(res->second.user, h.value);
                     }
                 }

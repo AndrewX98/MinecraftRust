@@ -131,6 +131,7 @@ pub unsafe fn handle_xevent(dpy: *mut Display, xevent: &mut XEvent) {
             if let Some(win) = &mut STATE.current_window {
                 win.width = ev.width;
                 win.height = ev.height;
+                crate::rust_bridge::fake_window_set_size(ev.width, ev.height);
                 if let Some(cb) = win.reshape_cb {
                     cb(ev.width, ev.height);
                 }

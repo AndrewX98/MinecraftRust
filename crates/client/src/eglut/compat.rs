@@ -116,14 +116,22 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
     XFlush(dpy);
     // Wait briefly for MapNotify so the first game-thread eglCreateWindowSurface
     // sees a mapped window (some Mesa paths present black until mapped).
+    // Also capture any ConfigureNotify so the actual WM-assigned size is used.
+    let (mut width, mut height) = (width, height);
     {
         let mut mapped = false;
         for _ in 0..50 {
             while XPending(dpy) != 0 {
                 let mut ev: XEvent = std::mem::zeroed();
                 XNextEvent(dpy, &mut ev);
-                if ev.get_type() == MapNotify {
-                    mapped = true;
+                match ev.get_type() {
+                    MapNotify => mapped = true,
+                    ConfigureNotify => {
+                        let ce: &XConfigureEvent = ev.as_ref();
+                        width = ce.width;
+                        height = ce.height;
+                    }
+                    _ => {}
                 }
             }
             if mapped {
@@ -135,6 +143,8 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
             eprintln!("eglutCreateWindow: MapNotify not seen yet (continuing)");
         }
     }
+    // Register the actual WM-configured size before game thread starts
+    crate::rust_bridge::fake_window_set_size(width, height);
 
     // Create EGL context + window surface on this (main) thread, matching upstream
     // eglut. FakeEGL will make this context current on the game thread via

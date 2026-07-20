@@ -156,6 +156,7 @@ pub unsafe extern "C" fn eglutNativeInitWindow(dpy: *mut Display, xwin: Window, 
     }));
     STATE.current_xwin = xwin;
     STATE.num_windows = 1;
+    crate::rust_bridge::fake_window_set_size(width, height);
     eglMakeCurrent(egl_dpy, surface, surface, context);
     eglSwapInterval(egl_dpy, 1);
 }
