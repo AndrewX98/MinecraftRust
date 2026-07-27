@@ -119,7 +119,7 @@ pub fn init() {
 fn is_cpp_preloaded_dependency(name: &str) -> bool {
     matches!(
         name,
-        "libc++_shared.so" | "libfmod.so"
+        "libfmod.so"
     )
 }
 
@@ -367,6 +367,13 @@ fn load_library_internal(
                         let other_count = errs.len() - sym_count;
                         if sym_count > 0 {
                             log::warn!("linker: {} unresolved symbols in {} ({} other errors)", sym_count, name, other_count);
+                            if sym_count <= 64 {
+                                for e in &errs {
+                                    if let reloc::RelocError::SymbolNotFound(sym) = e {
+                                        log::warn!("linker: unresolved symbol in {}: {}", name, sym);
+                                    }
+                                }
+                            }
                         }
                         if other_count > 0 {
                             for e in &errs {
@@ -999,6 +1006,65 @@ pub unsafe extern "C" fn linker_rust_dlopen_pairipcore(
     }
 
     log::info!("linker: Rust dlopen_pairipcore succeeded for '{}' (handle={})", path, handle);
+    handle
+}
+
+/// Load libc++_shared.so via Rust linker.
+/// Has INIT_ARRAY (1 entry, no IFUNC, no TLS) — uses load_library_internal
+/// to run constructors, matching C++ linker::dlopen behavior.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlopen_libcxx(
+    filename: *const libc::c_char,
+) -> usize {
+    let path = unsafe { std::ffi::CStr::from_ptr(filename) }
+        .to_str()
+        .unwrap_or("");
+    if path.is_empty() {
+        return 0;
+    }
+
+    log::info!("linker: Rust dlopen_libcxx attempting '{}'", path);
+
+    let empty_map = HashMap::new();
+    let handle = load_library_internal(path, &empty_map, false);
+    if handle == 0 {
+        log::warn!("linker: Rust load_library_internal failed for '{}'", path);
+        return 0;
+    }
+
+    // Register with C++ bionic linker so dladdr/dlopen(RTLD_NOLOAD) work
+    let (base, dynamic) = {
+        let state = STATE.read().unwrap();
+        match state.libraries_by_handle.get(&handle) {
+            None => (0, 0),
+            Some(lib) => (lib.soinfo.base, lib.soinfo.dynamic.unwrap_or(0)),
+        }
+    };
+
+    if base != 0 && dynamic != 0 {
+        extern "C" {
+            fn mcpelauncher_linker_register_loaded_library(
+                name: *const libc::c_char,
+                base: usize,
+                rust_handle: usize,
+            ) -> usize;
+        }
+        let cpp_handle =
+            mcpelauncher_linker_register_loaded_library(filename, base, handle);
+        if cpp_handle != 0 {
+            log::info!(
+                "linker: libc++ C++ soinfo registration succeeded (handle={})",
+                handle
+            );
+        } else {
+            log::warn!(
+                "linker: libc++ C++ soinfo registration FAILED (base=0x{:x})",
+                base
+            );
+        }
+    }
+
+    log::info!("linker: Rust dlopen_libcxx succeeded for '{}' (handle={})", path, handle);
     handle
 }
 

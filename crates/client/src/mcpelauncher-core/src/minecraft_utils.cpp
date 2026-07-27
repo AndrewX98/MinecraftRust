@@ -29,11 +29,13 @@ extern "C" void linker_rust_add_search_path(const char* path);
 extern "C" size_t linker_rust_find_library(const char* name);
 extern "C" size_t linker_rust_dlopen_sqlite(const char* filename);
 extern "C" size_t linker_rust_dlopen_pairipcore(const char* filename);
+extern "C" size_t linker_rust_dlopen_libcxx(const char* filename);
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
 // Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker/src/linker.cpp)
 extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
 extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle);
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
@@ -588,16 +590,21 @@ void MinecraftUtils::setupApi() {
 std::unordered_map<std::string, MinecraftUtils::HookEntry> MinecraftUtils::preinitHooks;
 
 void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hideMousePointerCallback, void* fullscreenCallback, void* closeCallback, std::vector<mcpelauncher_hook_t> hooks) {
-    auto libcxx = linker::dlopen("libc++_shared.so", 0);
+    // Phase 3.3: Rust linker loads libc++_shared.so (no IFUNC, no TLS, has INIT_ARRAY)
+    size_t libcxx_rust = linker_rust_dlopen_libcxx("libc++_shared.so");
+    void* libcxx = reinterpret_cast<void*>(libcxx_rust);
     if(!libcxx) {
-        Log::error("MinecraftUtils", "Failed to load libc++_shared: %s", linker::dlerror());
+        Log::error("MinecraftUtils", "Failed to load libc++_shared via Rust linker");
+    } else {
+        Log::info("MinecraftUtils", "Loaded libc++_shared (rust_handle=%zu)", libcxx_rust);
     }
+
     // loading libfmod standalone depends on these symbols, libminecraftpe.so changes the loading automatically
     auto libstdcxx = linker::dlopen("libstdc++.so", 0);
     if(libcxx) {
-        auto __cxa_pure_virtual = linker::dlsym(libcxx, "__cxa_pure_virtual");
-        auto __cxa_guard_acquire = linker::dlsym(libcxx, "__cxa_guard_acquire");
-        auto __cxa_guard_release = linker::dlsym(libcxx, "__cxa_guard_release");
+        auto __cxa_pure_virtual = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_pure_virtual");
+        auto __cxa_guard_acquire = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_guard_acquire");
+        auto __cxa_guard_release = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_guard_release");
 
         if(__cxa_pure_virtual && __cxa_guard_acquire && __cxa_guard_release) {
             linker::relocate(libstdcxx, {{"__cxa_pure_virtual", __cxa_pure_virtual}, {"__cxa_guard_acquire", __cxa_guard_acquire}, {"__cxa_guard_release", __cxa_guard_release}});
@@ -760,7 +767,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             linker::dlclose(libc);
         }
         if(libcxx) {
-            linker::dlclose(libcxx);
+            mcpelauncher_dispatch_dlclose(libcxx);
         }
         if(libstdcxx) {
             linker::dlclose(libstdcxx);

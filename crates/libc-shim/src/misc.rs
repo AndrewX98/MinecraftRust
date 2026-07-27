@@ -84,6 +84,56 @@ pub unsafe extern "C" fn __cxa_atexit(func: Option<unsafe extern "C" fn(*mut std
 #[allow(unused_variables)]
 pub unsafe extern "C" fn __cxa_finalize(d: *mut std::ffi::c_void) { glibc___cxa_finalize(d); }
 
+// cxa_thread_atexit (pure Rust, no bionic dependency)
+struct DtorNode {
+    func: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    arg: *mut std::ffi::c_void,
+    next: *mut DtorNode,
+}
+
+thread_local! {
+    static THREAD_DTORS: std::cell::UnsafeCell<*mut DtorNode> =
+        const { std::cell::UnsafeCell::new(std::ptr::null_mut()) };
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __cxa_thread_atexit_impl(
+    func: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    arg: *mut std::ffi::c_void,
+    _dso_handle: *mut std::ffi::c_void,
+) -> i32 {
+    let node = Box::into_raw(Box::new(DtorNode {
+        func,
+        arg,
+        next: std::ptr::null_mut(),
+    }));
+    THREAD_DTORS.with(|dtors| {
+        unsafe {
+            (*node).next = *dtors.get();
+            *dtors.get() = node;
+        }
+    });
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __cxa_thread_finalize() {
+    THREAD_DTORS.with(|dtors| {
+        unsafe {
+            let mut current = *dtors.get();
+            while !current.is_null() {
+                let next = (*current).next;
+                if let Some(func) = (*current).func {
+                    func((*current).arg);
+                }
+                let _ = Box::from_raw(current);
+                current = next;
+            }
+            *dtors.get() = std::ptr::null_mut();
+        }
+    });
+}
+
 // thread ID
 pub unsafe extern "C" fn gettid() -> i32 { libc::syscall(libc::SYS_gettid) as i32 }
 pub unsafe extern "C" fn getrandom(buf: *mut std::ffi::c_void, len: usize, _flags: u32) -> isize {
