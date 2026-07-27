@@ -199,6 +199,7 @@ extern "C" void linker_rust_set_dlsym_fallback(void* (*fallback)(const char*));
 extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
                                          const char* const* hook_names, void* const* hook_vals,
                                          size_t hook_count);
+extern "C" size_t linker_rust_find_library(const char* name);
 
 extern "C" {
 

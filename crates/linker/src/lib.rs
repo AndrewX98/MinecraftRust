@@ -23,7 +23,7 @@ pub mod properties;
 pub mod utils;
 
 use soinfo::SoInfo;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
 
 pub type Handle = usize;
@@ -119,11 +119,7 @@ pub fn init() {
 fn is_cpp_preloaded_dependency(name: &str) -> bool {
     matches!(
         name,
-        "libc++_shared.so"
-            | "libfmod.so"
-            | "libpairipcore.so"
-            | "libsqliteX.so"
-            | "libsqlite3.so"
+        "libc++_shared.so" | "libfmod.so" | "libpairipcore.so"
     )
 }
 
@@ -872,6 +868,81 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
     rust_handle
 }
 
+/// Load libsqliteX.so via Rust linker but only register sqlite3_* symbols
+/// into global_symbols (avoids polluting with C++ ABI symbols).
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlopen_sqlite(
+    filename: *const libc::c_char,
+) -> usize {
+    let path = unsafe { std::ffi::CStr::from_ptr(filename) }
+        .to_str()
+        .unwrap_or("");
+    if path.is_empty() {
+        return 0;
+    }
+
+    log::info!("linker: Rust dlopen_sqlite attempting '{}'", path);
+
+    // Snapshot pre-existing global_symbols keys so we can detect newly-added ones
+    let existing: HashSet<String> = {
+        let state = STATE.read().unwrap();
+        state.global_symbols.keys().cloned().collect()
+    };
+
+    let empty_map = HashMap::new();
+    let handle = load_library_internal_no_ctors(path, &empty_map, false);
+    if handle == 0 {
+        log::warn!("linker: Rust load_library_internal_no_ctors failed for '{}'", path);
+        return 0;
+    }
+
+    // Remove non-sqlite3 symbols that were added by this load
+    {
+        let mut state = STATE.write().unwrap();
+        state.global_symbols.retain(|name, _| {
+            if existing.contains(name) {
+                return true;
+            }
+            name.starts_with("sqlite3") || name.starts_with("sqlite_")
+        });
+    }
+
+    // Register with C++ bionic linker so dladdr/dlopen(RTLD_NOLOAD) work
+    let (base, dynamic) = {
+        let state = STATE.read().unwrap();
+        match state.libraries_by_handle.get(&handle) {
+            None => (0, 0),
+            Some(lib) => (lib.soinfo.base, lib.soinfo.dynamic.unwrap_or(0)),
+        }
+    };
+
+    if base != 0 && dynamic != 0 {
+        extern "C" {
+            fn mcpelauncher_linker_register_loaded_library(
+                name: *const libc::c_char,
+                base: usize,
+                rust_handle: usize,
+            ) -> usize;
+        }
+        let cpp_handle =
+            mcpelauncher_linker_register_loaded_library(filename, base, handle);
+        if cpp_handle != 0 {
+            log::info!(
+                "linker: sqlite C++ soinfo registration succeeded (handle={})",
+                handle
+            );
+        } else {
+            log::warn!(
+                "linker: sqlite C++ soinfo registration FAILED (base=0x{:x})",
+                base
+            );
+        }
+    }
+
+    log::info!("linker: Rust dlopen_sqlite succeeded for '{}' (handle={})", path, handle);
+    handle
+}
+
 /// Symbol-lookup data exported from Rust SoInfo to C++ for direct soinfo
 /// field population (bypasses prelink_image for Rust-loaded ELFs).
 #[repr(C)]
@@ -1150,6 +1221,22 @@ pub unsafe extern "C" fn linker_rust_get_library_base(handle: usize) -> usize {
 #[no_mangle]
 pub unsafe extern "C" fn linker_rust_dlerror() -> *const libc::c_char {
     std::ptr::null()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_find_library(name: *const libc::c_char) -> usize {
+    let name_str = unsafe { std::ffi::CStr::from_ptr(name) }
+        .to_str()
+        .unwrap_or("");
+    if name_str.is_empty() {
+        return 0;
+    }
+    let state = STATE.read().unwrap();
+    state
+        .libraries_by_name
+        .get(name_str)
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Same as load_library_internal but skips calling init/init_array constructors.
