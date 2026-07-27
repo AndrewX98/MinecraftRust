@@ -3,22 +3,15 @@
 /// Also provides a linker::load_library wrapper so Rust can register symbols.
 
 #include "fake_egl.h"
-#include <mcpelauncher/linker.h>
 #include <dlfcn.h>
 #include <cstring>
 
-// --- linker::load_library wrapper for Rust ---
-// Takes parallel arrays of (name, func_ptr) and forwards to C++ linker,
-// also mirroring to the Rust linker state.
+// --- linker_load_library wrapper for Rust ---
+// Takes parallel arrays of (name, func_ptr) and forwards to the Rust linker.
+// Phase 2: Rust-only — no C++ linker::load_library mirror.
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
 extern "C" void linker_load_library(const char* name, const char* const* names, void* const* funcs, int count) {
-    std::unordered_map<std::string, void*> syms;
-    for (int i = 0; i < count; i++) {
-        syms[names[i]] = funcs[i];
-    }
-    linker::load_library(name, syms);
-    // Mirror to Rust linker state
     linker_load_library_rust(name, names, funcs, (size_t)count);
 }
 

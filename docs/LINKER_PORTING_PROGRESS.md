@@ -2,7 +2,7 @@
 
 **Repo:** `crates/linker/` (Rust) vs `crates/client/src/mcpelauncher-linker/` + `crates/cpp-bridge-sys/` (C++)
 
-The Rust linker handles initial symbol registration (libc, EGL) and basic `dlopen`/`dlsym`/`dlclose`/`dladdr`/`dlerror`. The C++ bionic linker still drives all game library loading (`libminecraftpe.so`, `libfmod.so`, mods, hooks).
+The Rust linker handles all stub registration (libc, EGL, OpenSLES, android, etc.) and game library loading (`libminecraftpe.so`). C++ bionic linker soinfo is still created for `libminecraftpe.so` (for bionic solist compatibility with `dladdr`, `dlopen(RTLD_NOLOAD)`, libfmod) and for a few stubs (`libc.so`, `libstdc++.so`, `libaaudio.so`) that C++ code accesses via `linker::dlopen`.
 
 ## Legend
 - [x] Ported to Rust — functionally complete
@@ -303,7 +303,16 @@ The Rust linker handles initial symbol registration (libc, EGL) and basic `dlope
     - All game-handle `linker::dlsym` call sites migrated to `mcpelauncher_dispatch_dlsym`: `core_linker_dlsym`, `mc_dlsym`, `jni_bridge.cpp`, `jni_bridge_stub.cpp` symResolver, `patch_utils.cpp` `VtableReplaceHelper::replace` and `patternSearch`
     - `soinfo.dynamic` populated in `loader.rs` from PT_DYNAMIC program header
 - [ ] `mcpelauncher_linker_register_loaded_library` is dead code (no callers) — can be removed in future cleanup
-- [ ] Future: make `linker_load_library_rust()` and `linker_relocate_rust()` the primary calls once core lib loading is ported
+
+### Phase 2 (Rust-primary stub registration) — complete
+
+- [x] Init order inverted: `linker_init_rust()` called BEFORE `mcpelauncher_linker_cpp_init()`
+- [x] Stub registration inverted: Rust (`rust_load_stub`) first, C++ (`linker::load_library`) only as mirror
+- [x] Rust-only stubs (no C++ soinfo): `libOpenSLES.so`, `libGLESv1_CM.so`, `libGLESv2.so`, `liblog.so`, `libmcpelauncher_gamewindow.so`, `libEGL.so`, `libandroid.so`
+- [x] C++ soinfo still created for: `libc.so` (used by `linker::dlopen` in `loadMinecraftLib`), `libstdc++.so` (same), `libaaudio.so` / `libaaudio.so.2` (FMOD `dlopen` via libc-shim → bionic `do_dlopen`)
+- [x] `mc_relocate_glesv2_symbols` uses `rust_add_symbols` only (no C++ `linker::relocate`)
+- [x] `fake_egl_stub.cpp` `linker_load_library` delegate uses `linker_load_library_rust` only (no C++ `linker::load_library`)
+- [x] `mirror_rust_load` → `rust_load_stub`, `mirror_rust_add_symbols` → `rust_add_symbols` (renamed to reflect primary status)
 
 ## Summary
 
@@ -334,4 +343,4 @@ The Rust linker handles initial symbol registration (libc, EGL) and basic `dlope
 | dl_iterate_phdr |  | `libdl.rs` | `linker.cpp`, `dlfcn.cpp` |
 | FFI bridge |  | `lib.rs` (3 exports) | `capi.cpp`, `rust_bridge.cpp` |
 | Solist / Path parsing / Globals | [x] | `linker_main.rs` | `linker_main.cpp` (130 active lines) |
-| Primary linker | [x] | `lib.rs` (`linker_init_rust`) | C++ linker drives game loading |
+| Primary linker | [x] | `lib.rs` (`linker_init_rust`) | Rust drives stubs + game loading; C++ solist mirrors libminecraftpe + select stubs |

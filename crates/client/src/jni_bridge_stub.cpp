@@ -48,11 +48,11 @@ namespace linker {
     void* load_library(const char* name, const std::unordered_map<std::string, void*>& symbols);
 }
 
-// Rust linker FFI bridge — mirror C++ state to Rust linker
+// Rust linker FFI bridge — register stubs with the Rust linker
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
-static void mirror_rust_load(const char* name, const std::unordered_map<std::string, void*>& syms) {
+static void rust_load_stub(const char* name, const std::unordered_map<std::string, void*>& syms) {
     size_t n = syms.size();
     if (n == 0) {
         linker_load_library_rust(name, nullptr, nullptr, 0);
@@ -69,7 +69,7 @@ static void mirror_rust_load(const char* name, const std::unordered_map<std::str
     linker_load_library_rust(name, keys.data(), vals.data(), n);
 }
 
-static void mirror_rust_add_symbols(const char* name, const std::unordered_map<std::string, void*>& syms) {
+static void rust_add_symbols(const char* name, const std::unordered_map<std::string, void*>& syms) {
     size_t n = syms.size();
     if (n == 0) return;
     std::vector<const char*> keys(n);
@@ -138,23 +138,25 @@ extern "C" void mc_setup_android_hooks() {
         android_syms.insert({*p, (void*)+[](void) -> int { return 0; }});
     }
 
-    linker::load_library("libandroid.so", android_syms);
-    mirror_rust_load("libandroid.so", android_syms);
+    // Phase 2: Rust-only stub registration for libandroid.so (no C++ dlopen consumer).
+    rust_load_stub("libandroid.so", android_syms);
 
     // FMOD setOutput is stubbed to keep AAudio; FMOD then dlopen's libaaudio.so
     // and calls AAudio_* symbols. Without this shim, do_dlopen fails or the
     // Streaming Pool thread SIGSEGVs on null AAudio function pointers.
+    // NOTE: C++ soinfo is REQUIRED here — FMOD calls dlopen("libaaudio.so")
+    // through libc-shim (→ bionic __loader_dlopen), which searches the C++ solist.
     {
         std::unordered_map<std::string, void*> audio_syms;
         FakeAudio::initHybrisHooks(audio_syms);
         linker::load_library("libaaudio.so", audio_syms);
-        mirror_rust_load("libaaudio.so", audio_syms);
+        rust_load_stub("libaaudio.so", audio_syms);
     }
     {
         std::unordered_map<std::string, void*> audio_syms;
         FakeAudio::initHybrisHooks(audio_syms);
         linker::load_library("libaaudio.so.2", audio_syms);
-        mirror_rust_load("libaaudio.so.2", audio_syms);
+        rust_load_stub("libaaudio.so.2", audio_syms);
     }
 
     CorePatches::loadGameWindowLibrary();

@@ -147,10 +147,6 @@ extern "C" void* linker_cpp_dlsym_fallback(const char* name) {
     return __loader_dlsym(RTLD_DEFAULT, name, nullptr);
 }
 
-// Handle for libGLESv2.so soinfo, saved so that mc_relocate_glesv2_symbols
-// can replace stub entries with real GL functions via linker::relocate.
-static void* g_glesv2_handle = nullptr;
-
 // --- Rust linker FFI bridge ---
 // Functions for mirroring C++ linker state to the Rust linker.
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
@@ -163,9 +159,9 @@ extern "C" void __android_log_vprint();
 extern "C" void __android_log_write();
 extern "C" void __android_log_assert();
 
-/// Helper: mirror a C++ linker::load_library call to the Rust linker state.
-/// Call this AFTER the corresponding C++ linker::load_library().
-static void mirror_rust_load(const char* name, const std::unordered_map<std::string, void*>& syms) {
+/// Helper: register a stub library with the Rust linker.
+/// Converts a C++ unordered_map to parallel C arrays for Rust FFI.
+static void rust_load_stub(const char* name, const std::unordered_map<std::string, void*>& syms) {
     size_t n = syms.size();
     if (n == 0) {
         linker_load_library_rust(name, nullptr, nullptr, 0);
@@ -183,8 +179,7 @@ static void mirror_rust_load(const char* name, const std::unordered_map<std::str
 }
 
 /// Helper: add symbols to an already-registered Rust linker library.
-/// Call this when the C++ side calls linker::load_library() on an already-registered library.
-static void mirror_rust_add_symbols(const char* name, const std::unordered_map<std::string, void*>& syms) {
+static void rust_add_symbols(const char* name, const std::unordered_map<std::string, void*>& syms) {
     size_t n = syms.size();
     if (n == 0) return;
     std::vector<const char*> keys(n);
@@ -243,13 +238,16 @@ extern "C" void mcpelauncher_linker_cpp_init();
 /// Runs the core init sequence that the original main.cpp performs.
 /// Call this AFTER mc_setup_paths and mc_init_version.
 int mc_load_core_libraries(const char* lib_dir) {
-    // 0) Initialize C++ bionic linker (solist, stubs) then Rust linker.
-    //    solist_init() MUST run before any soinfo_alloc → solist_add_soinfo
-    //    or the global solist stays empty and soinfo_free will abort.
-    mcpelauncher_linker_cpp_init();
+    // 0) Initialize Rust linker first, then C++ bionic linker.
+    //    Phase 2: Rust-primary stub registration. Rust owns all stub state;
+    //    C++ soinfo is still created only for libc.so and libstdc++.so
+    //    (needed by loadMinecraftLib's linker::dlopen calls). Other stubs
+    //    (libOpenSLES, libGLESv1_CM, libGLESv2, liblog, libmcpelauncher_gamewindow)
+    //    are Rust-only with C++ registration handled elsewhere.
     linker_init_rust();
+    mcpelauncher_linker_cpp_init();
 
-    // 1) Register libc symbols with the C++ linker
+    // 1) Register libc symbols with Rust linker first, then C++
     auto libC = MinecraftUtils::getLibCSymbols();
     // NOTE: ThreadMover::hookLibC is intentionally NOT called here.
     // The original C++ launcher runs startGame on a detached helper thread so
@@ -261,8 +259,8 @@ int mc_load_core_libraries(const char* lib_dir) {
     // waits for it to signal readiness (which it does after ALooper_prepare),
     // then returns. The main thread blocks on executeMainThread but the game
     // thread runs the event loop and renders.
+    rust_load_stub("libc.so", libC);
     linker::load_library("libc.so", libC);
-    mirror_rust_load("libc.so", libC);
 
     // 2) Load libm
     MinecraftUtils::loadLibM();
@@ -283,29 +281,34 @@ int mc_load_core_libraries(const char* lib_dir) {
     }
     {
 
+        // libOpenSLES.so: Rust-only stub registration.
+        // C++ registration happens in MinecraftUtils::setupHybris().
         auto empty = std::unordered_map<std::string, void*>();
-        linker::load_library("libOpenSLES.so", empty);
-        mirror_rust_load("libOpenSLES.so", empty);
+        rust_load_stub("libOpenSLES.so", empty);
     }
     {
+        // libGLESv1_CM.so: Rust-only stub registration.
+        // C++ registration happens in MinecraftUtils::setupHybris().
         auto empty = std::unordered_map<std::string, void*>();
-        linker::load_library("libGLESv1_CM.so", empty);
-        mirror_rust_load("libGLESv1_CM.so", empty);
+        rust_load_stub("libGLESv1_CM.so", empty);
     }
     {
+        // libstdc++.so: C++ registration kept — loadMinecraftLib calls
+        // linker::dlopen("libstdc++.so", 0) directly and expects a C++ handle.
         auto empty = std::unordered_map<std::string, void*>();
+        rust_load_stub("libstdc++.so", empty);
         linker::load_library("libstdc++.so", empty);
-        mirror_rust_load("libstdc++.so", empty);
     }
 
     // Register libGLESv2.so with stub functions (real GL context needed for proper symbols)
+    // Phase 2: Rust-only — no C++ consumer needs the soinfo after GLES relocate
+    // was ported to linker_add_symbols_to_library_rust.
     {
         std::unordered_map<std::string, void*> gl_syms;
         for (const char** p = glesv2_symbols; *p != nullptr; p++) {
             gl_syms[*p] = (void*)+[](void) -> int { return 0; };
         }
-        g_glesv2_handle = linker::load_library("libGLESv2.so", gl_syms);
-        mirror_rust_load("libGLESv2.so", gl_syms);
+        rust_load_stub("libGLESv2.so", gl_syms);
     }
 
     // EGL symbols are registered by FakeEGL::installLibrary() later, after window
@@ -321,12 +324,14 @@ int mc_load_core_libraries(const char* lib_dir) {
         log_syms["__android_log_vprint"] = (void*)__android_log_vprint;
         log_syms["__android_log_write"] = (void*)__android_log_write;
         log_syms["__android_log_assert"] = (void*)__android_log_assert;
-        mirror_rust_load("liblog.so", log_syms);
+        rust_load_stub("liblog.so", log_syms);
     }
     {
+        // libmcpelauncher_gamewindow.so: Rust-only stub registration.
+        // Full C++ registration (with callbacks) happens in
+        // CorePatches::loadGameWindowLibrary().
         auto empty = std::unordered_map<std::string, void*>();
-        linker::load_library("libmcpelauncher_gamewindow.so", empty);
-        mirror_rust_load("libmcpelauncher_gamewindow.so", empty);
+        rust_load_stub("libmcpelauncher_gamewindow.so", empty);
     }
 
     // 5) Set up library search path so dlopen_ext can find libminecraftpe.so etc.
@@ -350,24 +355,22 @@ void mc_setup_graphics(void* (*proc_addr)(const char*)) {
 }
 
 /// Replace the stub libGLESv2.so symbols with real GL functions obtained via
-/// the given resolver.  This uses linker::relocate() on the existing soinfo
-/// rather than calling load_library a second time (which would create a
-/// duplicate soinfo that symbol lookups never reach).
+/// the given resolver.  Phase 2: Rust-only — uses linker_add_symbols_to_library_rust
+/// instead of linker::relocate. The game (Rust-loaded) binds real GL entry points
+/// from the Rust linker's global_symbols during dlopen_ext relocation.
 void mc_relocate_glesv2_symbols(void* (*resolver)(const char*)) {
-    if (!g_glesv2_handle) {
-        fprintf(stderr, "LAUNCHER: g_glesv2_handle is null — mc_load_core_libraries not called yet\n");
-        return;
-    }
     std::unordered_map<std::string, void*> syms;
     for (const char** p = glesv2_symbols; *p != nullptr; p++) {
         if (auto* fn = resolver(*p)) {
             syms[*p] = fn;
         }
     }
-    linker::relocate(g_glesv2_handle, syms);
-    // Mirror into Rust linker so the game (Rust-loaded) binds real GL entry points.
-    mirror_rust_add_symbols("libGLESv2.so", syms);
-    fprintf(stderr, "LAUNCHER: relocated %zu GLESv2 symbols into C++ and Rust linkers\n",
+    if (syms.empty()) {
+        fprintf(stderr, "LAUNCHER: no GLESv2 symbols resolved (missing GL driver?)\n");
+        return;
+    }
+    rust_add_symbols("libGLESv2.so", syms);
+    fprintf(stderr, "LAUNCHER: relocated %zu GLESv2 symbols into Rust linker\n",
             syms.size());
 }
 
