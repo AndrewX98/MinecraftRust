@@ -116,7 +116,6 @@ extern "C" void* linker_cpp_dlsym_fallback(const char* name) {
     static CachedLib libs[] = {
         {"libc++_shared.so", nullptr, false},
         {"libfmod.so", nullptr, false},
-        {"libpairipcore.so", nullptr, false},
         {"libsqliteX.so", nullptr, false},
         {"libc.so", nullptr, false},
         {"libm.so", nullptr, false},

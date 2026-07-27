@@ -119,7 +119,7 @@ pub fn init() {
 fn is_cpp_preloaded_dependency(name: &str) -> bool {
     matches!(
         name,
-        "libc++_shared.so" | "libfmod.so" | "libpairipcore.so"
+        "libc++_shared.so" | "libfmod.so"
     )
 }
 
@@ -940,6 +940,65 @@ pub unsafe extern "C" fn linker_rust_dlopen_sqlite(
     }
 
     log::info!("linker: Rust dlopen_sqlite succeeded for '{}' (handle={})", path, handle);
+    handle
+}
+
+/// Load libpairipcore.so via Rust linker.
+/// Publishes all 3 clean C exports (ExecuteProgram, JNI_OnLoad, JNI_OnUnload) —
+/// no C++ ABI symbols to filter.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlopen_pairipcore(
+    filename: *const libc::c_char,
+) -> usize {
+    let path = unsafe { std::ffi::CStr::from_ptr(filename) }
+        .to_str()
+        .unwrap_or("");
+    if path.is_empty() {
+        return 0;
+    }
+
+    log::info!("linker: Rust dlopen_pairipcore attempting '{}'", path);
+
+    let empty_map = HashMap::new();
+    let handle = load_library_internal_no_ctors(path, &empty_map, false);
+    if handle == 0 {
+        log::warn!("linker: Rust load_library_internal_no_ctors failed for '{}'", path);
+        return 0;
+    }
+
+    // Register with C++ bionic linker so dladdr/dlopen(RTLD_NOLOAD) work
+    let (base, dynamic) = {
+        let state = STATE.read().unwrap();
+        match state.libraries_by_handle.get(&handle) {
+            None => (0, 0),
+            Some(lib) => (lib.soinfo.base, lib.soinfo.dynamic.unwrap_or(0)),
+        }
+    };
+
+    if base != 0 && dynamic != 0 {
+        extern "C" {
+            fn mcpelauncher_linker_register_loaded_library(
+                name: *const libc::c_char,
+                base: usize,
+                rust_handle: usize,
+            ) -> usize;
+        }
+        let cpp_handle =
+            mcpelauncher_linker_register_loaded_library(filename, base, handle);
+        if cpp_handle != 0 {
+            log::info!(
+                "linker: pairipcore C++ soinfo registration succeeded (handle={})",
+                handle
+            );
+        } else {
+            log::warn!(
+                "linker: pairipcore C++ soinfo registration FAILED (base=0x{:x})",
+                base
+            );
+        }
+    }
+
+    log::info!("linker: Rust dlopen_pairipcore succeeded for '{}' (handle={})", path, handle);
     handle
 }
 

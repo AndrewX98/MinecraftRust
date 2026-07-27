@@ -28,6 +28,7 @@ extern "C" void* linker_rust_dlsym(size_t handle, const char* symbol);
 extern "C" void linker_rust_add_search_path(const char* path);
 extern "C" size_t linker_rust_find_library(const char* name);
 extern "C" size_t linker_rust_dlopen_sqlite(const char* filename);
+extern "C" size_t linker_rust_dlopen_pairipcore(const char* filename);
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
@@ -651,12 +652,14 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         }
     }
     auto libc = linker::dlopen("libc.so", 0);
-    // Detect Android Integrity Protection
-    void* pairipcore = linker::dlopen("libpairipcore.so", 0);
+    // Detect Android Integrity Protection — Rust linker loads real ELF
+    // (search path already added by mc_load_core_libraries in capi.cpp:343)
+    size_t pairipcore_handle = linker_rust_dlopen_pairipcore("libpairipcore.so");
+    void* pairipcore = reinterpret_cast<void*>(pairipcore_handle);
     if(!pairipcore) {
-        Log::error("MinecraftUtils", "Failed to load libpairipcore: %s", linker::dlerror());
+        Log::error("MinecraftUtils", "Failed to load libpairipcore: Rust linker returned 0");
     } else {
-        Log::info("MinecraftUtils", "Loaded libpairipcore");
+        Log::info("MinecraftUtils", "Loaded libpairipcore (rust_handle=%zu)", pairipcore_handle);
     }
 
     // webrtc shortcut
@@ -761,9 +764,6 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         }
         if(libstdcxx) {
             linker::dlclose(libstdcxx);
-        }
-        if(pairipcore) {
-            linker::dlclose(pairipcore);
         }
         if(handle == nullptr) {
             Log::error("MinecraftUtils", "Failed to load Minecraft: %s", linker::dlerror());
