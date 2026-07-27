@@ -6,6 +6,9 @@
 #include <stdexcept>
 #include <mcpelauncher/linker.h>
 
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+extern "C" void mcpelauncher_dispatch_get_library_code_region(void* handle, size_t* base, size_t* size);
+
 const char* PatchUtils::TAG = "Patch";
 
 void *PatchUtils::patternSearch(void *handle, const char *pattern) {
@@ -27,7 +30,7 @@ void *PatchUtils::patternSearch(void *handle, const char *pattern) {
     }
 
     size_t base, size;
-    linker::get_library_code_region(handle, base, size);
+    mcpelauncher_dispatch_get_library_code_region(handle, &base, &size);
     for (size_t i = size - patternRaw.size(); i > 0; --i) {
         for (size_t j = 0; j < patternRaw.size(); j++) {
             if (patternRaw[j] != (((unsigned char *) base)[i + j] & patternMask[j]))
@@ -75,7 +78,7 @@ void PatchUtils::patchCallInstruction(void* patchOff, void* func, bool jump) {
 }
 
 void PatchUtils::VtableReplaceHelper::replace(const char* name, void* replacement) {
-    replace(linker::dlsym(lib, name), replacement);
+    replace(mcpelauncher_dispatch_dlsym(lib, name), replacement);
 }
 
 void PatchUtils::VtableReplaceHelper::replace(void* sym, void* replacement) {

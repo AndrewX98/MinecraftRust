@@ -16,12 +16,29 @@
 
 soinfo* soinfo_from_handle(void* handle);
 
+// Rust linker FFI function declarations
+extern "C" size_t mcpelauncher_linker_get_rust_handle(void* cpp_handle);
+extern "C" size_t mcpelauncher_linker_resolve_rust_handle(void* handle);
+extern "C" size_t linker_rust_get_library_base(size_t handle);
+extern "C" size_t linker_rust_get_library_dynamic(size_t handle);
+extern "C" u_int32_t linker_rust_find_symbol_index_by_name(size_t handle, const char* name);
+
 HookManager HookManager::instance;
 
 HookManager::LibInfo::LibInfo(void *handle) : handle(handle) {
-    this->base = (void*) soinfo_from_handle(handle)->base;
+    size_t rust_handle = mcpelauncher_linker_resolve_rust_handle(handle);
+    if (rust_handle != 0) {
+        this->base = (void*) linker_rust_get_library_base(rust_handle);
+    } else {
+        this->base = (void*) soinfo_from_handle(handle)->base;
+    }
 
-    ElfW(Dyn)* dynData = (ElfW(Dyn) *) soinfo_from_handle(handle)->dynamic;
+    ElfW(Dyn)* dynData;
+    if (rust_handle != 0) {
+        dynData = (ElfW(Dyn)*) linker_rust_get_library_dynamic(rust_handle);
+    } else {
+        dynData = (ElfW(Dyn)*) soinfo_from_handle(handle)->dynamic;
+    }
 
     for (int i = 0; ; i++) {
         if (dynData[i].d_tag == DT_NULL)
@@ -128,13 +145,23 @@ void HookManager::addLibrary(void *handle) {
         return;
     auto& p = libs[handle] = std::unique_ptr<LibInfo>(new LibInfo(handle));
 
-    ElfW(Dyn)* dynData = (ElfW(Dyn) *) soinfo_from_handle(handle)->dynamic;
+    // Parse dynamic section from ELF headers in memory (handle-agnostic)
+    ElfW(Ehdr)* ehdr = (ElfW(Ehdr)*) p->base;
+    ElfW(Phdr)* phdr = (ElfW(Phdr)*)((size_t) p->base + ehdr->e_phoff);
+    ElfW(Dyn)* dynData = nullptr;
+    for (int i = 0; i < ehdr->e_phnum; i++) {
+        if (phdr[i].p_type == PT_DYNAMIC) {
+            dynData = (ElfW(Dyn)*)((size_t) p->base + phdr[i].p_vaddr);
+            break;
+        }
+    }
+    if (!dynData) return;
 
     for (int i = 0; ; i++) {
         if (dynData[i].d_tag == DT_NULL)
             break;
         if (dynData[i].d_tag == DT_NEEDED) {
-            void* dep = linker::dlopen(soinfo_from_handle(handle)->get_string(dynData[i].d_un.d_val), RTLD_NOLOAD);
+            void* dep = linker::dlopen(&p->strtab[dynData[i].d_un.d_val], RTLD_NOLOAD);
             if (dep == nullptr)
                 continue;
             p->dependencies.push_back(dep);
@@ -226,6 +253,10 @@ void HookManager::applyHooks() {
 }
 
 ElfW(Word) HookManager::getSymbolIndex(void *lib, const char *symbolName) {
+    size_t rust_handle = mcpelauncher_linker_resolve_rust_handle(lib);
+    if (rust_handle != 0) {
+        return linker_rust_find_symbol_index_by_name(rust_handle, symbolName);
+    }
     auto slib = soinfo_from_handle(lib);
     SymbolName n{ symbolName };
     auto sym = slib->find_symbol_by_name(n, nullptr);

@@ -145,3 +145,75 @@ fn find_symbol_sysv<'a>(soinfo: &'a SoInfo, name: &str) -> Option<(usize, &'a [u
 
     None
 }
+
+pub fn find_symbol_index(soinfo: &SoInfo, name: &str) -> Option<u32> {
+    if !soinfo.gnu_chain.is_empty() {
+        find_symbol_index_gnu(soinfo, name)
+    } else if !soinfo.chain.is_empty() {
+        find_symbol_index_sysv(soinfo, name)
+    } else {
+        None
+    }
+}
+
+fn find_symbol_index_gnu(soinfo: &SoInfo, name: &str) -> Option<u32> {
+    let h = gnu_hash(name);
+    let n = soinfo.gnu_bloom_n;
+    if n == 0 { return None; }
+    let bloom_idx = (h / (std::mem::size_of::<usize>() as u32 * 8)) as usize % n;
+    let bit = h % (std::mem::size_of::<usize>() as u32 * 8);
+    let bit2 = (h >> soinfo.gnu_bloom_shift as u32) % (std::mem::size_of::<usize>() as u32 * 8);
+    let word = soinfo.gnu_bloom_filter.get(bloom_idx).copied().unwrap_or(0);
+    if (word >> bit) & 1 == 0 || (word >> bit2) & 1 == 0 { return None; }
+    let bucket_idx = (h % soinfo.gnu_bucket.len() as u32) as usize;
+    let mut sym_idx = soinfo.gnu_bucket.get(bucket_idx).copied().unwrap_or(0) as usize;
+    let symoffset = soinfo.gnu_symoffset;
+    if sym_idx < symoffset { return None; }
+    loop {
+        let chain_val = soinfo.gnu_chain.get(sym_idx - symoffset).copied().unwrap_or(0);
+        if (chain_val | 1) == (h | 1) {
+            if let Some(sym) = soinfo.symtab.map(|s| unsafe {
+                let ptr = s as *const Elf64_Sym;
+                &*ptr.add(sym_idx)
+            }) {
+                let sym_name = unsafe {
+                    let strtab_ptr = (soinfo.strtab.unwrap_or(0) + sym.st_name as usize) as *const i8;
+                    std::ffi::CStr::from_ptr(strtab_ptr).to_str().unwrap_or("")
+                };
+                if sym_name == name && sym.st_shndx != 0 {
+                    return Some(sym_idx as u32);
+                }
+            }
+        }
+        if chain_val & 1 != 0 { break; }
+        sym_idx += 1;
+    }
+    None
+}
+
+fn find_symbol_index_sysv(soinfo: &SoInfo, name: &str) -> Option<u32> {
+    let h = sysv_hash(name);
+    if soinfo.bucket_count == 0 { return None; }
+    let bucket_idx = (h % soinfo.bucket_count as u32) as usize;
+    let mut sym_idx = soinfo.bucket.get(bucket_idx).copied().unwrap_or(0) as usize;
+    if sym_idx == 0 { return None; }
+    loop {
+        if let Some(sym) = soinfo.symtab.map(|s| unsafe {
+            let ptr = s as *const Elf64_Sym;
+            &*ptr.add(sym_idx)
+        }) {
+            let sym_name = unsafe {
+                let strtab_ptr = (soinfo.strtab.unwrap_or(0) + sym.st_name as usize) as *const i8;
+                std::ffi::CStr::from_ptr(strtab_ptr).to_str().unwrap_or("")
+            };
+            if sym_name == name && sym.st_shndx != 0 {
+                return Some(sym_idx as u32);
+            }
+        }
+        let chain_val = soinfo.chain.get(sym_idx).copied().unwrap_or(0) as u32;
+        if (chain_val & 0xff) == 0 { break; }
+        sym_idx = chain_val as usize;
+        if sym_idx == 0 { break; }
+    }
+    None
+}

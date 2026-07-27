@@ -23,6 +23,11 @@
 #include "splitscreen_patch.h"
 #include "shader_error_patch.h"
 #include <cstdio>
+
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+
+
+
 #include <dlfcn.h>
 
 extern "C" int eglutScreenWidth();
@@ -330,7 +335,7 @@ extern "C" void jni_support_register_minecraft_natives_cpp(void* s, void* game_h
     // This MUST be called after libminecraftpe.so is loaded but before startGame().
     // The symResolver uses linker::dlsym on the loaded game library handle.
     support->registerMinecraftNatives(+[](const char* sym) -> void* {
-        return linker::dlsym(handle, sym);
+        return mcpelauncher_dispatch_dlsym(handle, sym);
     });
 }
 
@@ -347,7 +352,7 @@ extern "C" void fake_looper_set_rust_jni_support(void* support) {
 // ============================================================
 
 extern "C" void* mc_dlsym(void* handle, const char* symbol) {
-    return linker::dlsym(handle, symbol);
+    return mcpelauncher_dispatch_dlsym(handle, symbol);
 }
 
 // (bridge function ported to Rust — see jni_support.rs)

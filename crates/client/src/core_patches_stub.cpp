@@ -25,8 +25,10 @@ extern "C" void linker_add_symbols_to_library_rust(const char* name, const char*
 
 // --- extern "C" helpers for Rust FFI ---
 
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+
 extern "C" void* core_linker_dlsym(void* handle, const char* sym) {
-    return linker::dlsym(handle, sym);
+    return mcpelauncher_dispatch_dlsym(handle, sym);
 }
 
 extern "C" void core_vtable_replace(void* lib, void** vta, const char* name, void* replacement) {

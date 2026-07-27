@@ -824,40 +824,52 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
     // linker also marks constructors as called without running them when
     // registering Rust-loaded libraries.
 
-    // Register with C++ bionic linker so C++ APIs (HookManager, linker::dlsym) work.
-    // Skip stub libraries — they are pre-registered by the C++ linker already.
-    let (is_stub, base) = {
+    // Register with C++ bionic linker solist so bionic APIs (dladdr, dlopen(RTLD_NOLOAD),
+    // symbol resolution for libfmod.so, etc.) can find this library.  Return the Rust handle
+    // regardless — all C++ consumers use mcpelauncher_dispatch_* wrappers.
+    let is_stub = {
         let state = STATE.read().unwrap();
         match state.libraries_by_handle.get(&rust_handle) {
-            None => (true, 0),
-            Some(lib) => (lib.is_stub, lib.soinfo.base),
+            None => true,
+            Some(lib) => lib.is_stub,
         }
     };
 
-    if !is_stub && base != 0 {
-        extern "C" {
-            fn mcpelauncher_linker_register_loaded_library(
-                name: *const libc::c_char,
-                base: usize,
-                rust_handle: usize,
-            ) -> usize;
+    if !is_stub {
+        let (base, dynamic) = {
+            let state = STATE.read().unwrap();
+            match state.libraries_by_handle.get(&rust_handle) {
+                None => (0, 0),
+                Some(lib) => (
+                    lib.soinfo.base,
+                    lib.soinfo.dynamic.unwrap_or(0),
+                ),
+            }
+        };
+
+        if base != 0 && dynamic != 0 {
+            extern "C" {
+                fn mcpelauncher_linker_register_loaded_library(
+                    name: *const libc::c_char,
+                    base: usize,
+                    rust_handle: usize,
+                ) -> usize;
+            }
+            let cpp_handle =
+                mcpelauncher_linker_register_loaded_library(filename, base, rust_handle);
+            if cpp_handle != 0 {
+                log::info!(
+                    "linker: C++ soinfo registration succeeded for '{}' (rust_handle={}, cpp_handle={})",
+                    path, rust_handle, cpp_handle
+                );
+            } else {
+                log::warn!("linker: C++ soinfo registration FAILED for '{}' (base=0x{:x})", path, base);
+            }
         }
-        let cpp_handle =
-            mcpelauncher_linker_register_loaded_library(filename, base, rust_handle);
-        if cpp_handle != 0 {
-            log::info!(
-                "linker: C++ soinfo registration succeeded for '{}' (rust_handle={}, cpp_handle={})",
-                path, rust_handle, cpp_handle
-            );
-            return cpp_handle; // C++ handle — all C++ APIs work natively
-        }
-        log::warn!("linker: C++ soinfo registration FAILED for '{}' (base=0x{:x})", path, base);
-    } else {
-        log::info!("linker: skipping C++ soinfo registration for '{}' (is_stub={}, base=0x{:x})", path, is_stub, base);
     }
 
-    log::warn!("linker: Rust dlopen_ext returning 0 for '{}' — caller should fall back to C++", path);
-    0
+    log::info!("linker: Rust dlopen_ext succeeded for '{}' (handle={})", path, rust_handle);
+    rust_handle
 }
 
 /// Symbol-lookup data exported from Rust SoInfo to C++ for direct soinfo
@@ -918,6 +930,95 @@ pub unsafe extern "C" fn linker_rust_get_soinfo_symbol_data(
     };
     *data = symdata;
     true
+}
+
+/// Find a Rust-loaded library by exact soname.
+/// Returns the handle, or 0 if not found.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_find_handle_by_name(name: *const libc::c_char) -> Handle {
+    let Ok(name_str) = unsafe { std::ffi::CStr::from_ptr(name) }.to_str() else {
+        return 0;
+    };
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    state.libraries_by_name.get(name_str).copied().unwrap_or(0)
+}
+
+/// Find a Rust-loaded library by its base address (exact match).
+/// Returns the handle, or 0 if not found.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_find_handle_by_base(base: usize) -> Handle {
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    for (&handle, lib) in &state.libraries_by_handle {
+        if lib.soinfo.base == base {
+            return handle;
+        }
+    }
+    0
+}
+
+/// Returns the dynamic section virtual address for a Rust-loaded library.
+/// Returns 0 if the handle is invalid or no dynamic section.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_get_library_dynamic(handle: Handle) -> usize {
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    state.libraries_by_handle.get(&handle)
+        .and_then(|lib| lib.soinfo.dynamic)
+        .unwrap_or(0)
+}
+
+/// Resolve a string from a Rust-loaded library's string table by offset.
+/// Returns a pointer to the null-terminated string, or null if out of bounds.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_get_string(
+    handle: Handle,
+    offset: u32,
+) -> *const libc::c_char {
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
+    let Some(lib) = state.libraries_by_handle.get(&handle) else {
+        return std::ptr::null();
+    };
+    let Some(strtab) = lib.soinfo.strtab else {
+        return std::ptr::null();
+    };
+    if (offset as usize) >= lib.soinfo.strtab_size {
+        return std::ptr::null();
+    }
+    (strtab + offset as usize) as *const libc::c_char
+}
+
+/// Find a symbol's index in a Rust-loaded library by name.
+/// Returns the symbol table index, or u32::MAX (-1 cast to u32) if not found.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_find_symbol_index_by_name(
+    handle: Handle,
+    name: *const libc::c_char,
+) -> u32 {
+    let Ok(name_str) = unsafe { std::ffi::CStr::from_ptr(name) }.to_str() else {
+        return u32::MAX;
+    };
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return u32::MAX,
+    };
+    let Some(lib) = state.libraries_by_handle.get(&handle) else {
+        return u32::MAX;
+    };
+    match symbol::find_symbol_index(&lib.soinfo, name_str) {
+        Some(idx) => idx,
+        None => u32::MAX,
+    }
 }
 
 /// Calls DT_INIT and DT_INIT_ARRAY constructors for a Rust-loaded library

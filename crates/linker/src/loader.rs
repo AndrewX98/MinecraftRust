@@ -112,11 +112,16 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
         }
     }
 
+    let dynamic_addr = elf.program_headers.iter()
+        .find(|ph| ph.p_type == elf::program_header::PT_DYNAMIC)
+        .map(|ph| (base + ph.p_vaddr as usize) as usize);
+
     let mut soinfo = SoInfo {
         name: name.to_string(),
         soname: String::new(),
         base,
         size: total_size,
+        dynamic: dynamic_addr,
         external_symbols: std::collections::HashMap::new(),
         ..Default::default()
     };

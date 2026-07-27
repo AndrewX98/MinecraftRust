@@ -29,6 +29,7 @@ namespace linker {
     void* dlsym(void* handle, const char* symbol);
     void* load_library(const char* name, const std::unordered_map<std::string, void*>& symbols);
 }
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
 
 struct MinecraftUtils {
     static void* loadMinecraftLib(void* showMousePointerCallback,
@@ -225,7 +226,7 @@ void mc_jni_register_natives(mc_jni_context* ctx, void* game_handle) {
     if (!ctx || !ctx->support) return;
     g_jni_game_handle = game_handle;
     ctx->support->registerMinecraftNatives(+[](const char* sym) -> void* {
-        return linker::dlsym(g_jni_game_handle, sym);
+        return mcpelauncher_dispatch_dlsym(g_jni_game_handle, sym);
     });
 }
 
@@ -234,9 +235,9 @@ void mc_jni_start_game(mc_jni_context* ctx, void* game_handle) {
     g_jni_game_handle = game_handle;
 
     auto* gameOnCreate = (void (*)(GameActivity*, void*, size_t))
-        linker::dlsym(game_handle, "GameActivity_onCreate");
-    auto* stbiLoad = linker::dlsym(game_handle, "stbi_load_from_memory");
-    auto* stbiFree = linker::dlsym(game_handle, "stbi_image_free");
+        mcpelauncher_dispatch_dlsym(game_handle, "GameActivity_onCreate");
+    auto* stbiLoad = mcpelauncher_dispatch_dlsym(game_handle, "stbi_load_from_memory");
+    auto* stbiFree = mcpelauncher_dispatch_dlsym(game_handle, "stbi_image_free");
 
     // Run startGame on the main thread (not a helper thread) because the
     // JNI env for this thread was already created during JniSupport

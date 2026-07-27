@@ -11,6 +11,11 @@
 void solist_init();
 soinfo* soinfo_from_handle(void* handle);
 
+// cpp_handle → rust_handle mapping for Rust-loaded libraries.
+// Populated by mcpelauncher_linker_register_loaded_library, queried by
+// HookManager and other C++ code that needs to access Rust linker data.
+static std::unordered_map<void*, size_t> g_cpp_to_rust_handle;
+
 /// Register an already-loaded library (loaded by the Rust linker) with the
 /// C++ bionic linker, creating a compatible soinfo so that C++ APIs like
 /// HookManager::addLibrary and linker::dlsym work transparently.
@@ -64,7 +69,71 @@ extern "C" void* mcpelauncher_linker_register_loaded_library(
     si->flags_ |= FLAG_PRELINKED | FLAG_LINKED | FLAG_IMAGE_LINKED;
     si->constructors_called = 1;
 
-    return si->to_handle();
+    void* cpp_handle = si->to_handle();
+    g_cpp_to_rust_handle[cpp_handle] = rust_handle;
+    return cpp_handle;
+}
+
+extern "C" size_t mcpelauncher_linker_get_rust_handle(void* cpp_handle) {
+    auto it = g_cpp_to_rust_handle.find(cpp_handle);
+    return it != g_cpp_to_rust_handle.end() ? it->second : 0;
+}
+
+// Rust linker FFI function declarations (defined in crates/linker/src/lib.rs)
+extern "C" void* linker_rust_dlsym(size_t handle, const char* symbol);
+extern "C" int linker_rust_dlclose(size_t handle);
+extern "C" size_t linker_rust_get_library_base(size_t handle);
+extern "C" void linker_rust_get_library_code_region(size_t handle, size_t* base, size_t* size);
+
+extern "C" size_t mcpelauncher_linker_resolve_rust_handle(void* handle) {
+    auto v = reinterpret_cast<uintptr_t>(handle);
+    if (v > 0 && v < 10000) {
+        return v;
+    }
+    return mcpelauncher_linker_get_rust_handle(handle);
+}
+
+#define resolve_rust_handle(h) mcpelauncher_linker_resolve_rust_handle(h)
+
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name) {
+    size_t rh = resolve_rust_handle(handle);
+    if (rh != 0) {
+        return linker_rust_dlsym(rh, name);
+    }
+    return __loader_dlsym(handle, name, nullptr);
+}
+
+extern "C" int mcpelauncher_dispatch_dlclose(void* handle) {
+    size_t rh = resolve_rust_handle(handle);
+    if (rh != 0) {
+        return linker_rust_dlclose(rh);
+    }
+    return __loader_dlclose(handle);
+}
+
+extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle) {
+    size_t rh = resolve_rust_handle(handle);
+    if (rh != 0) {
+        return linker_rust_get_library_base(rh);
+    }
+    auto si = soinfo_from_handle(handle);
+    return si ? si->base : 0;
+}
+
+extern "C" void mcpelauncher_dispatch_get_library_code_region(void* handle, size_t* base, size_t* size) {
+    size_t rh = resolve_rust_handle(handle);
+    if (rh != 0) {
+        linker_rust_get_library_code_region(rh, base, size);
+        return;
+    }
+    auto s = soinfo_from_handle(handle);
+    if (!s) return;
+    for (auto i = 0; i < s->phnum; i++) {
+        if (s->phdr[i].p_type == PT_LOAD && s->phdr[i].p_flags & PF_X) {
+            *base = s->base + s->phdr[i].p_vaddr;
+            *size = s->phdr[i].p_memsz;
+        }
+    }
 }
 
 namespace linker::libdl {

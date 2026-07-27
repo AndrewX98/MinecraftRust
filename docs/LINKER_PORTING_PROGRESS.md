@@ -293,9 +293,17 @@ The Rust linker handles initial symbol registration (libc, EGL) and basic `dlope
     - `MCPELAUNCHER_LINKER_RUST_ONLY=1` env gate aborts on C++ fallback (off by default)
     - Post-load solist dump from both Rust (`linker_show_state_rust`) and C++ (`mcpelauncher_linker_dump_solist_cpp`)
     - Unresolved symbol counts logged per loaded library
-- [ ] All `linker::load_library()` calls in `capi.cpp` still use C++ (handles between Rust and C++ are incompatible — Rust uses simple integers, C++ uses soinfo pointers)
-- [ ] `linker::relocate()` in `capi.cpp` still uses C++ (operates on C++ soinfo handles)
-- [ ] Future: make `linker_load_library_rust()` and `linker_relocate_rust()` the primary calls once handle representation is unified
+- [x] **Phase 1 (handle unification) complete:**
+    - `linker_rust_dlopen_ext` returns Rust handle (small integer <10000) directly — no C++ soinfo registration
+    - Handle mapping (`g_cpp_to_rust_handle`) still queried by `mcpelauncher_linker_resolve_rust_handle` for tools passing C++ handles
+    - `mcpelauncher_dispatch_*` wrappers (`dlsym`, `dlclose`, `get_library_base`, `get_library_code_region`) route Rust handles to Rust FFI, C++ handles to bionic linker
+    - `HookManager::LibInfo` constructor uses Rust FFI (base, dynamic) for Rust handles
+    - `HookManager::getSymbolIndex` uses `linker_rust_find_symbol_index_by_name` for Rust handles
+    - `HookManager::addLibrary` parses PT_DYNAMIC from base+phdr (handle-agnostic)
+    - All game-handle `linker::dlsym` call sites migrated to `mcpelauncher_dispatch_dlsym`: `core_linker_dlsym`, `mc_dlsym`, `jni_bridge.cpp`, `jni_bridge_stub.cpp` symResolver, `patch_utils.cpp` `VtableReplaceHelper::replace` and `patternSearch`
+    - `soinfo.dynamic` populated in `loader.rs` from PT_DYNAMIC program header
+- [ ] `mcpelauncher_linker_register_loaded_library` is dead code (no callers) — can be removed in future cleanup
+- [ ] Future: make `linker_load_library_rust()` and `linker_relocate_rust()` the primary calls once core lib loading is ported
 
 ## Summary
 

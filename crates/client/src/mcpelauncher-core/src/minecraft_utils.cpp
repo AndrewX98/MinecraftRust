@@ -24,6 +24,10 @@ extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
                                          const char* const* hook_names,
                                          void* const* hook_vals, size_t hook_count);
 extern "C" void* linker_rust_dlsym(size_t handle, const char* symbol);
+
+// Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker/src/linker.cpp)
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle);
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
@@ -996,15 +1000,14 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     }
 
     if (rust_handle != 0) {
-        // Rust linker loaded the game — handle is a C++-compatible soinfo handle
-        // (linker_rust_dlopen_ext registered a C++ soinfo internally).
+        // Rust linker loaded the game — handle is a Rust handle (small int).
         // Hooks were applied during Rust relocation (external_symbols preferred).
-        // Note: C++ linker::dlsym below may still show the game's own exports
-        // for defined symbols; the JUMP_SLOTs were already patched by Rust.
+        // All C++ APIs (dlsym, get_library_base, etc.) use mcpelauncher_dispatch_*
+        // which resolve Rust handles to Rust FFI calls automatically.
         handle = reinterpret_cast<void*>(rust_handle);
         for(auto&& h : hooks) {
             if(h.name) {
-                void* addr = linker::dlsym(handle, h.name);
+                void* addr = mcpelauncher_dispatch_dlsym(handle, h.name);
                 Log::trace("MinecraftUtils", "Found hook: %s @ %p (stub=%p)", h.name, addr, h.value);
                 if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
                     Log::trace("MinecraftUtils", "with value: %p", h.value);
@@ -1036,7 +1039,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             }
             for(auto&& h : hooks) {
                 if(h.name) {
-                    Log::trace("MinecraftUtils", "Found hook: %s @ %p", h.name, linker::dlsym(handle, h.name));
+                    Log::trace("MinecraftUtils", "Found hook: %s @ %p", h.name, mcpelauncher_dispatch_dlsym(handle, h.name));
                     if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
                         Log::trace("MinecraftUtils", "with value: %p", h.value);
                         res->second.callback(res->second.user, h.value);
@@ -1053,7 +1056,7 @@ const char* MinecraftUtils::getLibraryAbi() {
 }
 
 size_t MinecraftUtils::getLibraryBase(void* handle) {
-    return linker::get_library_base(handle);
+    return mcpelauncher_dispatch_get_library_base(handle);
 }
 
 void MinecraftUtils::setupGLES2Symbols(void* (*resolver)(const char*)) {
