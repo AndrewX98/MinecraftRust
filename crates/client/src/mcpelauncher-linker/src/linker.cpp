@@ -3,6 +3,7 @@
 #include "../bionic/linker/linker_soinfo.h"
 #include "../bionic/linker/linker_globals.h"
 #include "../bionic/linker/linker_debug.h"
+#include "../bionic/linker/linker_main.h"
 #include <cstdlib>
 #include <cstdint>
 #include <elf.h>
@@ -81,6 +82,16 @@ void linker::init() {
 
 extern "C" void mcpelauncher_linker_cpp_init() {
     linker::init();
+}
+
+extern "C" void mcpelauncher_linker_dump_solist_cpp() {
+    fprintf(stderr, "linker: C++ solist dump:\n");
+    for (soinfo* si = solist_get_head(); si != nullptr; si = si->next) {
+        fprintf(stderr, "  name=%s base=0x%zx size=%zu handle=%p flags=0x%x ref=%d ctors=%d\n",
+                si->get_realpath(), si->base, si->size,
+                si->to_handle(), si->flags_,
+                si->get_ref_count(), si->constructors_called);
+    }
 }
 
 void *linker::load_library(const char *name, const std::unordered_map<std::string, void *> &symbols) {

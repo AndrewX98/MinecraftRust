@@ -288,6 +288,11 @@ The Rust linker handles initial symbol registration (libc, EGL) and basic `dlope
 - [x] `capi.cpp` `mc_load_core_libraries()` calls `linker_init_rust()` instead of `linker::init()` — Rust linker is the primary entry point
 - [x] C++ bionic linker state still initialized as a side effect, keeping game library loading (`do_dlopen`, `__loader_*`) functional
 - [x] `mcpelauncher_linker_cpp_init()` added to `src/linker.cpp` as an `extern "C"` wrapper for Rust FFI call
+- [x] **Phase 0 instrumentation added:**
+    - Rust linker logs detailed success/failure per stage (load, C++ registration)
+    - `MCPELAUNCHER_LINKER_RUST_ONLY=1` env gate aborts on C++ fallback (off by default)
+    - Post-load solist dump from both Rust (`linker_show_state_rust`) and C++ (`mcpelauncher_linker_dump_solist_cpp`)
+    - Unresolved symbol counts logged per loaded library
 - [ ] All `linker::load_library()` calls in `capi.cpp` still use C++ (handles between Rust and C++ are incompatible — Rust uses simple integers, C++ uses soinfo pointers)
 - [ ] `linker::relocate()` in `capi.cpp` still uses C++ (operates on C++ soinfo handles)
 - [ ] Future: make `linker_load_library_rust()` and `linker_relocate_rust()` the primary calls once handle representation is unified

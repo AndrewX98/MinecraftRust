@@ -812,8 +812,10 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
     // Load the library (no constructors run yet)
     let rust_handle = load_library_internal_no_ctors(path, &symbols, false);
     if rust_handle == 0 {
+        log::warn!("linker: Rust load_library_internal_no_ctors failed for '{}'", path);
         return 0;
     }
+    log::info!("linker: Rust load_library_internal_no_ctors succeeded for '{}' (handle={})", path, rust_handle);
 
     // NOTE: We skip calling init functions (DT_INIT and DT_INIT_ARRAY) for
     // libminecraftpe.so because its constructors require a JNI environment
@@ -843,11 +845,18 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
         let cpp_handle =
             mcpelauncher_linker_register_loaded_library(filename, base, rust_handle);
         if cpp_handle != 0 {
+            log::info!(
+                "linker: C++ soinfo registration succeeded for '{}' (rust_handle={}, cpp_handle={})",
+                path, rust_handle, cpp_handle
+            );
             return cpp_handle; // C++ handle — all C++ APIs work natively
         }
+        log::warn!("linker: C++ soinfo registration FAILED for '{}' (base=0x{:x})", path, base);
+    } else {
+        log::info!("linker: skipping C++ soinfo registration for '{}' (is_stub={}, base=0x{:x})", path, is_stub, base);
     }
 
-    // Return 0 if stub or registration failed — C++ side falls back to C++ linker.
+    log::warn!("linker: Rust dlopen_ext returning 0 for '{}' — caller should fall back to C++", path);
     0
 }
 

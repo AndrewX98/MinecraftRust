@@ -6,7 +6,12 @@ Pure-Rust launcher for Minecraft Bedrock on Linux (replacing [mcpelauncher-manif
 
 ```bash
 cargo build -p client
-./target/debug/client -dg /path/to/extracted/minecraft
+./target/debug/client -dg /home/andrew/.local/MinecraftLauncher/extracted/1.26.20/
+```
+
+Run with Rust linker logs:
+```bash
+RUST_LOG=linker=info ./target/debug/client -dg /home/andrew/.local/MinecraftLauncher/extracted/1.26.20/
 ```
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.

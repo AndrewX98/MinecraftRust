@@ -986,6 +986,15 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         }
     }
 
+    // Phase 0 gate: MCPELAUNCHER_LINKER_RUST_ONLY=1 aborts if Rust linker failed
+    if (rust_handle == 0) {
+        const char* rust_only = getenv("MCPELAUNCHER_LINKER_RUST_ONLY");
+        if (rust_only && rust_only[0] == '1' && rust_only[1] == '\0') {
+            Log::error("MinecraftUtils", "MCPELAUNCHER_LINKER_RUST_ONLY=1 is set but Rust linker failed — aborting");
+            abort();
+        }
+    }
+
     if (rust_handle != 0) {
         // Rust linker loaded the game — handle is a C++-compatible soinfo handle
         // (linker_rust_dlopen_ext registered a C++ soinfo internally).

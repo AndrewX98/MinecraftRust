@@ -16,6 +16,10 @@
 
 extern "C" unsigned long eglutGetWindowHandle();
 
+// Rust linker diagnostic exports
+extern "C" void linker_show_state_rust();
+extern "C" void mcpelauncher_linker_dump_solist_cpp();
+
 // Forward declare linker types/functions — avoids pulling in bionic headers (GCC 16 conflict).
 struct mcpelauncher_hook_t {
     const char* name;
@@ -205,6 +209,11 @@ void* mc_load_minecraft() {
         hooks);
     if (handle) {
         core_patches_install(handle);
+        // Phase 0 diagnostic: dump solist from both linkers
+        Log::info("MinecraftUtils", "=== Rust linker solist dump ===");
+        linker_show_state_rust();
+        Log::info("MinecraftUtils", "=== C++ bionic linker solist dump ===");
+        mcpelauncher_linker_dump_solist_cpp();
     }
     return handle;
 }
