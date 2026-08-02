@@ -42,6 +42,7 @@ extern "C" int mcpelauncher_dispatch_dladdr(const void* addr, Dl_info* info);
 extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle);
 extern "C" void mcpelauncher_dispatch_relocate(void* handle, const char* const* keys, void* const* vals, size_t len);
 extern "C" int mcpelauncher_dispatch_unload_library(void* handle);
+extern "C" int linker_mirror_registration_enabled_rust();
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
@@ -151,11 +152,15 @@ void MinecraftUtils::setupHybris() {
                                libz_symbols);
     HybrisUtils::hookAndroidLog();
     setupApi();
-    linker::load_library("libOpenSLES.so", {});
-    linker::load_library("libGLESv1_CM.so", {});
+    // Phase 2: under RUST_ONLY, these stubs exist only in Rust state (they are
+    // registered via rust_load_stub in capi.cpp), so skip the C++ bionic mirrors.
+    if (linker_mirror_registration_enabled_rust()) {
+        linker::load_library("libOpenSLES.so", {});
+        linker::load_library("libGLESv1_CM.so", {});
 
-    linker::load_library("libstdc++.so", {});
-    linker::load_library("libz.so", {});  // needed for <0.17
+        linker::load_library("libstdc++.so", {});
+        linker::load_library("libz.so", {});  // needed for <0.17
+    }
 }
 
 static std::vector<const char*> convertToC(std::vector<std::string> const& v) {
@@ -608,14 +613,18 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     }
 
     // loading libfmod standalone depends on these symbols, libminecraftpe.so changes the loading automatically
-    auto libstdcxx = linker::dlopen("libstdc++.so", 0);
+    // Phase 2: use dispatch_dlopen so libstdc++ resolves to the Rust-registered
+    // stub handle; the __cxa_* relocation then updates the Rust linker symbols.
+    auto libstdcxx = mcpelauncher_dispatch_dlopen("libstdc++.so", 0);
     if(libcxx) {
         auto __cxa_pure_virtual = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_pure_virtual");
         auto __cxa_guard_acquire = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_guard_acquire");
         auto __cxa_guard_release = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_guard_release");
 
         if(__cxa_pure_virtual && __cxa_guard_acquire && __cxa_guard_release) {
-            linker::relocate(libstdcxx, {{"__cxa_pure_virtual", __cxa_pure_virtual}, {"__cxa_guard_acquire", __cxa_guard_acquire}, {"__cxa_guard_release", __cxa_guard_release}});
+            const char* keys_data[] = {"__cxa_pure_virtual", "__cxa_guard_acquire", "__cxa_guard_release"};
+            void* vals_data[] = {__cxa_pure_virtual, __cxa_guard_acquire, __cxa_guard_release};
+            mcpelauncher_dispatch_relocate(libstdcxx, keys_data, vals_data, 3);
         }
     }
     android_dlextinfo extinfo;
@@ -672,7 +681,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             fmod = nullptr;
         }
     }
-    auto libc = linker::dlopen("libc.so", 0);
+    auto libc = mcpelauncher_dispatch_dlopen("libc.so", 0);
     // Detect Android Integrity Protection — Rust linker loads real ELF
     // (search path already added by mc_load_core_libraries in capi.cpp:343)
     size_t pairipcore_handle = linker_rust_dlopen_pairipcore("libpairipcore.so");
@@ -684,11 +693,11 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     }
 
     // webrtc shortcut
-    auto bgetifaddrs = linker::dlsym(libc, "getifaddrs");
+    auto bgetifaddrs = mcpelauncher_dispatch_dlsym(libc, "getifaddrs");
     if(bgetifaddrs) {
         hooks.emplace_back(mcpelauncher_hook_t{"_ZN3rtc10getifaddrsEPP7ifaddrs", bgetifaddrs});
     }
-    auto bfreeifaddrs = linker::dlsym(libc, "freeifaddrs");
+    auto bfreeifaddrs = mcpelauncher_dispatch_dlsym(libc, "freeifaddrs");
     if(bfreeifaddrs) {
         hooks.emplace_back(mcpelauncher_hook_t{"_ZN3rtc11freeifaddrsEP7ifaddrs", bfreeifaddrs});
     }
@@ -778,13 +787,13 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         // Fallback to C++ loader
         handle = linker::dlopen_ext("libminecraftpe.so", 0, &extinfo);
         if(libc) {
-            linker::dlclose(libc);
+            mcpelauncher_dispatch_dlclose(libc);
         }
         if(libcxx) {
             mcpelauncher_dispatch_dlclose(libcxx);
         }
         if(libstdcxx) {
-            linker::dlclose(libstdcxx);
+            mcpelauncher_dispatch_dlclose(libstdcxx);
         }
         if(handle == nullptr) {
             Log::error("MinecraftUtils", "Failed to load Minecraft: %s", linker::dlerror());

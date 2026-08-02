@@ -37,6 +37,14 @@ pub fn mirror_registration_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// C++-callable equivalent of `mirror_registration_enabled()`. Lets C++
+/// consumers (capi.cpp, setupHybris) gate their stub-mirror registrations on
+/// the same RUST_ONLY flag so stubs exist only in Rust state under Phase 2.
+#[no_mangle]
+pub extern "C" fn linker_mirror_registration_enabled_rust() -> i32 {
+    if mirror_registration_enabled() { 1 } else { 0 }
+}
+
 #[derive(Clone)]
 pub struct LoadedLibrary {
     pub soinfo: SoInfo,

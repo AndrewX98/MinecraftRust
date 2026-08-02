@@ -150,6 +150,7 @@ extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
                                          const char* const* hook_names, void* const* hook_vals,
                                          size_t hook_count);
 extern "C" size_t linker_rust_find_library(const char* name);
+extern "C" int linker_mirror_registration_enabled_rust();
 
 extern "C" {
 
@@ -211,7 +212,11 @@ int mc_load_core_libraries(const char* lib_dir) {
     // then returns. The main thread blocks on executeMainThread but the game
     // thread runs the event loop and renders.
     rust_load_stub("libc.so", libC);
-    linker::load_library("libc.so", libC);
+    // Phase 2: mirror libc into C++ bionic solist ONLY when mirrors are enabled
+    // (i.e. not RUST_ONLY). Under RUST_ONLY the stub exists only in Rust state.
+    if(linker_mirror_registration_enabled_rust()) {
+        linker::load_library("libc.so", libC);
+    }
 
     // 2) Load libm
     MinecraftUtils::loadLibM();
@@ -248,7 +253,9 @@ int mc_load_core_libraries(const char* lib_dir) {
         // linker::dlopen("libstdc++.so", 0) directly and expects a C++ handle.
         auto empty = std::unordered_map<std::string, void*>();
         rust_load_stub("libstdc++.so", empty);
-        linker::load_library("libstdc++.so", empty);
+        if(linker_mirror_registration_enabled_rust()) {
+            linker::load_library("libstdc++.so", empty);
+        }
     }
 
     // Register libGLESv2.so with stub functions (real GL context needed for proper symbols)
