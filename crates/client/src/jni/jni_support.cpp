@@ -1,6 +1,11 @@
 #include <log.h>
 #include <mcpelauncher/path_helper.h>
 #include <mcpelauncher/linker.h>
+
+// Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker/src/linker.cpp)
+extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
 #include "jni_support.h"
 #include "xbox_live.h"
 #include "fmod.h"
@@ -354,9 +359,9 @@ void JniSupport::startGame(ANativeActivity_createFunc* activityOnCreate, GameAct
                            void* stbiLoadFromMemory, void* stbiImageFree) {
     FakeJni::LocalFrame frame(vm);
 
-    vm.attachLibrary("libfmod.so", "", {linker::dlopen, linker::dlsym, linker::dlclose_unlocked});
-    vm.attachLibrary("libminecraftpe.so", "", {linker::dlopen, linker::dlsym, linker::dlclose_unlocked});
-    vm.attachLibrary("libPlayFabMultiplayer.so", "", {linker::dlopen, linker::dlsym, linker::dlclose_unlocked});
+    vm.attachLibrary("libfmod.so", "", {mcpelauncher_dispatch_dlopen, mcpelauncher_dispatch_dlsym, mcpelauncher_dispatch_dlclose});
+    vm.attachLibrary("libminecraftpe.so", "", {mcpelauncher_dispatch_dlopen, mcpelauncher_dispatch_dlsym, mcpelauncher_dispatch_dlclose});
+    vm.attachLibrary("libPlayFabMultiplayer.so", "", {mcpelauncher_dispatch_dlopen, mcpelauncher_dispatch_dlsym, mcpelauncher_dispatch_dlclose});
 
     activity = std::make_shared<MainActivity>();
     activityRef = vm.createGlobalReference(activity);

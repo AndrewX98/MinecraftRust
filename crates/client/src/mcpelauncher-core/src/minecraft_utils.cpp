@@ -36,8 +36,12 @@ extern "C" void linker_add_symbols_to_library_rust(const char* name, const char*
 
 // Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker/src/linker.cpp)
 extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
 extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
+extern "C" int mcpelauncher_dispatch_dladdr(const void* addr, Dl_info* info);
 extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle);
+extern "C" void mcpelauncher_dispatch_relocate(void* handle, const char* const* keys, void* const* vals, size_t len);
+extern "C" int mcpelauncher_dispatch_unload_library(void* handle);
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
@@ -183,7 +187,7 @@ static std::string getUiExecutablePath() {
 static void requestGoogleCredentials(void (*onsuccess)(GoogleCredentials creds), void (*onfailure)(const char* error)) {
     const void* caller_addr = __builtin_return_address(0);
     Dl_info info;
-    if(linker::dladdr(caller_addr, &info) != 0) {
+    if(mcpelauncher_dispatch_dladdr(caller_addr, &info) != 0) {
         Log::info("Launcher", "Google credentials requested from %s", info.dli_fname);
 
         std::vector<std::string> args = {getUiExecutablePath(), "--request-google-credentials", "-v" , "--mod", info.dli_fname};
@@ -445,14 +449,15 @@ std::unordered_map<std::string, void*> MinecraftUtils::getApi() {
 
     syms["mcpelauncher_hook"] = (void*)(void* (*)(void*, void*, void**))[](void* sym, void* hook, void** orig) {
         Dl_info i;
-        if(!linker::dladdr(sym, &i)) {
+        if(!mcpelauncher_dispatch_dladdr(sym, &i)) {
             Log::error("Hook", "Failed to resolve hook for symbol %lx", (long unsigned)sym);
             return (void*)nullptr;
         }
-        void* handle = linker::dlopen(i.dli_fname, 0);
-        std::string tName = HookManager::translateConstructorName(i.dli_sname);
-        auto ret = HookManager::instance.createHook(handle, tName.empty() ? i.dli_sname : tName.c_str(), hook, orig);
-        linker::dlclose(handle);
+        void* handle = mcpelauncher_dispatch_dlopen(i.dli_fname, 0);
+        std::string tName = i.dli_sname ? HookManager::translateConstructorName(i.dli_sname) : std::string();
+        const char* symName = i.dli_sname ? (tName.empty() ? i.dli_sname : tName.c_str()) : nullptr;
+        auto ret = symName ? HookManager::instance.createHook(handle, symName, hook, orig) : nullptr;
+        mcpelauncher_dispatch_dlclose(handle);
         HookManager::instance.applyHooks();
         return (void*)ret;
     };
@@ -490,18 +495,20 @@ std::unordered_map<std::string, void*> MinecraftUtils::getApi() {
     syms["mcpelauncher_host_dlsym"] = (void*)dlsym;
     syms["mcpelauncher_host_dlclose"] = (void*)dlclose;
     syms["mcpelauncher_relocate"] = (void*)+[](void* handle, const char* name, void* hook) {
-        linker::relocate(handle, {{name, hook}});
+        const char* keys[] = {name};
+        void* vals[] = {hook};
+        mcpelauncher_dispatch_relocate(handle, keys, vals, 1);
     };
     struct hook_entry {
         const char* name;
         void* hook;
     };
     syms["mcpelauncher_relocate2"] = (void*)+[](void* handle, size_t count, hook_entry* entries) {
-        std::unordered_map<std::string, void*> ventries;
         for(size_t i = 0; i < count; i++) {
-            ventries[entries[i].name] = entries[i].hook;
+            const char* keys[] = {entries[i].name};
+            void* vals[] = {entries[i].hook};
+            mcpelauncher_dispatch_relocate(handle, keys, vals, 1);
         }
-        linker::relocate(handle, ventries);
     };
     syms["mcpelauncher_load_library"] = (void*)+[](const char* name, size_t count, hook_entry* entries) {
         std::unordered_map<std::string, void*> ventries;
@@ -510,7 +517,7 @@ std::unordered_map<std::string, void*> MinecraftUtils::getApi() {
         }
         linker::load_library(name, ventries);
     };
-    syms["mcpelauncher_unload_library"] = (void*)linker::unload_library;
+    syms["mcpelauncher_unload_library"] = (void*)mcpelauncher_dispatch_unload_library;
     syms["mcpelauncher_dlclose_unlocked"] = (void*)linker::dlclose_unlocked;
     syms["mcpelauncher_package_name"] = (void*)MinecraftVersion::package.c_str();
     syms["mcpelauncher_package_version_code"] = (void*)&MinecraftVersion::code;

@@ -16,6 +16,10 @@
 
 soinfo* soinfo_from_handle(void* handle);
 
+// Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker)
+extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
+extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
+
 // Rust linker FFI function declarations
 extern "C" size_t mcpelauncher_linker_get_rust_handle(void* cpp_handle);
 extern "C" size_t mcpelauncher_linker_resolve_rust_handle(void* handle);
@@ -161,12 +165,16 @@ void HookManager::addLibrary(void *handle) {
         if (dynData[i].d_tag == DT_NULL)
             break;
         if (dynData[i].d_tag == DT_NEEDED) {
-            void* dep = linker::dlopen(&p->strtab[dynData[i].d_un.d_val], RTLD_NOLOAD);
+            void* dep = mcpelauncher_dispatch_dlopen(&p->strtab[dynData[i].d_un.d_val], RTLD_NOLOAD);
             if (dep == nullptr)
                 continue;
             p->dependencies.push_back(dep);
             dependents[dep].push_back(p.get());
-            linker::dlclose(dep);
+            // Rust handles returned by dispatch_dlopen's name lookup do NOT hold a
+            // reference (unlike __loader_dlopen), so only release C++-acquired refs.
+            if (mcpelauncher_linker_resolve_rust_handle(dep) == 0) {
+                mcpelauncher_dispatch_dlclose(dep);
+            }
         }
     }
 }

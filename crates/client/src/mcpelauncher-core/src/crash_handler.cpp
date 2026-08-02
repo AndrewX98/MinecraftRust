@@ -9,6 +9,8 @@
 #include <mcpelauncher/linker.h>
 #include <thread>
 
+extern "C" int mcpelauncher_dispatch_dladdr(const void* addr, Dl_info* info);
+
 
 bool CrashHandler::hasCrashed = false;
 
@@ -58,7 +60,7 @@ void CrashHandler::handleSignal(int signal, void *aptr) {
         }
         if (symbols[i][0] == '[') { // unknown symbol
             Dl_info symInfo;
-            if (linker::dladdr(array[i], &symInfo)) {
+            if (mcpelauncher_dispatch_dladdr(array[i], &symInfo)) {
                 int status = 0;
                 nameBuf = abi::__cxa_demangle(symInfo.dli_sname, nameBuf, &nameBufLen, &status);
                 printf("# %i LINKER %s+%p in %s+0x%4p [0x%4p]\n", i, nameBuf, (void *) ((size_t) array[i] - (size_t) symInfo.dli_saddr), symInfo.dli_fname, (void *) ((size_t) array[i] - (size_t) symInfo.dli_fbase), array[i]);
@@ -71,7 +73,7 @@ void CrashHandler::handleSignal(int signal, void *aptr) {
     for (int i = 0; i < 1000; i++) {
         void* pptr = *ptr;
         Dl_info symInfo;
-        if (pptr && linker::dladdr(pptr, &symInfo)) {
+        if (pptr && mcpelauncher_dispatch_dladdr(pptr, &symInfo)) {
             int status = 0;
             nameBuf = abi::__cxa_demangle(symInfo.dli_sname, nameBuf, &nameBufLen, &status);
             printf("# %i LINKER %s+%p in %s+%4p [%4p]\n", i, nameBuf, (void *) ((size_t) pptr - (size_t) symInfo.dli_saddr), symInfo.dli_fname, (void *) ((size_t) pptr - (size_t) symInfo.dli_fbase), pptr);

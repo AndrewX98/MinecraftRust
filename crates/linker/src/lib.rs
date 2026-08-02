@@ -28,6 +28,15 @@ use std::sync::{LazyLock, RwLock};
 
 pub type Handle = usize;
 
+/// Phase 1 gate: when MCPELAUNCHER_LINKER_RUST_ONLY=1 is set, skip creating the
+/// C++ bionic soinfo mirror for Rust-loaded libraries. All C++ consumers must
+/// use mcpelauncher_dispatch_* (handle-agnostic) instead of soinfo_from_handle.
+pub fn mirror_registration_enabled() -> bool {
+    std::env::var("MCPELAUNCHER_LINKER_RUST_ONLY")
+        .map(|v| v != "1")
+        .unwrap_or(true)
+}
+
 #[derive(Clone)]
 pub struct LoadedLibrary {
     pub soinfo: SoInfo,
@@ -818,7 +827,7 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
             }
         };
 
-        if base != 0 && dynamic != 0 {
+        if base != 0 && dynamic != 0 && mirror_registration_enabled() {
             extern "C" {
                 fn mcpelauncher_linker_register_loaded_library(
                     name: *const libc::c_char,
@@ -891,7 +900,7 @@ pub unsafe extern "C" fn linker_rust_dlopen_sqlite(
         }
     };
 
-    if base != 0 && dynamic != 0 {
+    if base != 0 && dynamic != 0 && mirror_registration_enabled() {
         extern "C" {
             fn mcpelauncher_linker_register_loaded_library(
                 name: *const libc::c_char,
@@ -950,7 +959,7 @@ pub unsafe extern "C" fn linker_rust_dlopen_pairipcore(
         }
     };
 
-    if base != 0 && dynamic != 0 {
+    if base != 0 && dynamic != 0 && mirror_registration_enabled() {
         extern "C" {
             fn mcpelauncher_linker_register_loaded_library(
                 name: *const libc::c_char,
@@ -1009,7 +1018,7 @@ pub unsafe extern "C" fn linker_rust_dlopen_libcxx(
         }
     };
 
-    if base != 0 && dynamic != 0 {
+    if base != 0 && dynamic != 0 && mirror_registration_enabled() {
         extern "C" {
             fn mcpelauncher_linker_register_loaded_library(
                 name: *const libc::c_char,
@@ -1211,6 +1220,39 @@ pub unsafe extern "C" fn linker_rust_find_handle_by_base(base: usize) -> Handle 
     0
 }
 
+/// Find the Rust-loaded library containing `addr`.
+/// Returns the handle (nonzero), or 0 if no Rust library contains `addr`.
+/// If found and `out_name` is non-null, the library's soname is copied into
+/// `out_name` (up to `out_name_cap` bytes, NUL-terminated if it fits).
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dladdr(
+    addr: usize,
+    out_name: *mut libc::c_char,
+    out_name_cap: usize,
+) -> Handle {
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    for (&handle, lib) in &state.libraries_by_handle {
+        let base = lib.soinfo.base;
+        let size = lib.soinfo.size;
+        if base == 0 || size == 0 {
+            continue;
+        }
+        if addr >= base && addr < base + size {
+            if !out_name.is_null() && out_name_cap > 0 {
+                let name = lib.soinfo.name.as_bytes();
+                let n = name.len().min(out_name_cap - 1);
+                std::ptr::copy_nonoverlapping(name.as_ptr(), out_name as *mut u8, n);
+                *out_name.add(n) = 0;
+            }
+            return handle;
+        }
+    }
+    0
+}
+
 /// Returns the dynamic section virtual address for a Rust-loaded library.
 /// Returns 0 if the handle is invalid or no dynamic section.
 #[no_mangle]
@@ -1222,6 +1264,36 @@ pub unsafe extern "C" fn linker_rust_get_library_dynamic(handle: Handle) -> usiz
     state.libraries_by_handle.get(&handle)
         .and_then(|lib| lib.soinfo.dynamic)
         .unwrap_or(0)
+}
+
+/// Returns a pointer to a stable NUL-terminated soname string for a
+/// Rust-loaded library (points into the linker's own storage). Returns null
+/// if the handle is invalid. The pointer stays valid while the lib is loaded.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_get_library_name(handle: Handle) -> *const libc::c_char {
+    let state = match STATE.read() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
+    state
+        .libraries_by_handle
+        .get(&handle)
+        .map(|lib| lib.soinfo.name.as_ptr() as *const libc::c_char)
+        .unwrap_or(std::ptr::null())
+}
+
+/// Add (or overwrite) external symbols for a Rust-loaded library by handle,
+/// mirroring C++ `linker::relocate`. Symbols are also inserted into
+/// `global_symbols` so later relocations can resolve them.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_add_symbols_handle(
+    handle: Handle,
+    keys: *const *const libc::c_char,
+    vals: *const *mut libc::c_void,
+    len: usize,
+) {
+    let map = unsafe { c_arrays_to_hashmap(keys, vals, len) };
+    add_symbols(handle, &map);
 }
 
 /// Resolve a string from a Rust-loaded library's string table by offset.

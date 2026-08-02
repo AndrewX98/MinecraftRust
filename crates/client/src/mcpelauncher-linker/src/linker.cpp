@@ -85,6 +85,9 @@ extern "C" int linker_rust_dlclose(size_t handle);
 extern "C" size_t linker_rust_get_library_base(size_t handle);
 extern "C" void linker_rust_get_library_code_region(size_t handle, size_t* base, size_t* size);
 extern "C" size_t linker_rust_find_library(const char* name);
+extern "C" size_t linker_rust_dladdr(size_t addr, char* out_name, size_t out_name_cap);
+extern "C" const char* linker_rust_get_library_name(size_t handle);
+extern "C" void linker_rust_add_symbols_handle(size_t handle, const char* const* keys, void* const* vals, size_t len);
 
 extern "C" size_t mcpelauncher_linker_resolve_rust_handle(void* handle) {
     auto v = reinterpret_cast<uintptr_t>(handle);
@@ -126,6 +129,47 @@ extern "C" int mcpelauncher_dispatch_dlclose(void* handle) {
         return linker_rust_dlclose(rh);
     }
     return __loader_dlclose(handle);
+}
+
+// Handle-type-agnostic dladdr: first try the Rust linker (which owns
+// libminecraftpe.so, libfmod.so, etc.), then fall back to C++ bionic.
+// dli_fname points into the Rust linker's stable soname storage (never a
+// stack buffer), so it remains valid as long as the library is loaded.
+extern "C" int mcpelauncher_dispatch_dladdr(const void* addr, Dl_info* info) {
+    if (addr == nullptr || info == nullptr) return 0;
+    size_t rh = linker_rust_dladdr(reinterpret_cast<size_t>(addr), nullptr, 0);
+    if (rh != 0) {
+        info->dli_fname = linker_rust_get_library_name(rh);
+        info->dli_fbase = reinterpret_cast<void*>(linker_rust_get_library_base(rh));
+        info->dli_sname = nullptr;
+        info->dli_saddr = nullptr;
+        return 1;
+    }
+    return __loader_dladdr(addr, info);
+}
+
+// Handle-type-agnostic relocate (mcpelauncher_relocate/relocate2). Rust-loaded
+// libraries get their external_symbols updated via the Rust linker.
+extern "C" void mcpelauncher_dispatch_relocate(void* handle, const char* const* keys, void* const* vals, size_t len) {
+    size_t rh = resolve_rust_handle(handle);
+    if (rh != 0) {
+        linker_rust_add_symbols_handle(rh, keys, vals, len);
+        return;
+    }
+    std::unordered_map<std::string, void*> syms;
+    for (size_t i = 0; i < len; i++) {
+        if (keys[i] != nullptr) syms[keys[i]] = vals[i];
+    }
+    linker::relocate(handle, syms);
+}
+
+// Handle-type-agnostic unload: Rust-loaded libraries get dlclose'd via Rust.
+extern "C" int mcpelauncher_dispatch_unload_library(void* handle) {
+    size_t rh = resolve_rust_handle(handle);
+    if (rh != 0) {
+        return linker_rust_dlclose(rh);
+    }
+    return linker::unload_library(handle);
 }
 
 extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle) {
