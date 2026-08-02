@@ -25,6 +25,8 @@
 #include <cstdio>
 
 extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
+extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
 
 
 
@@ -396,8 +398,12 @@ extern "C" void* jni_support_get_jvm(void* s) {
 }
 
 extern "C" void fake_jni_jvm_attach_library(void* jvm, const char* path) {
+    // Use handle-type-agnostic dispatch wrappers: libraries owned by the Rust
+    // linker (libfmod.so, libminecraftpe.so) resolve to their Rust handles so
+    // JNI_OnLoad comes from the same image the game uses. Routing through the
+    // C++ bionic dlopen would re-load a Rust-owned library a second time.
     static_cast<FakeJni::Jvm*>(jvm)->attachLibrary(
-        path, "", {linker::dlopen, linker::dlsym, linker::dlclose_unlocked});
+        path, "", {mcpelauncher_dispatch_dlopen, mcpelauncher_dispatch_dlsym, mcpelauncher_dispatch_dlclose});
 }
 
 extern "C" void* fake_jni_local_frame_create(void* jvm) {

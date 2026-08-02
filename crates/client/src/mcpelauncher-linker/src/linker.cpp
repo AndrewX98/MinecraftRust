@@ -84,6 +84,7 @@ extern "C" void* linker_rust_dlsym(size_t handle, const char* symbol);
 extern "C" int linker_rust_dlclose(size_t handle);
 extern "C" size_t linker_rust_get_library_base(size_t handle);
 extern "C" void linker_rust_get_library_code_region(size_t handle, size_t* base, size_t* size);
+extern "C" size_t linker_rust_find_library(const char* name);
 
 extern "C" size_t mcpelauncher_linker_resolve_rust_handle(void* handle) {
     auto v = reinterpret_cast<uintptr_t>(handle);
@@ -94,6 +95,22 @@ extern "C" size_t mcpelauncher_linker_resolve_rust_handle(void* handle) {
 }
 
 #define resolve_rust_handle(h) mcpelauncher_linker_resolve_rust_handle(h)
+
+// Handle-type-agnostic dlopen: if the library is already owned by the Rust
+// linker (by soname), return its Rust handle (small int) without touching the
+// C++ bionic linker. Otherwise fall back to C++ __loader_dlopen.
+//
+// This prevents a second C++ bionic load of a Rust-owned library (e.g.
+// libfmod.so) when consumers like FakeJni's libinst call dlopen again.
+extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags) {
+    if (name != nullptr) {
+        size_t rh = linker_rust_find_library(name);
+        if (rh != 0) {
+            return reinterpret_cast<void*>(rh);
+        }
+    }
+    return __loader_dlopen(name, flags, nullptr);
+}
 
 extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name) {
     size_t rh = resolve_rust_handle(handle);

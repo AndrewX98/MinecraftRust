@@ -30,6 +30,7 @@ extern "C" size_t linker_rust_find_library(const char* name);
 extern "C" size_t linker_rust_dlopen_sqlite(const char* filename);
 extern "C" size_t linker_rust_dlopen_pairipcore(const char* filename);
 extern "C" size_t linker_rust_dlopen_libcxx(const char* filename);
+extern "C" size_t linker_rust_dlopen_fmod(const char* filename);
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 extern "C" void linker_add_symbols_to_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
 
@@ -643,10 +644,16 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     static void* fmod = nullptr;
     // Temporary feature flag to disable native fmod patching
     if(!fmod && ReadEnvFlag("MCPELAUNCHER_PATCH_FMOD", true)) {
-        fmod = linker::dlopen("libfmod.so", 0);
+        size_t fmod_rust = linker_rust_dlopen_fmod("libfmod.so");
+        fmod = reinterpret_cast<void*>(fmod_rust);
+        if(!fmod_rust) {
+            Log::error("MinecraftUtils", "Failed to load libfmod via Rust linker");
+        } else {
+            Log::info("MinecraftUtils", "Loaded libfmod (rust_handle=%zu)", fmod_rust);
+        }
     }
     if(fmod) {
-        if(linker::get_library_base(fmod)) {
+        if(mcpelauncher_dispatch_get_library_base(fmod)) {
             if(FmodUtils::setup(fmod)) {
                 hooks.emplace_back(mcpelauncher_hook_t{"_ZN4FMOD6System4initEijPv", reinterpret_cast<void*>(&FmodUtils::initHook)});
                 hooks.emplace_back(mcpelauncher_hook_t{"_ZN4FMOD6System9setOutputE15FMOD_OUTPUTTYPE", (void*)+[]() {
@@ -654,7 +661,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
                                                        }});
             }
         } else {
-            linker::dlclose(fmod);
+            mcpelauncher_dispatch_dlclose(fmod);
             fmod = nullptr;
         }
     }
@@ -776,7 +783,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
             Log::error("MinecraftUtils", "Failed to load Minecraft: %s", linker::dlerror());
         } else {
             if(fmod) {
-                linker::dlclose(fmod);
+                mcpelauncher_dispatch_dlclose(fmod);
             }
             for(auto&& h : hooks) {
                 if(h.name) {

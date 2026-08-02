@@ -1,6 +1,9 @@
 #include <mcpelauncher/fmod_utils.h>
 #include <mcpelauncher/linker.h>
 
+// Handle-type-agnostic dispatch wrapper (defined in mcpelauncher-linker/src/linker.cpp)
+extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
+
 int (*FmodUtils::FMOD_System_Init)(void* system, int maxchannels, unsigned int flags, void* extradriverdata) = nullptr;
 int (*FmodUtils::FMOD_System_SetSoftwareFormat)(void* system, int samplerate, int speakermode, int numrawspeakers) = nullptr;
 int (*FmodUtils::FMOD_System_SetDSPBufferSize)(void* system, unsigned int bufferlength, int numbuffers);
@@ -18,10 +21,10 @@ static int ReadEnvInt(const char* name, int def = 0) {
 }
 
 bool FmodUtils::setup(void* handle) {
-    FMOD_System_Init = (decltype(FMOD_System_Init))linker::dlsym(handle, "_ZN4FMOD6System4initEijPv");
-    FMOD_System_SetSoftwareFormat = (decltype(FMOD_System_SetSoftwareFormat))linker::dlsym(handle, "_ZN4FMOD6System17setSoftwareFormatEi16FMOD_SPEAKERMODEi");
-    FMOD_System_SetDSPBufferSize = (decltype(FMOD_System_SetDSPBufferSize))linker::dlsym(handle, "_ZN4FMOD6System16setDSPBufferSizeEji");
-    FMOD_System_GetDSPBufferSize = (decltype(FMOD_System_GetDSPBufferSize))linker::dlsym(handle, "_ZN4FMOD6System16getDSPBufferSizeEPjPi");
+    FMOD_System_Init = (decltype(FMOD_System_Init))mcpelauncher_dispatch_dlsym(handle, "_ZN4FMOD6System4initEijPv");
+    FMOD_System_SetSoftwareFormat = (decltype(FMOD_System_SetSoftwareFormat))mcpelauncher_dispatch_dlsym(handle, "_ZN4FMOD6System17setSoftwareFormatEi16FMOD_SPEAKERMODEi");
+    FMOD_System_SetDSPBufferSize = (decltype(FMOD_System_SetDSPBufferSize))mcpelauncher_dispatch_dlsym(handle, "_ZN4FMOD6System16setDSPBufferSizeEji");
+    FMOD_System_GetDSPBufferSize = (decltype(FMOD_System_GetDSPBufferSize))mcpelauncher_dispatch_dlsym(handle, "_ZN4FMOD6System16getDSPBufferSizeEPjPi");
 
     return FMOD_System_Init != NULL && FMOD_System_SetSoftwareFormat != NULL && FMOD_System_SetDSPBufferSize != NULL && FMOD_System_GetDSPBufferSize != NULL;
 }

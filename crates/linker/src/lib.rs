@@ -1068,6 +1068,91 @@ pub unsafe extern "C" fn linker_rust_dlopen_libcxx(
     handle
 }
 
+/// Load libfmod.so via Rust linker — single owner, NO C++ soinfo mirror.
+///
+/// fmod has 12 INIT_ARRAY ctors, BIND_NOW, and only the 4 basic reloc types
+/// (RELATIVE / GLOB_DAT / R_X86_64_64 / JUMP_SLOT) that reloc.rs handles — no
+/// IFUNC, no TLS relocs. `load_library_internal` runs its ctors at load time,
+/// matching C++ `linker::dlopen` behavior.
+///
+/// Per docs/plan.md fmod procedure:
+/// - single owner (Rust) — do NOT call mcpelauncher_linker_register_loaded_library;
+///   a C++ soinfo mirror + C++ load was the phase-3.4 double-owner crash.
+/// - keep libfmod.so in the C++ dlsym fallback cache so libm + __cxa_* imports
+///   (not present in Rust global_symbols) still resolve via C++.
+#[no_mangle]
+pub unsafe extern "C" fn linker_rust_dlopen_fmod(
+    filename: *const libc::c_char,
+) -> usize {
+    let path = unsafe { std::ffi::CStr::from_ptr(filename) }
+        .to_str()
+        .unwrap_or("");
+    if path.is_empty() {
+        return 0;
+    }
+
+    log::info!("linker: Rust dlopen_fmod attempting '{}'", path);
+
+    // fmod's internal dlopen/dlsym/dlclose must bind to the C++ dispatch
+    // functions, NOT the real-glibc libc-shim entries in global_symbols.
+    // fmod calls dlopen("libaaudio.so") + dlsym to populate its AAudio bridge
+    // slots. With real glibc dlopen, libaaudio.so is only a launcher stub
+    // (not on the host system path) so dlopen returns NULL, dlsym returns
+    // NULL, and the AAudio slots stay 0x0 -> SIGSEGV on the first AAudio call.
+    // The dispatch functions check the Rust linker first (finding the stub
+    // registered by rust_load_stub("libaaudio.so")), then fall back to C++.
+    extern "C" {
+        fn mcpelauncher_dispatch_dlopen(
+            name: *const libc::c_char,
+            flags: libc::c_int,
+        ) -> *mut libc::c_void;
+        fn mcpelauncher_dispatch_dlsym(
+            handle: *mut libc::c_void,
+            name: *const libc::c_char,
+        ) -> *mut libc::c_void;
+        fn mcpelauncher_dispatch_dlclose(handle: *mut libc::c_void) -> libc::c_int;
+    }
+
+    let mut dl_symbols: HashMap<String, *mut std::ffi::c_void> = HashMap::new();
+    dl_symbols.insert("dlopen".to_string(), mcpelauncher_dispatch_dlopen as *mut std::ffi::c_void);
+    dl_symbols.insert("dlsym".to_string(), mcpelauncher_dispatch_dlsym as *mut std::ffi::c_void);
+    dl_symbols.insert("dlclose".to_string(), mcpelauncher_dispatch_dlclose as *mut std::ffi::c_void);
+
+    // Snapshot dl* entries so load_library_internal's global_symbols
+    // registration doesn't permanently repoint them (keeps the override
+    // scoped to fmod's own relocations).
+    let prev_dl: HashMap<String, usize> = {
+        let state = STATE.read().unwrap();
+        ["dlopen", "dlsym", "dlclose"]
+            .iter()
+            .filter_map(|k| state.global_symbols.get(*k).map(|v| (k.to_string(), *v)))
+            .collect()
+    };
+
+    let handle = load_library_internal(path, &dl_symbols, false);
+    if handle == 0 {
+        log::warn!("linker: Rust load_library_internal failed for '{}'", path);
+        return 0;
+    }
+
+    // Restore global dl* symbols so subsequent Rust loads still resolve to
+    // the real-glibc entries (only fmod's already-bound JUMP_SLOTs are patched
+    // in-memory by the relocations; they are unaffected by this restore).
+    {
+        let mut state = STATE.write().unwrap();
+        for (k, v) in prev_dl {
+            state.global_symbols.insert(k, v);
+        }
+    }
+
+    // NOTE: intentionally NO mcpelauncher_linker_register_loaded_library here.
+    // Single owner rule: Rust owns fmod's image and symbols; C++ bionic must
+    // not create a second soinfo over the same base.
+
+    log::info!("linker: Rust dlopen_fmod succeeded for '{}' (handle={})", path, handle);
+    handle
+}
+
 /// Symbol-lookup data exported from Rust SoInfo to C++ for direct soinfo
 /// field population (bypasses prelink_image for Rust-loaded ELFs).
 #[repr(C)]
