@@ -56,11 +56,6 @@ impl LinkerState {
     }
 }
 
-/// Optional C++ dlsym fallback for symbols not found in the Rust linker state.
-/// Set by `linker_rust_set_dlsym_fallback` from C++.
-static DLSYM_FALLBACK: std::sync::OnceLock<unsafe extern "C" fn(*const libc::c_char) -> *mut libc::c_void> =
-    std::sync::OnceLock::new();
-
 #[derive(Debug, thiserror::Error)]
 pub enum LinkerError {
     #[error("Library not found: {0}")]
@@ -114,15 +109,8 @@ pub fn init() {
 /// DT_INIT_ARRAY then jumps into that broken image (e.g. `shared_timed_mutex`
 /// ctor → SIGSEGV at a raw ELF offset like `0x12a3e6`).
 ///
-/// Skip re-load; symbol lookup falls through to `DLSYM_FALLBACK` (C++ bionic
-/// `RTLD_DEFAULT`), which returns addresses in the healthy first image.
-fn is_cpp_preloaded_dependency(name: &str) -> bool {
-    matches!(
-        name,
-        "libfmod.so"
-    )
-}
-
+/// Skip re-load; symbol lookup falls through to the Rust linker's existing
+/// state, which contains the healthy first image.
 fn load_dependencies(
     soinfo: &mut SoInfo,
     _data: &[u8],
@@ -141,14 +129,9 @@ fn load_dependencies(
         if dep_name == "libGLESv2.so" || dep_name == "libOpenSLES.so" || dep_name == "libstdc++.so" {
             continue;
         }
-        if is_cpp_preloaded_dependency(dep_name) {
-            log::info!(
-                "linker: skipping dependency '{}' for '{}' (already loaded by C++ bionic linker)",
-                dep_name,
-                name
-            );
-            continue;
-        }
+        // fmod is Rust-owned (linker_rust_dlopen_fmod loads it before the game
+        // lib's deps are processed), so is_loaded() catches it here — no longer
+        // needs the old is_cpp_preloaded_dependency escape hatch.
         if is_loaded(dep_name) {
             continue;
         }
@@ -347,14 +330,6 @@ fn load_library_internal(
                             }
                             if let Some(&addr) = lib.soinfo.external_symbols.get(sym_name) {
                                 return Some(addr);
-                            }
-                        }
-                        // Try C++ dlsym fallback for symbols managed by the C++ linker
-                        if let Some(cpp_dlsym) = DLSYM_FALLBACK.get() {
-                            let c_name = std::ffi::CString::new(sym_name).ok()?;
-                            let addr = unsafe { cpp_dlsym(c_name.as_ptr()) };
-                            if !addr.is_null() {
-                                return Some(addr as usize);
                             }
                         }
                         // Note: resolve_symbol acquires STATE.read(), but state (write guard) is held — deadlock.
@@ -754,13 +729,6 @@ pub unsafe extern "C" fn linker_add_symbols_to_library_rust(
 #[no_mangle]
 pub unsafe extern "C" fn linker_show_state_rust() {
     show_state();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn linker_rust_set_dlsym_fallback(
-    fallback: unsafe extern "C" fn(*const libc::c_char) -> *mut libc::c_void,
-) {
-    let _ = DLSYM_FALLBACK.set(fallback);
 }
 
 #[no_mangle]
@@ -1596,13 +1564,6 @@ fn load_library_internal_no_ctors(
                 }
                 if let Some(&addr) = lib.soinfo.external_symbols.get(sym_name) {
                     return Some(addr);
-                }
-            }
-            if let Some(cpp_dlsym) = DLSYM_FALLBACK.get() {
-                let c_name = std::ffi::CString::new(sym_name).ok()?;
-                let addr = unsafe { cpp_dlsym(c_name.as_ptr()) };
-                if !addr.is_null() {
-                    return Some(addr as usize);
                 }
             }
             // Note: resolve_symbol acquires STATE.read(), but state (write guard) is held — deadlock.

@@ -98,54 +98,6 @@ static void linker_update_LD_LIBRARY_PATH(const char* path) {
 #define MCPE_RTLD_NOLOAD 0x4
 #endif
 
-/// C++ dlsym fallback — called by Rust linker when a symbol isn't found
-/// in the Rust linker state.
-///
-/// IMPORTANT: bionic `dlsym(RTLD_DEFAULT, …)` skips libraries that were not
-/// opened with RTLD_GLOBAL when target SDK ≥ 23. MinecraftUtils preloads
-/// libc++_shared / libfmod / etc. with flags=0 (RTLD_LOCAL), so they are
-/// invisible to RTLD_DEFAULT. Search those handles explicitly via RTLD_NOLOAD
-/// so JUMP_SLOTs resolve into the *healthy* C++-loaded images instead of a
-/// second broken Rust remapping.
-extern "C" void* linker_cpp_dlsym_fallback(const char* name) {
-    struct CachedLib {
-        const char* soname;
-        void* handle;
-        bool tried;
-    };
-    static CachedLib libs[] = {
-        {"libc++_shared.so", nullptr, false},
-        {"libfmod.so", nullptr, false},
-        {"libsqliteX.so", nullptr, false},
-        {"libc.so", nullptr, false},
-        {"libm.so", nullptr, false},
-        {"libdl.so", nullptr, false},
-        {"liblog.so", nullptr, false},
-        {"libz.so", nullptr, false},
-        {"libandroid.so", nullptr, false},
-        {"libGLESv2.so", nullptr, false},
-        {"libEGL.so", nullptr, false},
-        {"libOpenSLES.so", nullptr, false},
-        {"libaaudio.so", nullptr, false},
-        {"libaaudio.so.2", nullptr, false},
-        {"libstdc++.so", nullptr, false},
-    };
-    for (auto& lib : libs) {
-        if (!lib.tried) {
-            lib.tried = true;
-            lib.handle = __loader_dlopen(lib.soname, MCPE_RTLD_NOLOAD, nullptr);
-        }
-        if (!lib.handle) {
-            continue;
-        }
-        if (void* sym = __loader_dlsym(lib.handle, name, nullptr)) {
-            return sym;
-        }
-    }
-    // Global-group leftovers (and anything opened with RTLD_GLOBAL).
-    return __loader_dlsym(RTLD_DEFAULT, name, nullptr);
-}
-
 // --- Rust linker FFI bridge ---
 // Functions for mirroring C++ linker state to the Rust linker.
 extern "C" size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
@@ -194,7 +146,6 @@ static void rust_add_symbols(const char* name, const std::unordered_map<std::str
 
 // --- Rust linker extern "C" functions for Phase 2 ---
 extern "C" void linker_rust_add_search_path(const char* path);
-extern "C" void linker_rust_set_dlsym_fallback(void* (*fallback)(const char*));
 extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
                                          const char* const* hook_names, void* const* hook_vals,
                                          size_t hook_count);
@@ -339,9 +290,8 @@ int mc_load_core_libraries(const char* lib_dir) {
     std::string libDir = _ZN10PathHelper8pathInfoE.gameDir + "lib/" + MinecraftUtils::getLibraryAbi();
     linker_update_LD_LIBRARY_PATH(libDir.c_str());
 
-    // Also register the search path and C++ dlsym fallback for the Rust linker
+    // Also register the search path for the Rust linker
     linker_rust_add_search_path(libDir.c_str());
-    linker_rust_set_dlsym_fallback(linker_cpp_dlsym_fallback);
 
     return 0;
 }
