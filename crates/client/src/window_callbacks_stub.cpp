@@ -8,7 +8,6 @@
 #include <mcpelauncher/minecraft_version.h>
 #include <game_window_manager.h>
 #include <log.h>
-#include <mcpelauncher/path_helper.h>
 #include <cstdlib>
 #include <string>
 #include "settings.h"
@@ -18,6 +17,8 @@
 
 // --- Rust key mapping functions ---
 extern "C" int window_callbacks_map_mouse_button(int btn);
+// PathHelper is ported to Rust (crates/client/src/path_helper.rs).
+extern "C" void path_helper_find_all_data_files(const char* path, void (*cb)(const char*, void*), void* user);
 extern "C" int window_callbacks_map_minecraft_key(int code);
 extern "C" int window_callbacks_map_gamepad_key(int btn);
 extern "C" void jni_support_send_key_down(void* s, const void* event);
@@ -698,9 +699,9 @@ void WindowCallbacks::setDelayedPaste() {
 void WindowCallbacks::loadGamepadMappings() {
     auto windowManager = GameWindowManager::getManager();
     std::vector<std::string> controllerDbPaths;
-    PathHelper::findAllDataFiles("gamecontrollerdb.txt", [&controllerDbPaths](std::string const& path) {
-        controllerDbPaths.push_back(path);
-    });
+    path_helper_find_all_data_files("gamecontrollerdb.txt", [](const char* p, void* user) {
+        static_cast<std::vector<std::string>*>(user)->emplace_back(p);
+    }, &controllerDbPaths);
     // Bugfix: allow users to change internal gamepad layouts
     std::reverse(controllerDbPaths.begin(), controllerDbPaths.end());
     for(std::string const& path : controllerDbPaths) {

@@ -40,7 +40,7 @@ fn read_env_flag(name: &str, def: bool) -> bool {
     }
 }
 
-/// Mirrors `PathHelper::getAbiDir`.
+/// Mirrors `PathHelper::getAbiDir` (now `path_helper::get_abi_dir`).
 fn abi_dir() -> &'static str {
     if cfg!(target_arch = "x86_64") {
         "x86_64"

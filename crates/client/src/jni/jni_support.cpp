@@ -1,6 +1,11 @@
 #include <log.h>
-#include <mcpelauncher/path_helper.h>
 #include <mcpelauncher/linker.h>
+
+// PathHelper is ported to Rust (crates/client/src/path_helper.rs).
+extern "C" const char* path_helper_get_primary_data_directory();
+extern "C" const char* path_helper_get_game_dir();
+extern "C" const char* path_helper_get_abi_dir();
+extern "C" const char* path_helper_find_data_file(const char* path);
 
 // Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker/src/linker.cpp)
 extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
@@ -292,7 +297,9 @@ JniSupport::JniSupport() : textInput([this](std::string const& str) { return onS
     auto* iface = const_cast<JNINativeInterface*>(jniEnv->functions);
 #if defined(__APPLE__) && defined(__aarch64__)
     // On Apple Silicon, load libjnivmsupport.so for ARM64 variadic JNI compat
-    auto lib = linker::dlopen(PathHelper::findDataFile("lib/" + std::string(PathHelper::getAbiDir()) + "/libjnivmsupport.so").c_str(), 0);
+    const char* jnivmSupportPath = path_helper_find_data_file(
+        (std::string("lib/") + path_helper_get_abi_dir() + "/libjnivmsupport.so").c_str());
+    auto lib = jnivmSupportPath != nullptr ? linker::dlopen(jnivmSupportPath, 0) : nullptr;
     if(lib == nullptr) {
         Log::error("LAUNCHER", "Failed to load arm64 variadic compat libjnivmsupport.so Original Error: %s", linker::dlerror());
     } else {
@@ -359,11 +366,11 @@ void JniSupport::startGame(ANativeActivity_createFunc* activityOnCreate, GameAct
 
     activity->textInput = &textInput;
     activity->quitCallback = [this]() { requestExitGame(); };
-    activity->storageDirectory = PathHelper::getPrimaryDataDirectory();
+    activity->storageDirectory = path_helper_get_primary_data_directory();
     activity->stbi_load_from_memory = (decltype(activity->stbi_load_from_memory))stbiLoadFromMemory;
     activity->stbi_image_free = (decltype(activity->stbi_image_free))stbiImageFree;
 
-    assetManager = std::make_unique<FakeAssetManager>(PathHelper::getGameDir() + "assets");
+    assetManager = std::make_unique<FakeAssetManager>(std::string(path_helper_get_game_dir()) + "assets");
     FakeAssetManager::setGlobalAssetManager((AAssetManager *)assetManager.get());
 
     XboxLiveHelper::getInstance().setJvm(&vm);

@@ -80,7 +80,6 @@ extern "C" {
     fn fake_jni_local_frame_create(jvm: *mut c_void) -> *mut c_void;
     fn fake_jni_local_frame_destroy(frame: *mut c_void);
     fn fake_jni_local_frame_get_env(frame: *mut c_void) -> *mut c_void;
-    fn path_helper_get_primary_data_directory() -> *const c_char;
     fn xbox_live_helper_set_jvm(jvm: *mut c_void);
     fn jni_support_get_game_activity_callbacks_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
@@ -417,7 +416,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     // Critical: Baron FakeJni MainActivity::storageDirectory must be set — the game
     // calls getExternalStoragePath via the Baron VM (ga->vm), not only Rust JNI.
     // Without this, AppPlatform logs CurrentFileStoragePath is now '' and paths break.
-    let dir = path_helper_get_primary_data_directory();
+    let dir = crate::path_helper::path_helper_get_primary_data_directory();
     if !dir.is_null() {
         jnivm_set_storage_dir(dir);
         extern "C" {

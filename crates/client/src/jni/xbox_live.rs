@@ -7,10 +7,6 @@ const TICKET_UNKNOWN_ERROR: i32 = 3;
 
 const AUTH_FLOW_ERROR: i32 = 2;
 
-extern "C" {
-    fn path_helper_get_primary_data_directory() -> *const c_char;
-}
-
 fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
     if env.is_null() { return std::ptr::null_mut(); }
     unsafe { *(env as *mut *mut JNINativeInterface) }
@@ -48,7 +44,7 @@ fn get_interop_class(env: *mut JNIEnv) -> jclass {
 
 fn read_config_file_content() -> String {
     let data_dir = unsafe {
-        let ptr = path_helper_get_primary_data_directory();
+        let ptr = crate::path_helper::path_helper_get_primary_data_directory();
         if ptr.is_null() { return "{}".to_string(); }
         CStr::from_ptr(ptr).to_string_lossy().into_owned()
     };
@@ -65,7 +61,7 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_getLocalSto
     _context: jobject,
 ) -> jstring {
     let dir = unsafe {
-        let ptr = path_helper_get_primary_data_directory();
+        let ptr = crate::path_helper::path_helper_get_primary_data_directory();
         if ptr.is_null() { return new_jstring(env, ""); }
         CStr::from_ptr(ptr).to_string_lossy().into_owned()
     };

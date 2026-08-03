@@ -8,17 +8,21 @@
 /// combination: auth always fails immediately, CLL events are dropped.
 
 #include <FileUtil.h>
-#include <mcpelauncher/path_helper.h>
 #include <log.h>
 #include "jni/xbox_live.h"
 
+// PathHelper is ported to Rust (crates/client/src/path_helper.rs).
+extern "C" const char* path_helper_get_primary_data_directory();
+extern "C" const char* path_helper_find_game_file(const char* path);
+
 std::shared_ptr<FakeJni::JString> XboxInterop::getLocalStoragePath(std::shared_ptr<Context> context) {
-    return std::make_shared<FakeJni::JString>(PathHelper::getPrimaryDataDirectory());
+    return std::make_shared<FakeJni::JString>(path_helper_get_primary_data_directory());
 }
 
 std::shared_ptr<FakeJni::JString> XboxInterop::readConfigFile(std::shared_ptr<Context> context) {
     std::string str;
-    if(!FileUtil::readFile(PathHelper::findGameFile("assets/xboxservices.config"), str))
+    const char* config = path_helper_find_game_file("assets/xboxservices.config");
+    if (config == nullptr || !FileUtil::readFile(config, str))
         str = "{}";
     return std::make_shared<FakeJni::JString>(str);
 }

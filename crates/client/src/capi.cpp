@@ -36,32 +36,13 @@ struct MinecraftVersion {
     static void init(std::string, int);
 };
 
-// PathHelper pathInfo is defined in libmcpelauncher-common.a (BSS symbol)
-// Use extern declaration to access it through the C++ mangled symbol.
-// The struct layout must match PathHelper::PathInfo in the header.
-struct PathHelper_Info {
-    std::string appDir, homeDir, dataHome;
-    std::vector<std::string> dataDirs;
-    std::string cacheHome, overrideDataDir, overrideCacheDir, gameDir;
-};
-
-extern PathHelper_Info _ZN10PathHelper8pathInfoE;
-
-static void pathhelper_setGameDir(const std::string& gameDir) {
-    _ZN10PathHelper8pathInfoE.gameDir = gameDir;
-    if (!_ZN10PathHelper8pathInfoE.gameDir.empty() && _ZN10PathHelper8pathInfoE.gameDir.back() != '/')
-        _ZN10PathHelper8pathInfoE.gameDir += '/';
-}
-static void pathhelper_setDataDir(const std::string& dataDir) {
-    _ZN10PathHelper8pathInfoE.overrideDataDir = dataDir;
-    if (!_ZN10PathHelper8pathInfoE.overrideDataDir.empty() && _ZN10PathHelper8pathInfoE.overrideDataDir.back() != '/')
-        _ZN10PathHelper8pathInfoE.overrideDataDir += '/';
-}
-static void pathhelper_setCacheDir(const std::string& cacheDir) {
-    _ZN10PathHelper8pathInfoE.overrideCacheDir = cacheDir;
-    if (!_ZN10PathHelper8pathInfoE.overrideCacheDir.empty() && _ZN10PathHelper8pathInfoE.overrideCacheDir.back() != '/')
-        _ZN10PathHelper8pathInfoE.overrideCacheDir += '/';
-}
+// PathHelper state is owned by Rust (crates/client/src/path_helper.rs); the
+// C++ PathHelper class (path_helper.cpp) has been deleted. These are the Rust
+// FFI entry points that replaced it.
+extern "C" void path_helper_set_game_dir(const char* dir);
+extern "C" void path_helper_set_data_dir(const char* dir);
+extern "C" void path_helper_set_cache_dir(const char* dir);
+extern "C" const char* path_helper_get_game_dir();
 
 struct MinecraftUtils {
     static std::unordered_map<std::string, void*> getLibCSymbols();
@@ -144,9 +125,9 @@ extern "C" size_t linker_rust_find_library(const char* name);
 extern "C" {
 
 void mc_setup_paths(const char* g, const char* d, const char* c) {
-    if (g) pathhelper_setGameDir(std::string(g));
-    if (d) pathhelper_setDataDir(std::string(d));
-    if (c) pathhelper_setCacheDir(std::string(c));
+    if (g) path_helper_set_game_dir(g);
+    if (d) path_helper_set_data_dir(d);
+    if (c) path_helper_set_cache_dir(c);
 }
 
 void mc_init_version(const char* pkg, int code) {
@@ -268,7 +249,7 @@ int mc_load_core_libraries(const char* lib_dir) {
 
     // 5) Set up library search path so dlopen_ext can find libminecraftpe.so etc.
     //    This must match the original main.cpp: update_LD_LIBRARY_PATH with the lib dir
-    std::string libDir = _ZN10PathHelper8pathInfoE.gameDir + "lib/" + MinecraftUtils::getLibraryAbi();
+    std::string libDir = std::string(path_helper_get_game_dir()) + "lib/" + MinecraftUtils::getLibraryAbi();
     linker_rust_add_search_path(libDir.c_str());
 
     return 0;

@@ -11,6 +11,7 @@ mod jni;
 mod text_input_handler;
 mod fmod_utils;
 mod minecraft_load;
+mod path_helper;
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -18,7 +19,6 @@ extern "C" {
     fn fake_thread_mover_store_start_thread_id();
     fn fake_thread_mover_execute_main_thread();
     fn jni_resolve_symbol(sym: *const c_char) -> *mut c_void;
-    fn path_helper_get_primary_data_directory() -> *const c_char;
 }
 
 fn main() {
@@ -91,7 +91,7 @@ fn main() {
     // Redirects Minecraft's Android data paths to the real data dir
     // so cache files (~2GB) land in XDG dirs, not the working directory.
     let data_dir_real = unsafe {
-        let ptr = path_helper_get_primary_data_directory();
+        let ptr = path_helper::path_helper_get_primary_data_directory();
         if ptr.is_null() { String::new() } else { CStr::from_ptr(ptr).to_string_lossy().into_owned() }
     };
     if !data_dir_real.is_empty() {

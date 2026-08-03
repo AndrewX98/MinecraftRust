@@ -1,6 +1,6 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **12 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **10 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
 
 ## Libraries Compiled by build.rs
 
@@ -8,7 +8,6 @@ All former cmake-built static libraries are now compiled locally by **12 `cc::Bu
 |---------|------|---------|-----------|
 | `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 9 objects | **LARGE** |
 | `mcpelauncher-manifest-libs` | logger, file-util, mcpelauncher-common | 4 objects | **SMALL** |
-| `mcpelauncher-base64` | Base64 encoding | 1 object | TRIVIAL |
 | `simpleipc` | Unix IPC + RPC framework | 14 objects | LARGE (skippable) |
 | `cll-telemetry` | Telemetry collection + upload | 15 objects | LARGE (skippable) |
 | `msa-daemon-client` | Microsoft Account auth | 2 objects | **MEDIUM** |
@@ -127,11 +126,9 @@ mcpelauncher-core  →  mcpelauncher-common, logger
 
 simpleipc  (no deps)
 daemon-client-utils  →  simpleipc, logger, file-util, mcpelauncher-common
-msa-daemon-client  →  simpleipc, logger, base64, daemon-client-utils
+msa-daemon-client  →  simpleipc, logger, daemon-client-utils
 
 cll-telemetry  →  logger (standalone)
-
-base64  (no deps)
 ```
 
 All libraries are compiled locally by `cc::Build` instances in `build.rs` and linked as static archives in link order (dependents before dependencies).

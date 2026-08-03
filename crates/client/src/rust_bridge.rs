@@ -1613,22 +1613,6 @@ pub unsafe extern "C" fn securerandom_generate_bytes_rust(bytes: i32, out_len: *
 
 // === JNI class implementations (ported from src/jni/*.cpp) ===
 
-// Base64 decode tables
-static B64_DECODE: [u8; 256] = {
-    const fn init() -> [u8; 256] {
-        let mut t = [0xffu8; 256];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0;
-        while i < chars.len() {
-            t[chars[i] as usize] = i as u8;
-            i += 1;
-        }
-        t[b'=' as usize] = 0;
-        t
-    }
-    init()
-};
-
 #[no_mangle]
 pub unsafe extern "C" fn jbase64_decode_rust(data: *const c_char, len: i32, out_len: *mut i32) -> *mut u8 {
     if data.is_null() || len <= 0 {
@@ -1636,31 +1620,24 @@ pub unsafe extern "C" fn jbase64_decode_rust(data: *const c_char, len: i32, out_
         return std::ptr::null_mut();
     }
     let slice = std::slice::from_raw_parts(data as *const u8, len as usize);
-    // Strip whitespace/newlines
-    let clean: Vec<u8> = slice.iter().copied().filter(|&b| b != b'\r' && b != b'\n').collect();
-    if clean.is_empty() {
-        *out_len = 0;
-        return std::ptr::null_mut();
-    }
-    let approx = clean.len() * 3 / 4;
-    let mut out = Vec::with_capacity(approx);
-    let mut buf: u32 = 0;
-    let mut bits = 0;
-    for &b in &clean {
-        let val = B64_DECODE[b as usize];
-        if val == 0xff {
-            continue;
+    let s = match std::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => {
+            *out_len = 0;
+            return std::ptr::null_mut();
         }
-        buf = (buf << 6) | val as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
+    };
+    match util::base64::decode(s, &['\r', '\n']) {
+        Ok(bytes) => {
+            let result = bytes.into_boxed_slice();
+            *out_len = result.len() as i32;
+            Box::into_raw(result) as *mut u8
+        }
+        Err(_) => {
+            *out_len = 0;
+            std::ptr::null_mut()
         }
     }
-    let result = out.into_boxed_slice();
-    *out_len = result.len() as i32;
-    Box::into_raw(result) as *mut u8
 }
 
 #[no_mangle]

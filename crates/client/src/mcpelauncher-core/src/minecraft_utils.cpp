@@ -3,7 +3,6 @@
 #include <mcpelauncher/hybris_utils.h>
 #include <mcpelauncher/fmod_utils.h>
 #include <mcpelauncher/hook.h>
-#include <mcpelauncher/path_helper.h>
 #include <mcpelauncher/minecraft_version.h>
 #include <minecraft/imported/android_symbols.h>
 #include <minecraft/imported/egl_symbols.h>
@@ -13,6 +12,10 @@
 #include <minecraft/imported/libz_symbols.h>
 #include <log.h>
 #include <FileUtil.h>
+
+// PathHelper is ported to Rust (crates/client/src/path_helper.rs).
+extern "C" const char* path_helper_get_abi_dir();
+extern "C" const char* path_helper_find_data_file(const char* path);
 #include <memory>
 #include <mcpelauncher/linker.h>
 #include <libc_shim.h>
@@ -108,7 +111,7 @@ void* MinecraftUtils::loadLibM() {
 }
 
 void* MinecraftUtils::loadFMod() {
-    void* fmodLib = HybrisUtils::loadLibraryOS("libfmod.so", PathHelper::findDataFile(std::string("lib/native/") + getLibraryAbi() +
+    std::string fmodRel = std::string("lib/native/") + getLibraryAbi() +
 #ifdef __APPLE__
 #if defined(__i386__)
                                                                                       // Minecraft releases linked against libc++-shared have to use a newer version of libfmod
@@ -125,8 +128,11 @@ void* MinecraftUtils::loadFMod() {
                                                                                       (linker::dlopen("libc++_shared.so", 0) ? "/libfmod.so.12.0" : "/libfmod.so.10.20")
 #endif
 #endif
-                                                                                          ),
-                                               fmod_symbols);
+                                                                                      ;
+    const char* fmodPath = path_helper_find_data_file(fmodRel.c_str());
+    if (fmodPath == nullptr)
+        throw std::runtime_error("Failed to load fmod");
+    void* fmodLib = HybrisUtils::loadLibraryOS("libfmod.so", fmodPath, fmod_symbols);
     if(fmodLib == nullptr)
         throw std::runtime_error("Failed to load fmod");
     return fmodLib;
@@ -603,7 +609,7 @@ void MinecraftUtils::setupApi() {
 std::unordered_map<std::string, MinecraftUtils::HookEntry> MinecraftUtils::preinitHooks;
 
 const char* MinecraftUtils::getLibraryAbi() {
-    return PathHelper::getAbiDir();
+    return path_helper_get_abi_dir();
 }
 
 size_t MinecraftUtils::getLibraryBase(void* handle) {
@@ -616,13 +622,7 @@ size_t MinecraftUtils::getLibraryBase(void* handle) {
 // ============================================================
 
 extern "C" const char* mc_find_data_file(const char* path) {
-    try {
-        static std::string cached; // single-threaded load path
-        cached = PathHelper::findDataFile(path);
-        return cached.c_str();
-    } catch (...) {
-        return nullptr;
-    }
+    return path_helper_find_data_file(path);
 }
 
 extern "C" size_t mc_get_preinit_hooks(const char** names, void** vals, size_t max) {

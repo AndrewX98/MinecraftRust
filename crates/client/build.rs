@@ -20,7 +20,6 @@ fn main() {
         "mcpelauncher-client-bridge",
         "mcpelauncher-core",
         "mcpelauncher-manifest-libs",
-        "mcpelauncher-base64",
         "mcpelauncher-simpleipc",
         "mcpelauncher-daemon-client-utils",
         "mcpelauncher-msa-daemon-client",

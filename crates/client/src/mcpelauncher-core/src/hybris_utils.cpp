@@ -1,5 +1,4 @@
 #include <mcpelauncher/hybris_utils.h>
-#include <mcpelauncher/path_helper.h>
 #include <log.h>
 #include <dlfcn.h>
 

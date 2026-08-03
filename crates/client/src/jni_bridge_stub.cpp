@@ -18,7 +18,6 @@
 #include <window_callbacks.h>
 #include <log.h>
 #include <minecraft/imported/android_symbols.h>
-#include <mcpelauncher/path_helper.h>
 #include "core_patches.h"
 #include "splitscreen_patch.h"
 #include "shader_error_patch.h"
@@ -394,12 +393,6 @@ extern "C" void fake_jni_local_frame_destroy(void* frame) {
 
 extern "C" void* fake_jni_local_frame_get_env(void* frame) {
     return &static_cast<FakeJni::LocalFrame*>(frame)->getJniEnv();
-}
-
-extern "C" const char* path_helper_get_primary_data_directory() {
-    static std::string dir;
-    if (dir.empty()) dir = PathHelper::getPrimaryDataDirectory();
-    return dir.c_str();
 }
 
 extern "C" void xbox_live_helper_set_jvm(void* jvm) {

@@ -245,12 +245,11 @@ fn main() {
         b.define("_GNU_SOURCE", None);
     });
 
-    // --- mcpelauncher-manifest-libs (4 files) ---
+    // --- mcpelauncher-manifest-libs (3 files) ---
     let manifest_libs_sources: Vec<PathBuf> = [
         "logger/log.cpp",
         "file-util/FileUtil.cpp",
         "file-util/EnvPathUtil.cpp",
-        "mcpelauncher-common/path_helper.cpp",
     ]
     .iter()
     .map(|f| client_dir.join("src/manifest_libs").join(f))
@@ -259,30 +258,12 @@ fn main() {
         b.cpp(true).std("c++17").flag_if_supported("-w");
         b.include(local_inc.join("logger"));
         b.include(local_inc.join("file-util"));
-        b.include(local_inc.join("mcpelauncher-common"));
         b.include(local_inc.join("mcpelauncher-core"));
         b.define("HAVE_LOGGER", "1");
-        let runtime_dir = client_dir.join("../../runtime");
-        let dev_extra = format!(
-            "\"{}:{}\"",
-            runtime_dir.display(),
-            runtime_dir.join("gamecontrollerdb").display(),
-        );
-        b.define("DEV_EXTRA_PATHS", dev_extra.as_str());
     });
 
     let nlohmann_json_include =
         local_inc.join("build/_deps/nlohmann_json_ext-src/single_include");
-
-    // --- base64 (1 file) ---
-    incr_compile(
-        "mcpelauncher-base64",
-        &[client_dir.join("src/manifest_libs/base64/base64.cpp")],
-        |b| {
-            b.cpp(true).std("c++17").flag_if_supported("-w");
-            b.include(&local_inc);
-        },
-    );
 
     // --- simpleipc (14 files) ---
     let sim = client_dir.join("src/manifest_libs/simpleipc");

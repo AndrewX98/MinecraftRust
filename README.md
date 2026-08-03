@@ -130,6 +130,6 @@ All docs live in `docs/`:
 | `ARCHITECTURE.md` | High-level architecture, crate layout, two-VM coexistence, single Rust linker |
 | `PORTING_PROGRESS.md` | Porting status per JNI file, static libs, bridge stubs |
 | `JNI_VM.md` | JNI VM architecture — libjnivm-sys vs FakeJni/Baron, class registration |
-| `STATIC_LIBS.md` | All 12 cc::Build instances, dependency graph, port complexity |
+| `STATIC_LIBS.md` | All 10 cc::Build instances, dependency graph, port complexity |
 | `CXX_BRIDGE.md` | Rust/C++ FFI interface — extern "C", #[no_mangle], all bridge files |
 | `STARTUP_FLOW.md` | Startup sequence from main() to game thread, step by step |
