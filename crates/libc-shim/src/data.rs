@@ -1,7 +1,6 @@
 //! Data symbols: static data exported for bionic compatibility.
 #![allow(non_camel_case_types, dead_code)]
 
-use std::ffi::c_void;
 
 // These can be zero-initialized stub values; the real game rarely inspects them.
 #[no_mangle]

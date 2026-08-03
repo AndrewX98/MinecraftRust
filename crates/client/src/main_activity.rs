@@ -1,5 +1,5 @@
 use libjnivm_sys::*;
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, CString};
 use std::sync::OnceLock;
 
 const JNI_TRUE: jboolean = 1;
@@ -37,7 +37,7 @@ struct FileObject {
     path: [i8; 4096],
 }
 
-fn create_file_object(env: *mut JNIEnv, path: &str) -> jobject {
+fn create_file_object(_env: *mut JNIEnv, path: &str) -> jobject {
     let len = path.len().min(4095);
     let mut fobj = Box::new(FileObject { path: [0i8; 4096] });
     let src = path.as_bytes();

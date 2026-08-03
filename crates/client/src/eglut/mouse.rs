@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_uint, c_void, CStr};
+use std::ffi::{c_char, c_uint, CStr};
 use x11::xlib::*;
 
 use crate::eglut::state::*;

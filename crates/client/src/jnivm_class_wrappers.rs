@@ -253,7 +253,7 @@ fn register_package_manager_class(env: *mut JNIEnv) {
 // android/content/Context
 // ================================================================
 
-unsafe fn context_make_file(env: *mut JNIEnv) -> jobject {
+unsafe fn context_make_file(_env: *mut JNIEnv) -> jobject {
     let dir = jnivm_get_storage_dir();
     if dir.is_null() { return std::ptr::null_mut(); }
     let path = std::ffi::CStr::from_ptr(dir);
@@ -285,7 +285,7 @@ unsafe extern "C" fn Context_getPackageName(env: *mut JNIEnv, _self_: jobject) -
     new_jstring(env, "com.mojang.minecraftpe")
 }
 
-unsafe extern "C" fn Context_getPackageManager(env: *mut JNIEnv, _self_: jobject) -> jobject {
+unsafe extern "C" fn Context_getPackageManager(_env: *mut JNIEnv, _self_: jobject) -> jobject {
     let pm = Box::new(PackageManagerObject { _dummy: 0 });
     Box::into_raw(pm) as jobject
 }

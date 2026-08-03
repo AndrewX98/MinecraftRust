@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use libjnivm_sys::*;
@@ -195,7 +195,7 @@ fn start_audio_thread(channels: u16, sample_rate: u32) {
     }
 
     std::thread::spawn(move || {
-        use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
+        use cpal::traits::{DeviceTrait, StreamTrait};
 
         let host = cpal::default_host();
         let mut stream: Option<cpal::Stream> = None;

@@ -1,5 +1,5 @@
 #![allow(non_camel_case_types, dead_code)]
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_void};
 
 pub type off_t = i64;
 pub type pid_t = i32;

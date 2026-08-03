@@ -41,7 +41,7 @@ fn init_r_debug() -> RDebug {
     RDebug {
         r_version: 1,
         r_map: std::ptr::null_mut(),
-        r_brk: rtld_db_dlactivity as usize,
+        r_brk: rtld_db_dlactivity as *const () as usize,
         r_state: RDebugState::RtConsistent,
         r_ldbase: 0,
     }

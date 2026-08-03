@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 axml-parser = { path = "../axml-parser" }
+
+[lints]
+workspace = true

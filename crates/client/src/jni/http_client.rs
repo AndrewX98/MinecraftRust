@@ -165,7 +165,7 @@ fn call_void_method(env: *mut JNIEnv, obj: jobject, name: &str, sig: &str, args:
 // com/xbox/httpclient/HttpClientRequest constructor
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_init(
-    env: *mut JNIEnv,
+    _env: *mut JNIEnv,
     self_: jobject,
 ) {
     let state = Arc::new(Mutex::new(HttpRequestState {
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponse
     self_: jobject,
 ) {
     let key = self_ as usize;
-    let body = if let Ok(states) = response_states().lock() {
+    let _body = if let Ok(states) = response_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(s) = state.lock() {
                 s.response_body.clone()

@@ -12,3 +12,6 @@ cc = "1"
 
 [lib]
 crate-type = ["staticlib", "lib"]
+
+[lints]
+workspace = true

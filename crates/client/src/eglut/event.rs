@@ -91,7 +91,7 @@ unsafe fn handle_selection_notify(dpy: *mut Display, ev: &XSelectionEvent) {
 }
 
 unsafe fn handle_selection_request(dpy: *mut Display, ev: &XSelectionRequestEvent) {
-    let property = if ev.target == XInternAtom(dpy, "UTF8_STRING\0".as_ptr() as *const c_char, 0)
+    let _property = if ev.target == XInternAtom(dpy, "UTF8_STRING\0".as_ptr() as *const c_char, 0)
                       || ev.target == XInternAtom(dpy, "text/plain\0".as_ptr() as *const c_char, 0)
                       || ev.target == XInternAtom(dpy, "STRING\0".as_ptr() as *const c_char, 0)
                       || ev.target == XInternAtom(dpy, "TEXT\0".as_ptr() as *const c_char, 0)

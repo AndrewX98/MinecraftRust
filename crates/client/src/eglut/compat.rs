@@ -41,7 +41,7 @@ pub unsafe extern "C" fn eglutInitX11ClassName(value: *const c_char) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn eglutInit(argc: i32, argv: *mut *mut c_char) {
+pub unsafe extern "C" fn eglutInit(argc: i32, _argv: *mut *mut c_char) {
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(&mut stderr, "eglutInit(Rust): ENTER argc={}", argc);
     if STATE.display.is_null() {

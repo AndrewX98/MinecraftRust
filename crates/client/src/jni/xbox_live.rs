@@ -95,7 +95,7 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_getLocale(
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_invokeMSA(
     env: *mut JNIEnv,
-    self_: jobject,
+    _self_: jobject,
     _context: jobject,
     request_code: jint,
     _is_prod: jboolean,

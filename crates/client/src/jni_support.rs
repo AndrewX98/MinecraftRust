@@ -6,7 +6,7 @@
 
 use libjnivm_sys::*;
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::sync::{Mutex, Condvar, OnceLock, atomic::{AtomicBool, Ordering}};
+use std::sync::{Mutex, Condvar, OnceLock};
 
 use crate::jnivm_globals::jnivm_set_text_input_handler;
 
@@ -622,7 +622,7 @@ pub unsafe extern "C" fn jni_support_start_game(
     // Create MainActivity instance via JNI NewObject
     // libjnivm-sys NewObject ignores args and returns a valid dummy pointer
     let activity = jni_call!(env, NewObject(std::ptr::null_mut(), std::ptr::null_mut()));
-    let activity_ref = jni_call!(env, NewGlobalRef(activity));
+    let _activity_ref = jni_call!(env, NewGlobalRef(activity));
 
     // Storage dir is set inside jni_support_start_game_with_baron via path_helper_get_primary_data_directory()
 
@@ -1084,7 +1084,7 @@ mod locale {
     unsafe impl Send for LocaleObject {}
     unsafe impl Sync for LocaleObject {}
 
-    unsafe extern "C" fn locale_getDefault(env: *mut JNIEnv, _clazz: jclass) -> jobject {
+    unsafe extern "C" fn locale_getDefault(_env: *mut JNIEnv, _clazz: jclass) -> jobject {
         // Prefer a stable BCP-47-ish name. Avoid raw LANG values like "C.UTF-8"
         // or Android-style "en.UTF-8" that break host std::locale / collate.
         let name = std::env::var("LANG")

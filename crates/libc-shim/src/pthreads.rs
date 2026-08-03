@@ -512,6 +512,6 @@ pub unsafe extern "C" fn __pthread_cleanup_push(_c: *mut c_void, _cb: Option<uns
 pub unsafe extern "C" fn __pthread_cleanup_pop(_c: *mut c_void, _execute: i32) {
 }
 
-pub unsafe extern "C" fn pthread_gettid_np(thread: libc::pthread_t) -> i32 {
+pub unsafe extern "C" fn pthread_gettid_np(_thread: libc::pthread_t) -> i32 {
     crate::misc::gettid()
 }

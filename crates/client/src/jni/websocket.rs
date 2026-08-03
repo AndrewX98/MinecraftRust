@@ -365,7 +365,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_sendBinary
     _msg: jobject,
 ) -> jboolean {
     let key = self_ as usize;
-    let (connected, stream) = if let Ok(states) = ws_states().lock() {
+    let (connected, _stream) = if let Ok(states) = ws_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(s) = state.lock() {
                 (s.connected, s.stream.clone())

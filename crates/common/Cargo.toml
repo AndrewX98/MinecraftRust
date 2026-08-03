@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 util = { path = "../util" }
+
+[lints]
+workspace = true

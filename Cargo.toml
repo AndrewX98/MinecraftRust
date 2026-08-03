@@ -16,3 +16,8 @@ members = [
     "crates/client",
     "crates/cpp-bridge-sys",
 ]
+
+[workspace.lints.rust]
+non_snake_case = "allow"
+non_upper_case_globals = "allow"
+non_camel_case_types = "allow"

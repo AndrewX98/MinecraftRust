@@ -206,7 +206,7 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     }
 
     // Resolve DT_NEEDED names from strtab
-    let resolved_deps: Vec<String> = if let (Some(st), sz) = (strtab, strtab_size) {
+    let resolved_deps: Vec<String> = if let (Some(st), _sz) = (strtab, strtab_size) {
         let strtab_base = base + st as usize;
         dependencies
             .iter()

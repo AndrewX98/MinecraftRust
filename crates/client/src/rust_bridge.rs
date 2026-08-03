@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 // === FakeWindow: ANativeWindow_getWidth/Height ===
@@ -597,7 +597,6 @@ const GL_UNSIGNED_BYTE: u32 = 0x1401;
 pub mod fake_egl {
 
 use super::*;
-use std::thread::ThreadId;
 
 #[repr(transparent)]
 struct SendPtr<T>(*mut T);

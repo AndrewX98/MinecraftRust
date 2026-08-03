@@ -9,3 +9,6 @@ log = "0.4"
 
 [build-dependencies]
 cc = "1"
+
+[lints]
+workspace = true

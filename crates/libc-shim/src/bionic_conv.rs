@@ -2,7 +2,7 @@
 //! On x86_64 Linux the only layout difference is `addrinfo` pointer field ordering.
 #![allow(non_snake_case)]
 
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void};
 use crate::types::*;
 
 // ── addrinfo ──
