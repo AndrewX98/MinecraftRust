@@ -108,12 +108,11 @@ impl ConfigParser {
 
 struct PropertyValue {
     value: String,
-    lineno: usize,
 }
 
 impl PropertyValue {
-    fn new(value: String, lineno: usize) -> Self {
-        PropertyValue { value, lineno }
+    fn new(value: String) -> Self {
+        PropertyValue { value }
     }
 
     fn append_value(&mut self, value: &str) {
@@ -122,10 +121,6 @@ impl PropertyValue {
 
     fn value(&self) -> &str {
         &self.value
-    }
-
-    fn lineno(&self) -> usize {
-        self.lineno
     }
 }
 
@@ -241,7 +236,7 @@ fn parse_config_file(
                         name
                     );
                 }
-                properties.insert(name, PropertyValue::new(value, cp.lineno));
+                properties.insert(name, PropertyValue::new(value));
             }
             Token::PropertyAppend(name, mut value) => {
                 if let Some(existing) = properties.get_mut(&name) {
@@ -270,7 +265,7 @@ fn parse_config_file(
                         cp.lineno,
                         name
                     );
-                    properties.insert(name, PropertyValue::new(value, cp.lineno));
+                    properties.insert(name, PropertyValue::new(value));
                 }
             }
         }
@@ -294,10 +289,6 @@ impl Properties {
             target_sdk_version: 35,
             resolved_paths: HashMap::new(),
         }
-    }
-
-    fn find_property(&self, name: &str) -> Option<(&PropertyValue, usize)> {
-        self.properties.get(name).map(|pv| (pv, pv.lineno()))
     }
 
     fn get_strings(&self, name: &str) -> Vec<String> {
@@ -949,7 +940,7 @@ namespace.default.link.system.allow_all_shared_libs = true
     #[test]
     fn test_properties_get_strings() {
         let mut map = HashMap::new();
-        map.insert("test.key".to_string(), PropertyValue::new("a, b, c".to_string(), 1));
+        map.insert("test.key".to_string(), PropertyValue::new("a, b, c".to_string()));
         let props = Properties::new(map);
         let strings = props.get_strings("test.key");
         assert_eq!(strings, vec!["a", "b", "c"]);
@@ -958,8 +949,8 @@ namespace.default.link.system.allow_all_shared_libs = true
     #[test]
     fn test_properties_get_bool() {
         let mut map = HashMap::new();
-        map.insert("true.key".to_string(), PropertyValue::new("true".to_string(), 1));
-        map.insert("false.key".to_string(), PropertyValue::new("false".to_string(), 2));
+        map.insert("true.key".to_string(), PropertyValue::new("true".to_string()));
+        map.insert("false.key".to_string(), PropertyValue::new("false".to_string()));
         let props = Properties::new(map);
         assert!(props.get_bool("true.key"));
         assert!(!props.get_bool("false.key"));
@@ -969,7 +960,7 @@ namespace.default.link.system.allow_all_shared_libs = true
     #[test]
     fn test_properties_get_string() {
         let mut map = HashMap::new();
-        map.insert("key".to_string(), PropertyValue::new("value".to_string(), 1));
+        map.insert("key".to_string(), PropertyValue::new("value".to_string()));
         let props = Properties::new(map);
         assert_eq!(props.get_string("key"), "value");
         assert_eq!(props.get_string("nonexistent"), "");
@@ -980,7 +971,7 @@ namespace.default.link.system.allow_all_shared_libs = true
         let mut map = HashMap::new();
         map.insert(
             "test.paths".to_string(),
-            PropertyValue::new("/vendor/${LIB}:/data".to_string(), 1),
+            PropertyValue::new("/vendor/${LIB}:/data".to_string()),
         );
         let mut props = Properties::new(map);
         let paths = props.get_paths("test.paths", false);
@@ -1050,7 +1041,7 @@ namespace.default.link.system.allow_all_shared_libs = true
         let mut map = HashMap::new();
         map.insert(
             "test.paths".to_string(),
-            PropertyValue::new(sub.to_string_lossy().to_string(), 1),
+            PropertyValue::new(sub.to_string_lossy().to_string()),
         );
         let mut props = Properties::new(map);
         let paths = props.get_paths("test.paths", true);

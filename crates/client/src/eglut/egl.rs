@@ -10,13 +10,11 @@ pub type EGLint = c_int;
 pub type EGLenum = c_uint;
 pub type EGLBoolean = c_int;
 
-pub const EGL_TRUE: EGLBoolean = 1;
 pub const EGL_FALSE: EGLBoolean = 0;
 pub const EGL_NONE: EGLint = 0x3038;
 pub const EGL_NO_SURFACE: EGLSurface = std::ptr::null_mut();
 pub const EGL_NO_CONTEXT: EGLContext = std::ptr::null_mut();
 pub const EGL_NO_DISPLAY: EGLDisplay = std::ptr::null_mut();
-pub const EGL_DEFAULT_DISPLAY: *mut Display = std::ptr::null_mut();
 pub const EGL_WINDOW_BIT: EGLint = 0x0004;
 pub const EGL_OPENGL_ES_BIT: EGLint = 0x0001;
 pub const EGL_OPENGL_ES2_BIT: EGLint = 0x0004;

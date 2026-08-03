@@ -179,7 +179,6 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
         context,
         surface,
         config,
-        index: win_idx,
         reshape_cb: None, display_cb: None, keyboard_cb: None, drop_cb: None,
         special_cb: None, paste_cb: None, mouse_cb: None, mouse_raw_cb: None,
         mouse_button_cb: None, touch_start_cb: None, touch_update_cb: None,

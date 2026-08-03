@@ -41,7 +41,6 @@ extern "C" {
     fn get_shim_fscanf() -> *mut c_void;
 }
 
-type va_list = *mut c_void;
 pub type jmp_buf = [u8; 200];
 pub type sigjmp_buf = [u8; 200];
 

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 
+#[cfg(test)]
 pub(crate) fn clear_dlwarning() {
     CURRENT_MSG.with(|current_msg| {
         current_msg.borrow_mut().clear();

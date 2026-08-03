@@ -23,7 +23,6 @@ pub const WINDOWED: i32 = 0;
 pub const FULLSCREEN: i32 = 1;
 pub const NOT_FOCUSED: i32 = 0;
 pub const FOCUSED: i32 = 1;
-pub const POINTER_INVISIBLE: i32 = 0;
 pub const POINTER_VISIBLE: i32 = 1;
 pub const POINTER_UNLOCKED: i32 = 0;
 pub const POINTER_LOCKED: i32 = 1;
@@ -37,8 +36,6 @@ pub const EGLUT_OPENGL_BIT: i32 = 0x1;
 pub const EGLUT_OPENGL_ES1_BIT: i32 = 0x2;
 pub const EGLUT_OPENGL_ES2_BIT: i32 = 0x4;
 pub const EGLUT_OPENVG_BIT: i32 = 0x8;
-pub const EGLUT_ELAPSED_TIME: i32 = 0;
-pub const EGLUT_FULLSCREEN_MODE: i32 = 1;
 
 pub struct EglutWindow {
     pub xwin: Window,
@@ -46,7 +43,6 @@ pub struct EglutWindow {
     pub context: EGLContext,
     pub surface: EGLSurface,
     pub config: EGLConfig,
-    pub index: i32,
     pub reshape_cb: EGLUTreshapeCB,
     pub display_cb: EGLUTdisplayCB,
     pub keyboard_cb: EGLUTkeyboardCB,
@@ -68,12 +64,9 @@ pub struct EglutState {
     pub display: *mut Display,
     pub egl_dpy: EGLDisplay,
     pub api_mask: i32,
-    pub window_width: i32,
-    pub window_height: i32,
     pub window_fullscreen: i32,
     pub verbose: bool,
     pub init_time: i64,
-    pub surface_type: EGLint,
     pub num_windows: i32,
     pub current_xwin: Window,
     pub idle_cb: EGLUTidleCB,
@@ -90,9 +83,8 @@ pub static mut STATE: EglutState = EglutState {
     display: std::ptr::null_mut(),
     egl_dpy: EGL_NO_DISPLAY,
     api_mask: EGLUT_OPENGL_ES1_BIT,
-    window_width: 300, window_height: 300,
     window_fullscreen: WINDOWED,
-    verbose: false, init_time: 0, surface_type: 0,
+    verbose: false, init_time: 0,
     num_windows: 0, current_xwin: 0,
     idle_cb: None, redisplay: false,
     xdnd_drop: 0, xdnd_type_list: 0, xdnd_selection: 0, xdnd_enter: 0,

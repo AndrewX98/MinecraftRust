@@ -65,15 +65,11 @@ struct GameActivity {
     obb_path: *const c_char,
 }
 
-type GameActivityCreateFunc = unsafe extern "C" fn(*mut GameActivity, *mut c_void, usize);
-
 // ================================================================
 // Extern C functions (from C++ wrappers)
 // ================================================================
 
 extern "C" {
-    fn register_all_jnivm_classes(env: *mut JNIEnv);
-    fn jnivm_set_main_window(window: *mut c_void);
     fn jnivm_set_storage_dir(dir: *const c_char);
     fn jnivm_set_asset_manager(mgr: *mut c_void);
     fn jnivm_set_stbi_load_from_memory(fn_ptr: *mut c_void);
@@ -102,7 +98,6 @@ extern "C" {
 // ================================================================
 
 struct JvmState {
-    vm: SendPtr<JavaVM>,
     env: SendPtr<JNIEnv>,
 }
 
@@ -114,32 +109,17 @@ pub fn set_baron_env(env: *mut JNIEnv) {
     }
 }
 
-pub fn get_baron_env() -> Option<*mut JNIEnv> {
-    if let Some(m) = BARON_ENV.get() {
-        if let Ok(guard) = m.lock() {
-            if let Some(ref p) = *guard {
-                return Some(p.0 as *mut JNIEnv);
-            }
-        }
-    }
-    None
-}
-
 fn jvm_state() -> &'static Mutex<JvmState> {
     static STATE: OnceLock<Mutex<JvmState>> = OnceLock::new();
     STATE.get_or_init(|| {
         let vm = unsafe { jnivm_create_vm() };
         let env = unsafe { jnivm_get_env(vm) };
-        Mutex::new(JvmState { vm: SendPtr(vm), env: SendPtr(env) })
+        Mutex::new(JvmState { env: SendPtr(env) })
     })
 }
 
 fn get_env() -> *mut JNIEnv {
     jvm_state().lock().unwrap().env.0
-}
-
-fn get_vm() -> *mut JavaVM {
-    jvm_state().lock().unwrap().vm.0
 }
 
 fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
@@ -199,14 +179,12 @@ struct GameState {
 
 struct JniSupport {
     env: SendPtr<JNIEnv>,
-    vm: SendPtr<JavaVM>,
     window: SendPtr<c_void>,
     input_queue: SendPtr<c_void>,
     game_activity: SendPtr<GameActivity>,
     game_callbacks: SendPtr<GameActivityCallbacks>,
     asset_manager: SendPtr<c_void>,
     is_game_activity: bool,
-    game_handle: SendPtr<c_void>,
     game_state: Mutex<GameState>,
     game_cond: Condvar,
 }
@@ -236,21 +214,18 @@ where
 pub unsafe extern "C" fn jni_support_new() -> *mut c_void {
     // Create the libjnivm-sys VM (first call initializes it)
     let env = get_env();
-    let vm = get_vm();
 
     // Register all classes
     register_all_classes();
 
     let support = Box::new(JniSupport {
         env: SendPtr(env),
-        vm: SendPtr(vm),
         window: SendPtr(std::ptr::null_mut()),
         input_queue: SendPtr(std::ptr::null_mut()),
         game_activity: SendPtr(std::ptr::null_mut()),
         game_callbacks: SendPtr(std::ptr::null_mut()),
         asset_manager: SendPtr(std::ptr::null_mut()),
         is_game_activity: true,
-        game_handle: SendPtr(std::ptr::null_mut()),
         game_state: Mutex::new(GameState { game_exit_val: false, looper_running: false }),
         game_cond: Condvar::new(),
     });

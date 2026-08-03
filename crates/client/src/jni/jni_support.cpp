@@ -15,12 +15,6 @@ extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
 #include "playfab.h"
 #include "package_source.h"
 #include "xbox_live_helper.h"
-#ifdef HAVE_PULSEAUDIO
-#include "pulseaudio.h"
-#endif
-#ifdef HAVE_SDL3AUDIO
-#include "sdl3audio.h"
-#endif
 #include "accounts.h"
 #include "webview.h"
 #include "jbase64.h"
@@ -247,9 +241,6 @@ void JniSupport::registerJniClasses() {
 
     vm.registerClass<EventTracerHelperMultiplayer>();
 
-#if defined(HAVE_PULSEAUDIO) || defined(HAVE_SDL3AUDIO)
-    vm.registerClass<AudioDevice>();
-#endif
     vm.registerClass<AndroidJniHelperMultiplayer>();
 }
 

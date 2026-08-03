@@ -43,13 +43,6 @@ pub unsafe extern "C" fn fake_swappygl_fill_hooks(
     hooks: *mut McpelauncherHook,
     count: usize,
 ) {
-    extern "C" {
-        fn mc_egl_swap_buffers(
-            display: *mut std::ffi::c_void,
-            surface: *mut std::ffi::c_void,
-        ) -> i32;
-    }
-
     let hooks_data = [
         (b"SwappyGL_init\0" as &[u8], stubs::swappygl_init as *mut _),
         (b"SwappyGL_destroy\0" as &[u8], stubs::swappygl_destroy as *mut _),
@@ -352,45 +345,11 @@ mod android_keycodes {
     pub const AKEYCODE_UNKNOWN: i32 = 0;
     pub const AKEYCODE_BACK: i32 = 4;
     pub const AKEYCODE_0: i32 = 7;
-    pub const AKEYCODE_1: i32 = 8;
-    pub const AKEYCODE_2: i32 = 9;
-    pub const AKEYCODE_3: i32 = 10;
-    pub const AKEYCODE_4: i32 = 11;
-    pub const AKEYCODE_5: i32 = 12;
-    pub const AKEYCODE_6: i32 = 13;
-    pub const AKEYCODE_7: i32 = 14;
-    pub const AKEYCODE_8: i32 = 15;
-    pub const AKEYCODE_9: i32 = 16;
     pub const AKEYCODE_DPAD_UP: i32 = 19;
     pub const AKEYCODE_DPAD_DOWN: i32 = 20;
     pub const AKEYCODE_DPAD_LEFT: i32 = 21;
     pub const AKEYCODE_DPAD_RIGHT: i32 = 22;
     pub const AKEYCODE_A: i32 = 29;
-    pub const AKEYCODE_B: i32 = 30;
-    pub const AKEYCODE_C: i32 = 31;
-    pub const AKEYCODE_D: i32 = 32;
-    pub const AKEYCODE_E: i32 = 33;
-    pub const AKEYCODE_F: i32 = 34;
-    pub const AKEYCODE_G: i32 = 35;
-    pub const AKEYCODE_H: i32 = 36;
-    pub const AKEYCODE_I: i32 = 37;
-    pub const AKEYCODE_J: i32 = 38;
-    pub const AKEYCODE_K: i32 = 39;
-    pub const AKEYCODE_L: i32 = 40;
-    pub const AKEYCODE_M: i32 = 41;
-    pub const AKEYCODE_N: i32 = 42;
-    pub const AKEYCODE_O: i32 = 43;
-    pub const AKEYCODE_P: i32 = 44;
-    pub const AKEYCODE_Q: i32 = 45;
-    pub const AKEYCODE_R: i32 = 46;
-    pub const AKEYCODE_S: i32 = 47;
-    pub const AKEYCODE_T: i32 = 48;
-    pub const AKEYCODE_U: i32 = 49;
-    pub const AKEYCODE_V: i32 = 50;
-    pub const AKEYCODE_W: i32 = 51;
-    pub const AKEYCODE_X: i32 = 52;
-    pub const AKEYCODE_Y: i32 = 53;
-    pub const AKEYCODE_Z: i32 = 54;
     pub const AKEYCODE_COMMA: i32 = 55;
     pub const AKEYCODE_PERIOD: i32 = 56;
     pub const AKEYCODE_ALT_LEFT: i32 = 57;
@@ -437,28 +396,8 @@ mod android_keycodes {
     pub const AKEYCODE_MOVE_END: i32 = 123;
     pub const AKEYCODE_INSERT: i32 = 124;
     pub const AKEYCODE_F1: i32 = 131;
-    pub const AKEYCODE_F2: i32 = 132;
-    pub const AKEYCODE_F3: i32 = 133;
-    pub const AKEYCODE_F4: i32 = 134;
-    pub const AKEYCODE_F5: i32 = 135;
-    pub const AKEYCODE_F6: i32 = 136;
-    pub const AKEYCODE_F7: i32 = 137;
-    pub const AKEYCODE_F8: i32 = 138;
-    pub const AKEYCODE_F9: i32 = 139;
-    pub const AKEYCODE_F10: i32 = 140;
-    pub const AKEYCODE_F11: i32 = 141;
-    pub const AKEYCODE_F12: i32 = 142;
     pub const AKEYCODE_NUM_LOCK: i32 = 143;
     pub const AKEYCODE_NUMPAD_0: i32 = 144;
-    pub const AKEYCODE_NUMPAD_1: i32 = 145;
-    pub const AKEYCODE_NUMPAD_2: i32 = 146;
-    pub const AKEYCODE_NUMPAD_3: i32 = 147;
-    pub const AKEYCODE_NUMPAD_4: i32 = 148;
-    pub const AKEYCODE_NUMPAD_5: i32 = 149;
-    pub const AKEYCODE_NUMPAD_6: i32 = 150;
-    pub const AKEYCODE_NUMPAD_7: i32 = 151;
-    pub const AKEYCODE_NUMPAD_8: i32 = 152;
-    pub const AKEYCODE_NUMPAD_9: i32 = 153;
     pub const AKEYCODE_NUMPAD_DIVIDE: i32 = 154;
     pub const AKEYCODE_NUMPAD_MULTIPLY: i32 = 155;
     pub const AKEYCODE_NUMPAD_SUBTRACT: i32 = 156;
@@ -482,7 +421,6 @@ mod key_code {
     pub const NUMPAD_9: i32 = 0x69;
     pub const NUMPAD_MULTIPLY: i32 = 0x6a;
     pub const NUMPAD_ADD: i32 = 0x6b;
-    pub const NUMPAD_SEPERATOR: i32 = 0x6c;
     pub const NUMPAD_SUBTRACT: i32 = 0x6d;
     pub const NUMPAD_DECIMAL: i32 = 0x6e;
     pub const NUMPAD_DIVIDE: i32 = 0x6f;
@@ -637,7 +575,6 @@ pub extern "C" fn window_callbacks_map_gamepad_key(btn: i32) -> i32 {
 // === FakeEGL: EGL stub library (ported from fake_egl.cpp) ===
 
 const EGL_TRUE: i32 = 1;
-const EGL_FALSE: i32 = 0;
 const EGL_SUCCESS: i32 = 0x3000;
 const EGL_NO_SURFACE: *mut c_void = std::ptr::null_mut();
 const EGL_NO_CONTEXT: *mut c_void = std::ptr::null_mut();
@@ -651,7 +588,6 @@ const EGL_VERSION: i32 = 0x3054;
 const EGL_EXTENSIONS: i32 = 0x3055;
 const EGL_CLIENT_APIS: i32 = 0x308D;
 const EGL_NATIVE_VISUAL_ID: i32 = 0x302E;
-const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 // GL constants
 const GL_VIEWPORT: u32 = 0x0BA2;
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
@@ -740,12 +676,6 @@ unsafe extern "C" fn debug_gl_draw_elements(mode: u32, count: i32, typ: u32, ind
         real(mode, count, typ, indices);
     }
 }
-
-// Per-thread context tracking
-pub static THREAD_CONTEXTS: LazyLock<Mutex<HashMap<ThreadId, SendPtr<c_void>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-pub static THREAD_SURFACES: LazyLock<Mutex<HashMap<ThreadId, SendPtr<c_void>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 std::thread_local! {
     pub static TLS_REAL_SURFACE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -981,69 +911,6 @@ pub extern "C" fn fake_egl_create_context(
 #[no_mangle]
 pub extern "C" fn fake_egl_destroy_context(_display: *mut c_void, _context: *mut c_void) -> i32 {
     EGL_TRUE
-}
-
-fn get_or_create_thread_context() -> *mut c_void {
-    unsafe {
-        if REAL_EGL_CREATE_CONTEXT.load(Ordering::SeqCst).is_null()
-            || SAVED_EGL_DISPLAY.load(Ordering::SeqCst).is_null()
-            || SAVED_EGL_CONTEXT.load(Ordering::SeqCst).is_null()
-        {
-            return std::ptr::null_mut();
-        }
-        let tid = std::thread::current().id();
-        {
-            let contexts = THREAD_CONTEXTS.lock().unwrap();
-            if let Some(ctx) = contexts.get(&tid) {
-                return ctx.0;
-            }
-        }
-        let create_ctx: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void =
-            std::mem::transmute(REAL_EGL_CREATE_CONTEXT.load(Ordering::SeqCst));
-        let ctx_attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE, 0];
-        let ctx = create_ctx(
-            SAVED_EGL_DISPLAY.load(Ordering::SeqCst),
-            SAVED_EGL_CONFIG.load(Ordering::SeqCst),
-            SAVED_EGL_CONTEXT.load(Ordering::SeqCst),
-            ctx_attrs.as_ptr(),
-        );
-        log::warn!("[FakeEGL]   created shared context for thread {:?}: {:p}", tid, ctx);
-        if !ctx.is_null() {
-            THREAD_CONTEXTS.lock().unwrap().insert(tid, SendPtr(ctx));
-        }
-
-        // Also create a per-thread window surface. Mesa's X11 EGL backend
-        // doesn't allow binding a surface created on one thread to a context
-        // on another thread — so we must create the surface on this thread too.
-        if !ctx.is_null() {
-            let create_surf_ptr = REAL_EGL_CREATE_WINDOW_SURFACE.load(Ordering::SeqCst);
-            let native_win = SAVED_NATIVE_WINDOW.load(Ordering::SeqCst);
-            let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-            let saved_cfg = SAVED_EGL_CONFIG.load(Ordering::SeqCst);
-            log::warn!("[FakeEGL]   debug per-thread surf: create_surf={:p} native={:p} disp={:p} cfg={:p}",
-                       create_surf_ptr, native_win, saved_disp, saved_cfg);
-            if let Some(f) = create_surf_ptr.as_ref() {
-                if !native_win.is_null() && !saved_disp.is_null() && !saved_cfg.is_null() {
-                    let create_surf: extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void =
-                        std::mem::transmute(f);
-                    let attribs = [EGL_NONE, 0];
-                    let new_surf = create_surf(
-                        saved_disp, saved_cfg, native_win, attribs.as_ptr(),
-                    );
-                    let egl_err_val = if let Some(err_f) = REAL_EGL_GET_ERROR.load(Ordering::SeqCst).as_ref() {
-                        let err_fn: extern "C" fn() -> i32 = std::mem::transmute(err_f);
-                        err_fn()
-                    } else { -1 };
-                    log::warn!("[FakeEGL]   created per-thread surface attempt result: {:p} err=0x{:x}", new_surf, egl_err_val);
-                    if !new_surf.is_null() {
-                        log::warn!("[FakeEGL]   created per-thread surface for thread {:?}: {:p}", tid, new_surf);
-                        THREAD_SURFACES.lock().unwrap().insert(tid, SendPtr(new_surf));
-                    }
-                }
-            }
-        }
-        ctx
-    }
 }
 
 #[no_mangle]

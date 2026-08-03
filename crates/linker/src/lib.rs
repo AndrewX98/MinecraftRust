@@ -382,7 +382,6 @@ fn load_library_internal(
                     // Restore segment protections per original LOAD flags.
                     // Use page-aligned addresses/sizes to match kernel mprotect requirements.
                     const PAGE_MASK: usize = 0xfff;
-                    const PAGE_SIZE: usize = 0x1000;
                     for &(seg_addr, seg_size, seg_prot) in &loaded.soinfo.load_segments {
                         let aligned_start = seg_addr & !PAGE_MASK;
                         let end = seg_addr + seg_size;

@@ -110,37 +110,10 @@ impl TextInputHandler {
         }
     }
 
-    fn next_word_boundary(s: &str, byte_pos: usize) -> usize {
-        let chars: Vec<(usize, char)> = s.char_indices().collect();
-        let start_ci = chars.iter().position(|(i, _)| *i >= byte_pos).unwrap_or(chars.len());
-        let mut pos = byte_pos;
-        // Skip current word
-        for i in start_ci..chars.len() {
-            if is_word_separator(chars[i].1) {
-                pos = chars[i].0;
-                break;
-            }
-            pos = chars[i].0 + chars[i].1.len_utf8();
-        }
-        // Skip separators to next word start
-        for i in start_ci..chars.len() {
-            if chars[i].0 >= pos {
-                if !is_word_separator(chars[i].1) {
-                    pos = chars[i].0;
-                    break;
-                }
-                pos = chars[i].0 + chars[i].1.len_utf8();
-            }
-        }
-        pos.min(s.len())
-    }
-
     pub fn is_enabled(&self) -> bool { self.enabled }
-    pub fn get_enabled_no(&self) -> usize { self.enabled_no }
     pub fn is_multiline(&self) -> bool { self.multiline }
     pub fn get_text(&self) -> &str { &self.current_text }
     pub fn get_cursor_position(&self) -> i32 { self.current_text_position_utf as i32 }
-    pub fn get_copy_position(&self) -> i32 { self.current_text_copy_position_utf as i32 }
 
     pub fn enable(&mut self, text: String, multiline: bool) {
         self.enabled = true;

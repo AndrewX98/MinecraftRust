@@ -67,12 +67,7 @@ pub(crate) unsafe fn eglut_init_inner(dpy_ptr: *mut *mut Display) {
     STATE.xtext_uri_list = XInternAtom(dpy, "text/uri-list\0".as_ptr() as *const c_char, 0);
     eprintln!("eglut_init_inner: atoms done");
 
-    XINPUT_RT = Some(XInputRuntime {
-        lib_xi2: None, xi2_available: false, xi_opcode: 0,
-        xisuppress: None, xiselect_events: None, xiquery_device: None,
-        xifree_device: None, xiquery_extension: None, xiget_property: None,
-        xiseti_focus: None, xigeti_focus: None,
-    });
+    XINPUT_RT = Some(XInputRuntime { xi2_available: false });
 }
 
 pub(crate) unsafe fn eglutChooseConfig(api_mask: i32, attribs_surface_type: EGLint) -> EGLConfig {
@@ -148,7 +143,6 @@ pub unsafe extern "C" fn eglutNativeInitWindow(dpy: *mut Display, xwin: Window, 
     STATE.current_window = Some(Box::new(EglutWindow {
         xwin, width, height, x: 0, y: 0,
         context, surface, config,
-        index: 0,
         reshape_cb: None, display_cb: None, keyboard_cb: None, drop_cb: None,
         special_cb: None, paste_cb: None, mouse_cb: None, mouse_raw_cb: None,
         mouse_button_cb: None, touch_start_cb: None, touch_update_cb: None,

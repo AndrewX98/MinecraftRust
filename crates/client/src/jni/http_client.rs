@@ -24,12 +24,7 @@ struct HttpRequestState {
     method: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
-    response_body: Vec<u8>,
-    response_headers: Vec<(String, String)>,
-    response_code: i32,
     call_handle: i64,
-    input_stream_handle: i64,
-    output_stream_handle: i64,
 }
 
 // Map from jobject to request state
@@ -178,12 +173,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_init(
         method: String::new(),
         headers: Vec::new(),
         body: Vec::new(),
-        response_body: Vec::new(),
-        response_headers: Vec::new(),
-        response_code: 0,
         call_handle: 0,
-        input_stream_handle: 0,
-        output_stream_handle: 0,
     }));
 
     let key = self_ as usize;

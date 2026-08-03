@@ -13,7 +13,6 @@ struct WebSocketState {
     ws_protocol: String,
     headers: Vec<(String, String)>,
     connected: bool,
-    call_handle: i64,
     stream: Option<Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>>,
 }
 
@@ -102,14 +101,13 @@ fn call_void_method(env: *mut JNIEnv, obj: jobject, name: &str, sig: &str, args:
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_init(
     _env: *mut JNIEnv,
     self_: jobject,
-    owner: jlong,
+    _owner: jlong,
 ) {
     let state = Arc::new(Mutex::new(WebSocketState {
         url: String::new(),
         ws_protocol: String::new(),
         headers: Vec::new(),
         connected: false,
-        call_handle: owner,
         stream: None,
     }));
 

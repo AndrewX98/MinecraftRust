@@ -5,12 +5,6 @@
 #include "lib_http_client_websocket.h"
 #include "package_source.h"
 #include "fmod.h"
-#ifdef HAVE_PULSEAUDIO
-#include "pulseaudio.h"
-#endif
-#ifdef HAVE_SDL3AUDIO
-#include "sdl3audio.h"
-#endif
 #include "java_types.h"
 #include "accounts.h"
 #include "webview.h"
@@ -264,15 +258,6 @@ BEGIN_NATIVE_DESCRIPTOR(NativePackageSourceListener){Constructor<NativePackageSo
 
     BEGIN_NATIVE_DESCRIPTOR(PackageSourceFactory){Function<&PackageSourceFactory::createGooglePlayPackageSource>{}, "createGooglePlayPackageSource"},
     END_NATIVE_DESCRIPTOR
-
-#if defined(HAVE_PULSEAUDIO) || defined(HAVE_SDL3AUDIO)
-    BEGIN_NATIVE_DESCRIPTOR(AudioDevice){Constructor<AudioDevice>{}},
-    {Function<&AudioDevice::init>{}, "init"},
-    {Function<&AudioDevice::write>{}, "write"},
-    {Function<&AudioDevice::write2>{}, "write"},
-    {Function<&AudioDevice::close>{}, "close"},
-    END_NATIVE_DESCRIPTOR
-#endif
 
 #ifndef NO_OPENSSL
     BEGIN_NATIVE_DESCRIPTOR(ShaHasher){Constructor<ShaHasher>{}},

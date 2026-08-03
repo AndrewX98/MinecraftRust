@@ -12,8 +12,6 @@ extern "C" {
     fn mc_create_window_and_setup_graphics();
     pub fn mc_egl_swap_buffers(display: *mut std::ffi::c_void, surface: *mut std::ffi::c_void) -> i32;
     fn mc_dlsym(handle: *mut std::ffi::c_void, symbol: *const i8) -> *mut std::ffi::c_void;
-    fn jni_support_start_game_cpp(s: *mut std::ffi::c_void, game_on_create: *mut std::ffi::c_void,
-                                  stbi_load: *mut std::ffi::c_void, stbi_image_free: *mut std::ffi::c_void);
     fn jni_support_register_minecraft_natives_cpp(s: *mut std::ffi::c_void,
                                                   game_handle: *mut std::ffi::c_void);
     fn fake_looper_set_jni_support(support: *mut std::ffi::c_void);
@@ -79,15 +77,6 @@ pub fn load_minecraft() -> Result<*mut std::ffi::c_void, ()> {
 
 pub fn create_cpp_jni_support() -> *mut std::ffi::c_void {
     unsafe { crate::jni_support::jni_support_create_cpp() }
-}
-
-pub fn destroy_cpp_jni_support(s: *mut std::ffi::c_void) {
-    unsafe { crate::jni_support::jni_support_destroy_cpp(s) }
-}
-
-pub fn start_game_cpp(support: *mut std::ffi::c_void, game_on_create: *mut std::ffi::c_void,
-                      stbi_load: *mut std::ffi::c_void, stbi_image_free: *mut std::ffi::c_void) {
-    unsafe { jni_support_start_game_cpp(support, game_on_create, stbi_load, stbi_image_free) }
 }
 
 pub fn register_minecraft_natives_cpp(support: *mut std::ffi::c_void,

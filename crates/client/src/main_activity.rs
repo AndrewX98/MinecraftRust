@@ -3,7 +3,6 @@ use std::ffi::{c_char, CStr, CString};
 use std::sync::OnceLock;
 
 const JNI_TRUE: jboolean = 1;
-const JNI_FALSE: jboolean = 0;
 
 fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
     if env.is_null() {
@@ -13,10 +12,7 @@ fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
 }
 
 extern "C" {
-    fn jnivm_get_main_window() -> *mut std::ffi::c_void;
     fn jnivm_get_storage_dir() -> *const c_char;
-    fn jnivm_get_text_input_handler() -> *mut std::ffi::c_void;
-    fn jnivm_get_asset_manager() -> *mut std::ffi::c_void;
     fn jnivm_get_stbi_load_from_memory() -> *mut std::ffi::c_void;
     fn jnivm_get_stbi_image_free() -> *mut std::ffi::c_void;
     fn core_patches_hide_mouse_pointer();

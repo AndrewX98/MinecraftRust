@@ -3,12 +3,8 @@ use std::path::Path;
 use libjnivm_sys::*;
 
 // Constants matching C++ xbox_live.h
-const TICKET_OK: i32 = 0;
-const TICKET_UI_INTERACTION_REQUIRED: i32 = 1;
 const TICKET_UNKNOWN_ERROR: i32 = 3;
 
-const AUTH_FLOW_OK: i32 = 0;
-const AUTH_FLOW_CANCEL: i32 = 1;
 const AUTH_FLOW_ERROR: i32 = 2;
 
 extern "C" {
