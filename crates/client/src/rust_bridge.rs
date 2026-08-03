@@ -1655,6 +1655,23 @@ pub unsafe extern "C" fn base64_encode_rust(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn mcpelauncher_log_vlog(level: i32, tag: *const c_char, text: *const c_char) {
+    if tag.is_null() || text.is_null() {
+        return;
+    }
+    let tag = CStr::from_ptr(tag).to_string_lossy().into_owned();
+    let text = CStr::from_ptr(text).to_string_lossy().into_owned();
+    let level = match level {
+        0 => util::logger::LogLevel::Trace,
+        1 => util::logger::LogLevel::Debug,
+        2 => util::logger::LogLevel::Info,
+        3 => util::logger::LogLevel::Warn,
+        _ => util::logger::LogLevel::Error,
+    };
+    util::logger::Log::vlog(level, &tag, &text);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn file_util_read_file_rust(
     path: *const c_char,
     out_len: *mut i32,
@@ -1676,6 +1693,84 @@ pub unsafe extern "C" fn file_util_read_file_rust(
             *out_len = 0;
             std::ptr::null_mut()
         }
+    }
+}
+
+// === file-util / EnvPathUtil FFI (ported from manifest_libs/file-util) ===
+
+/// Return a pointer valid until the next call on the same thread. Callers copy
+/// the string immediately (mirrors the C++ `static std::string` pattern).
+fn cstr_static(s: String) -> *const c_char {
+    thread_local! {
+        static CACHE: std::cell::RefCell<Vec<CString>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    CACHE.with(|cache| {
+        let mut v = cache.borrow_mut();
+        v.push(CString::new(s).unwrap_or_else(|_| CString::new("").unwrap()));
+        v.last().unwrap().as_ptr()
+    })
+}
+
+unsafe fn cstr_to_string(p: *const c_char) -> Option<String> {
+    if p.is_null() {
+        None
+    } else {
+        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn file_util_get_parent(path: *const c_char) -> *const c_char {
+    match cstr_to_string(path) {
+        Some(p) => cstr_static(util::file_util::FileUtil::get_parent(&p)),
+        None => std::ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn file_util_mkdir_recursive(path: *const c_char) -> c_int {
+    match cstr_to_string(path) {
+        Some(p) => match util::file_util::FileUtil::mkdir_recursive(&p) {
+            Ok(()) => 0,
+            Err(e) => {
+                log::debug!("file_util_mkdir_recursive: failed '{}': {}", p, e);
+                -1
+            }
+        },
+        None => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn env_path_util_get_app_dir() -> *const c_char {
+    cstr_static(util::file_util::EnvPathUtil::get_app_dir())
+}
+
+#[no_mangle]
+pub extern "C" fn env_path_util_get_data_home() -> *const c_char {
+    cstr_static(util::file_util::EnvPathUtil::get_data_home())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn env_path_util_find_in_path(
+    what: *const c_char,
+    path: *const c_char,
+    cwd: *const c_char,
+) -> *const c_char {
+    let what = match cstr_to_string(what) {
+        Some(s) => s,
+        None => return std::ptr::null(),
+    };
+    let path = cstr_to_string(path);
+    let cwd = cstr_to_string(cwd);
+    let result = match &path {
+        Some(p) => util::file_util::EnvPathUtil::find_in_path_with(&what, p, cwd.as_deref()),
+        None => util::file_util::EnvPathUtil::find_in_path(&what),
+    };
+    match result {
+        Some(s) => cstr_static(s),
+        None => std::ptr::null(),
     }
 }
 

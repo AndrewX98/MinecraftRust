@@ -115,9 +115,31 @@ where
         }
     }
 
-    // 4. Quick exit if nothing changed and the archive already exists.
+    // 4. Quick exit if nothing changed AND the archive already reflects the
+    //    current source list (a removed source leaves a stale object in the
+    //    archive otherwise, so compare member names against expected objects).
+    let expected_objects: std::collections::HashSet<String> = sources
+        .iter()
+        .map(|s| cc_object_path(s).file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
     let archive = out_dir.join(format!("lib{}.a", name));
-    if n_changed == 0 && archive.exists() {
+    let archive_current = if n_changed == 0 && archive.exists() {
+        let members: std::collections::HashSet<String> = String::from_utf8_lossy(
+            &std::process::Command::new("ar")
+                .arg("t")
+                .arg(&archive)
+                .output()
+                .map(|o| o.stdout)
+                .unwrap_or_default(),
+        )
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+        members == expected_objects
+    } else {
+        false
+    };
+    if archive_current {
         println!("cargo:rustc-link-lib=static={}", name);
         println!("cargo:rustc-link-search=native={}", out_dir.display());
         return;
@@ -236,30 +258,12 @@ fn main() {
         b.include(local_inc.join("android-support-headers"));
         b.include(local_inc.join("logger"));
         b.include(local_inc.join("mcpelauncher-common"));
-        b.include(local_inc.join("file-util"));
         b.include(local_inc.join("minecraft-imported-symbols"));
         b.include(local_inc.join("libjnivm"));
         b.include(local_inc.join("game-window"));
         b.include(local_inc.join("libc-shim"));
         b.define("PATH_MAX", "256");
         b.define("_GNU_SOURCE", None);
-    });
-
-    // --- mcpelauncher-manifest-libs (3 files) ---
-    let manifest_libs_sources: Vec<PathBuf> = [
-        "logger/log.cpp",
-        "file-util/FileUtil.cpp",
-        "file-util/EnvPathUtil.cpp",
-    ]
-    .iter()
-    .map(|f| client_dir.join("src/manifest_libs").join(f))
-    .collect();
-    incr_compile("mcpelauncher-manifest-libs", &manifest_libs_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("logger"));
-        b.include(local_inc.join("file-util"));
-        b.include(local_inc.join("mcpelauncher-core"));
-        b.define("HAVE_LOGGER", "1");
     });
 
     let nlohmann_json_include =
@@ -305,7 +309,6 @@ fn main() {
             b.include(local_inc.join("daemon-utils"));
             b.include(local_inc.join("simple-ipc"));
             b.include(local_inc.join("logger"));
-            b.include(local_inc.join("file-util"));
             b.include(local_inc.join("mcpelauncher-common"));
         },
     );
@@ -451,6 +454,7 @@ fn main() {
         "jni_bridge_stub.cpp",
         "jnivm_class_wrappers.cpp",
         "jbase64_stub.cpp",
+        "logger_stub.cpp",
         "arrays_stub.cpp",
         "asset_manager_stub.cpp",
         "package_source_stub.cpp",
@@ -519,7 +523,6 @@ fn main() {
         b.include(local_inc.join("mcpelauncher-common"));
         b.include(local_inc.join("msa-daemon-client"));
         b.include(local_inc.join("cll-telemetry"));
-        b.include(local_inc.join("file-util"));
         b.include(local_inc.join("mcpelauncher-core"));
         b.include(local_inc.join("daemon-utils"));
         b.include(local_inc.join("simple-ipc"));

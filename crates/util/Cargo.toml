@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 chrono = "0.4"
 dirs = "5"
+libc = "0.2"
 
 [lints]
 workspace = true

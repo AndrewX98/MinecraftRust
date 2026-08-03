@@ -62,8 +62,8 @@ All 11 former cmake-built static libs are now compiled locally by `cc::Build` in
 | `cll-telemetry` | Telemetry collection + upload | Local `.a` via `cc::Build` |
 | `mcpelauncher-common` | Path resolution, OpenSSL safety | Local `.a` via `cc::Build` |
 | `daemon-client-utils` | Daemon forking/inotify | Local `.a` via `cc::Build` |
-| `file-util` | POSIX file operations | Local `.a` via `cc::Build` |
-| `logger` | printf-style logging | Local `.a` via `cc::Build` |
+| `file-util` | POSIX file operations | **PORTED** — Rust `util::file_util` + `file_util_*`/`env_path_util_*` FFI |
+| `logger` | printf-style logging | **PORTED** — Rust `util::logger` + `logger_stub.cpp` shim |
 
 ## FakeLooper Porting
 

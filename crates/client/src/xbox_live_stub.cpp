@@ -7,13 +7,14 @@
 /// Behavior mirrors the previous xbox_live.cpp + xbox_live_helper_stub.cpp
 /// combination: auth always fails immediately, CLL events are dropped.
 
-#include <FileUtil.h>
 #include <log.h>
 #include "jni/xbox_live.h"
 
 // PathHelper is ported to Rust (crates/client/src/path_helper.rs).
 extern "C" const char* path_helper_get_primary_data_directory();
 extern "C" const char* path_helper_find_game_file(const char* path);
+// FileUtil is ported to Rust (crates/util/src/file_util.rs).
+extern "C" unsigned char* file_util_read_file_rust(const char* path, int* out_len);
 
 std::shared_ptr<FakeJni::JString> XboxInterop::getLocalStoragePath(std::shared_ptr<Context> context) {
     return std::make_shared<FakeJni::JString>(path_helper_get_primary_data_directory());
@@ -22,8 +23,14 @@ std::shared_ptr<FakeJni::JString> XboxInterop::getLocalStoragePath(std::shared_p
 std::shared_ptr<FakeJni::JString> XboxInterop::readConfigFile(std::shared_ptr<Context> context) {
     std::string str;
     const char* config = path_helper_find_game_file("assets/xboxservices.config");
-    if (config == nullptr || !FileUtil::readFile(config, str))
+    int out_len = 0;
+    unsigned char* data = config == nullptr ? nullptr : file_util_read_file_rust(config, &out_len);
+    if (data == nullptr || out_len == 0) {
         str = "{}";
+    } else {
+        str.assign(reinterpret_cast<char*>(data), static_cast<size_t>(out_len));
+    }
+    free(data);
     return std::make_shared<FakeJni::JString>(str);
 }
 

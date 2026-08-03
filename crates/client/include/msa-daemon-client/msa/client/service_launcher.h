@@ -1,7 +1,9 @@
 #pragma once
 
 #include <daemon_utils/daemon_launcher.h>
-#include <EnvPathUtil.h>
+
+// EnvPathUtil is ported to Rust (crates/util/src/file_util.rs).
+extern "C" const char* env_path_util_get_data_home();
 
 namespace msa {
 namespace client {
@@ -15,7 +17,7 @@ private:
     std::string executable_path;
 
     static std::string getDefaultDataPath() {
-        return EnvPathUtil::getDataHome() + "/msa";
+        return std::string(env_path_util_get_data_home()) + "/msa";
     }
 
 public:

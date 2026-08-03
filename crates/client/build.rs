@@ -19,7 +19,6 @@ fn main() {
     static STATIC_LIBS: &[&str] = &[
         "mcpelauncher-client-bridge",
         "mcpelauncher-core",
-        "mcpelauncher-manifest-libs",
         "mcpelauncher-simpleipc",
         "mcpelauncher-daemon-client-utils",
         "mcpelauncher-msa-daemon-client",

@@ -1,13 +1,12 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **10 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **9 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
 
 ## Libraries Compiled by build.rs
 
 | Library | Role | Objects | Complexity |
 |---------|------|---------|-----------|
 | `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 9 objects | **LARGE** |
-| `mcpelauncher-manifest-libs` | logger, file-util, mcpelauncher-common | 4 objects | **SMALL** |
 | `simpleipc` | Unix IPC + RPC framework | 14 objects | LARGE (skippable) |
 | `cll-telemetry` | Telemetry collection + upload | 15 objects | LARGE (skippable) |
 | `msa-daemon-client` | Microsoft Account auth | 2 objects | **MEDIUM** |
@@ -109,26 +108,25 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 | Library | File(s) | Role | Port |
 |---------|---------|------|------|
 | `daemon-client-utils` | `daemon_launcher.cpp` (194 lines) | Fork daemon, inotify wait | SMALL (skippable) |
-| `file-util` | `FileUtil.cpp` (92), `EnvPathUtil.cpp` (119) | POSIX file ops | TRIVIAL — `std::fs`/`std::path` equivalents exist |
-| `logger` | `log.cpp` (22 lines) | printf-style logging | TRIVIAL — Rust `log` crate already used |
+| `logger` | `log.cpp` (22 lines) | printf-style logging | **PORTED** — Rust `util::logger` + thin `logger_stub.cpp` shim |
 
 ## Dependency Graph Between Libraries
 
 ```
-logger  (no deps)
-file-util  (no deps)
 mcpelauncher-common  (no deps)
 
 linux-gamepad  (no deps, used by game-window)
 game-window  →  linux-gamepad
 
-mcpelauncher-core  →  mcpelauncher-common, logger
+mcpelauncher-core  →  mcpelauncher-common
 
 simpleipc  (no deps)
-daemon-client-utils  →  simpleipc, logger, file-util, mcpelauncher-common
-msa-daemon-client  →  simpleipc, logger, daemon-client-utils
+daemon-client-utils  →  simpleipc, mcpelauncher-common
+msa-daemon-client  →  simpleipc, daemon-client-utils
 
-cll-telemetry  →  logger (standalone)
+cll-telemetry  (standalone)
 ```
+
+`logger` and `file-util` are no longer C++ static libs — both are ported to Rust (`crates/util/src/logger.rs`, `crates/util/src/file_util.rs`). The C++ bridge reaches them through FFI shims (`logger_stub.cpp` for `Log::vlog`, `env_path_util_*`/`file_util_*` for file-util).
 
 All libraries are compiled locally by `cc::Build` instances in `build.rs` and linked as static archives in link order (dependents before dependencies).

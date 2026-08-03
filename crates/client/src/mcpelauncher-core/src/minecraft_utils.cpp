@@ -11,11 +11,13 @@
 #include <minecraft/imported/glesv2_symbols.h>
 #include <minecraft/imported/libz_symbols.h>
 #include <log.h>
-#include <FileUtil.h>
 
 // PathHelper is ported to Rust (crates/client/src/path_helper.rs).
 extern "C" const char* path_helper_get_abi_dir();
 extern "C" const char* path_helper_find_data_file(const char* path);
+// EnvPathUtil is ported to Rust (crates/util/src/file_util.rs).
+extern "C" const char* env_path_util_get_app_dir();
+extern "C" const char* env_path_util_find_in_path(const char* what, const char* path, const char* cwd);
 #include <memory>
 #include <mcpelauncher/linker.h>
 #include <libc_shim.h>
@@ -55,7 +57,6 @@ extern "C" int mcpelauncher_dispatch_unload_library(void* handle);
 #include <stdexcept>
 #include <cstring>
 #include <errno.h>
-#include <EnvPathUtil.h>
 #include <jnivm.h>
 
 void MinecraftUtils::workaroundLocaleBug() {
@@ -173,14 +174,15 @@ struct GoogleCredentials {
 };
 
 static std::string getUiExecutablePath() {
-    std::string path;
 #ifndef MCPELAUNCHER_UI_PATH
 #define MCPELAUNCHER_UI_PATH "."
 #endif
-    if(EnvPathUtil::findInPath("mcpelauncher-ui-qt", path, MCPELAUNCHER_UI_PATH, EnvPathUtil::getAppDir().c_str()))
-        return path;
-    if(EnvPathUtil::findInPath("mcpelauncher-ui-qt", path))
-        return path;
+    const char* path = env_path_util_find_in_path("mcpelauncher-ui-qt", MCPELAUNCHER_UI_PATH, env_path_util_get_app_dir());
+    if (path != nullptr)
+        return std::string(path);
+    path = env_path_util_find_in_path("mcpelauncher-ui-qt", nullptr, nullptr);
+    if (path != nullptr)
+        return std::string(path);
     return "mcpelauncher-ui-qt";
 }
 

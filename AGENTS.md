@@ -16,7 +16,7 @@ RUST_LOG=linker=info ./target/debug/client -dg /home/andrew/.local/MinecraftLaun
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.
 
-No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 10 static libs built there; `client/build.rs` only emits link directives. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
+No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 9 static libs built there; `client/build.rs` only emits link directives. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
 
 - **Initial build:** ~3 min (all C++ files compiled)
 - **Single C++ file change:** ~2s (hash-based incremental)
@@ -34,7 +34,7 @@ cargo build -p client
 | Crate | Role |
 |-------|------|
 | **client** | Sole binary — eglut, FakeEGL, CorePatches, JNI, event dispatch |
-| **cpp-bridge-sys** | C++ cc::Build compilation (10 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
+| **cpp-bridge-sys** | C++ cc::Build compilation (9 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
 | **libc-shim** | 602 pure Rust libc replacements (FILE*, pthreads, sockets, mmap) |
 | **linker** | Pure Rust ELF linker — the **only** loader (C++ bionic linker deleted in Phase 6) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 fn JNIEnv vtable) |

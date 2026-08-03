@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Write;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -35,7 +36,10 @@ impl Log {
     pub fn vlog(level: LogLevel, tag: &str, text: &str) {
         let now: chrono::DateTime<chrono::Local> = std::time::SystemTime::now().into();
         let timestamp = now.format("%H:%M:%S");
-        eprintln!("{} {:<5} [{}] {}", timestamp, level.as_str(), tag, text);
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let _ = writeln!(lock, "{} {:<5} [{}] {}", timestamp, level.as_str(), tag, text);
+        let _ = lock.flush();
     }
 
     pub fn log(level: LogLevel, tag: &str, text: &str) {

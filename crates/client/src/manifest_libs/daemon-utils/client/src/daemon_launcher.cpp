@@ -3,8 +3,11 @@
 #include <cstdio>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <FileUtil.h>
 #include <log.h>
+
+// FileUtil is ported to Rust (crates/util/src/file_util.rs).
+extern "C" const char* file_util_get_parent(const char* path);
+extern "C" int file_util_mkdir_recursive(const char* path);
 
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <chrono>
@@ -63,8 +66,8 @@ void daemon_launcher::open(simpleipc::client::service_client_impl& impl) {
     remove(service_path.c_str());
 
     int kq = kqueue();
-    std::string dir = FileUtil::getParent(service_path);
-    FileUtil::mkdirRecursive(dir);
+    std::string dir = file_util_get_parent(service_path.c_str());
+    file_util_mkdir_recursive(dir.c_str());
     int f = ::open(dir.c_str(), O_RDONLY);
 
     pid_t proc = start();
@@ -115,8 +118,8 @@ void daemon_launcher::open(simpleipc::client::service_client_impl& impl) {
     int fd = inotify_init();
     if (fd < 0)
         throw std::runtime_error("inotify_init failed");
-    std::string dir = FileUtil::getParent(service_path);
-    FileUtil::mkdirRecursive(dir);
+    std::string dir = file_util_get_parent(service_path.c_str());
+    file_util_mkdir_recursive(dir.c_str());
     int wd = inotify_add_watch(fd, dir.c_str(), IN_CREATE);
     if (wd < 0)
         throw std::runtime_error("inotify_add_watch failed");
