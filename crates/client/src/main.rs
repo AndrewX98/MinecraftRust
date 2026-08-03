@@ -9,6 +9,8 @@ mod jnivm_class_wrappers;
 mod jnivm_globals;
 mod jni;
 mod text_input_handler;
+mod fmod_utils;
+mod minecraft_load;
 
 use std::ffi::{c_char, c_void, CStr};
 

@@ -8,7 +8,6 @@ extern "C" {
     fn mc_init_version(package: *const i8, version_code: i32);
     fn mc_get_libc_symbols(buf: *mut libc_shim::types::shimmed_symbol, max_entries: i32) -> i32;
     fn mc_load_core_libraries(lib_dir: *const i8) -> i32;
-    fn mc_load_minecraft() -> *mut std::ffi::c_void;
     fn mc_setup_android_hooks();
     fn mc_create_window_and_setup_graphics();
     pub fn mc_egl_swap_buffers(display: *mut std::ffi::c_void, surface: *mut std::ffi::c_void) -> i32;
@@ -73,7 +72,8 @@ pub fn create_window_and_setup_graphics() {
 }
 
 pub fn load_minecraft() -> Result<*mut std::ffi::c_void, ()> {
-    let handle = unsafe { mc_load_minecraft() };
+    // Phase 4: pure-Rust orchestration (port of MinecraftUtils::loadMinecraftLib).
+    let handle = unsafe { crate::minecraft_load::load_minecraft() };
     if handle.is_null() { Err(()) } else { Ok(handle) }
 }
 

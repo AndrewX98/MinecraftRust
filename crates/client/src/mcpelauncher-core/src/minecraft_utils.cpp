@@ -602,219 +602,6 @@ void MinecraftUtils::setupApi() {
 
 std::unordered_map<std::string, MinecraftUtils::HookEntry> MinecraftUtils::preinitHooks;
 
-void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hideMousePointerCallback, void* fullscreenCallback, void* closeCallback, std::vector<mcpelauncher_hook_t> hooks) {
-    // Phase 3.3: Rust linker loads libc++_shared.so (no IFUNC, no TLS, has INIT_ARRAY)
-    size_t libcxx_rust = linker_rust_dlopen_libcxx("libc++_shared.so");
-    void* libcxx = reinterpret_cast<void*>(libcxx_rust);
-    if(!libcxx) {
-        Log::error("MinecraftUtils", "Failed to load libc++_shared via Rust linker");
-    } else {
-        Log::info("MinecraftUtils", "Loaded libc++_shared (rust_handle=%zu)", libcxx_rust);
-    }
-
-    // loading libfmod standalone depends on these symbols, libminecraftpe.so changes the loading automatically
-    // Phase 2: use dispatch_dlopen so libstdc++ resolves to the Rust-registered
-    // stub handle; the __cxa_* relocation then updates the Rust linker symbols.
-    auto libstdcxx = mcpelauncher_dispatch_dlopen("libstdc++.so", 0);
-    if(libcxx) {
-        auto __cxa_pure_virtual = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_pure_virtual");
-        auto __cxa_guard_acquire = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_guard_acquire");
-        auto __cxa_guard_release = mcpelauncher_dispatch_dlsym(libcxx, "__cxa_guard_release");
-
-        if(__cxa_pure_virtual && __cxa_guard_acquire && __cxa_guard_release) {
-            const char* keys_data[] = {"__cxa_pure_virtual", "__cxa_guard_acquire", "__cxa_guard_release"};
-            void* vals_data[] = {__cxa_pure_virtual, __cxa_guard_acquire, __cxa_guard_release};
-            mcpelauncher_dispatch_relocate(libstdcxx, keys_data, vals_data, 3);
-        }
-    }
-    android_dlextinfo extinfo;
-#ifdef __arm__
-    // Workaround for v8 allocator crash Minecraft 1.16.100+ on a RaspberryPi2 running raspbian
-    // Shadow some new overrides with host allocator fixes the crash
-    // Seems to be unnecessary on a RaspberryPi4 running ubuntu arm64
-    hooks.emplace_back(mcpelauncher_hook_t{"_Znaj", (void*)((void* (*)(std::size_t)) & ::operator new[])});
-    hooks.emplace_back(mcpelauncher_hook_t{"_Znwj", (void*)((void* (*)(std::size_t)) & ::operator new)});
-    hooks.emplace_back(mcpelauncher_hook_t{"_ZnwjSt11align_val_t", (void*)((void* (*)(std::size_t, std::align_val_t)) & ::operator new[])});
-    // The Openssl cpuid setup seems to not work correctly and allways crashs with "invalid instruction" Minecraft 1.16.10 (beta 1.16.0.66) or lower
-    // Shadowing it, avoids allways defining OPENSSL_armcap=0
-    hooks.emplace_back(mcpelauncher_hook_t{"OPENSSL_cpuid_setup", (void*)+[]() -> void {}});
-#endif
-
-    for(auto&& e : preinitHooks) {
-        hooks.emplace_back(mcpelauncher_hook_t{e.first.data(), e.second.value});
-    }
-
-    // Minecraft 1.16.210+ removes the symbols previously used to patch it via vtables, so use hooks instead if supplied
-    if(showMousePointerCallback && hideMousePointerCallback) {
-        hooks.emplace_back(mcpelauncher_hook_t{"_ZN11AppPlatform16showMousePointerEv", showMousePointerCallback});
-        hooks.emplace_back(mcpelauncher_hook_t{"_ZN11AppPlatform16hideMousePointerEv", hideMousePointerCallback});
-    }
-    if(fullscreenCallback) {
-        hooks.emplace_back(mcpelauncher_hook_t{"_ZN11AppPlatform17setFullscreenModeE14FullscreenMode", fullscreenCallback});
-    }
-
-    if(closeCallback) {
-        hooks.emplace_back(mcpelauncher_hook_t{"GameActivity_finish", closeCallback});
-    }
-
-    static void* fmod = nullptr;
-    // Temporary feature flag to disable native fmod patching
-    if(!fmod && ReadEnvFlag("MCPELAUNCHER_PATCH_FMOD", true)) {
-        size_t fmod_rust = linker_rust_dlopen_fmod("libfmod.so");
-        fmod = reinterpret_cast<void*>(fmod_rust);
-        if(!fmod_rust) {
-            Log::error("MinecraftUtils", "Failed to load libfmod via Rust linker");
-        } else {
-            Log::info("MinecraftUtils", "Loaded libfmod (rust_handle=%zu)", fmod_rust);
-        }
-    }
-    if(fmod) {
-        if(mcpelauncher_dispatch_get_library_base(fmod)) {
-            if(FmodUtils::setup(fmod)) {
-                hooks.emplace_back(mcpelauncher_hook_t{"_ZN4FMOD6System4initEijPv", reinterpret_cast<void*>(&FmodUtils::initHook)});
-                hooks.emplace_back(mcpelauncher_hook_t{"_ZN4FMOD6System9setOutputE15FMOD_OUTPUTTYPE", (void*)+[]() {
-                                                           // stub to make the game use aaudio
-                                                       }});
-            }
-        } else {
-            mcpelauncher_dispatch_dlclose(fmod);
-            fmod = nullptr;
-        }
-    }
-    auto libc = mcpelauncher_dispatch_dlopen("libc.so", 0);
-    // Detect Android Integrity Protection — Rust linker loads real ELF
-    // (search path already added by mc_load_core_libraries in capi.cpp:343)
-    size_t pairipcore_handle = linker_rust_dlopen_pairipcore("libpairipcore.so");
-    void* pairipcore = reinterpret_cast<void*>(pairipcore_handle);
-    if(!pairipcore) {
-        Log::error("MinecraftUtils", "Failed to load libpairipcore: Rust linker returned 0");
-    } else {
-        Log::info("MinecraftUtils", "Loaded libpairipcore (rust_handle=%zu)", pairipcore_handle);
-    }
-
-    // webrtc shortcut
-    auto bgetifaddrs = mcpelauncher_dispatch_dlsym(libc, "getifaddrs");
-    if(bgetifaddrs) {
-        hooks.emplace_back(mcpelauncher_hook_t{"_ZN3rtc10getifaddrsEPP7ifaddrs", bgetifaddrs});
-    }
-    auto bfreeifaddrs = mcpelauncher_dispatch_dlsym(libc, "freeifaddrs");
-    if(bfreeifaddrs) {
-        hooks.emplace_back(mcpelauncher_hook_t{"_ZN3rtc11freeifaddrsEP7ifaddrs", bfreeifaddrs});
-    }
-    if(ReadEnvFlag("MCPELAUNCHER_DISABLE_TELEMETRY", false)) {
-        hooks.emplace_back(mcpelauncher_hook_t{"_ZN9Microsoft12Applications6Events19TelemetrySystemBase5startEv", (void*)+[]() {
-            Log::error("MinecraftUtils", "TelemetrySystemBase::start");
-        }});
-    } else if(pairipcore) {
-        // Phase 3 Step 1: Rust loads libsqliteX.so ELF, registers only sqlite3_* symbols
-        auto sqlite3_path = PathHelper::findDataFile("lib/" + std::string(PathHelper::getAbiDir()) + "/libsqliteX.so");
-        char* resolved = realpath(sqlite3_path.c_str(), nullptr);
-        if(resolved) {
-            std::string dir(resolved);
-            auto pos = dir.rfind('/');
-            if(pos != std::string::npos) {
-                dir.resize(pos);
-                linker_rust_add_search_path(dir.c_str());
-            }
-            free(resolved);
-        }
-        auto sqlite3 = linker_rust_dlopen_sqlite("libsqliteX.so");
-        if(sqlite3) {
-            Log::info("MinecraftUtils", "Rust linker loaded libsqliteX.so (handle=%zu)", sqlite3);
-        } else {
-            Log::error("MinecraftUtils", "Rust linker failed to load libsqliteX.so");
-        }
-    }
-
-    hooks.emplace_back(mcpelauncher_hook_t{nullptr, nullptr});
-    extinfo.flags = ANDROID_DLEXT_MCPELAUNCHER_HOOKS;
-    extinfo.mcpelauncher_hooks = hooks.data();
-
-    // Phase 2: Try Rust linker first (full load with relocations)
-    void* handle = nullptr;
-    size_t rust_handle = 0;
-    {
-        // Build parallel arrays for Rust FFI
-        size_t hook_count = 0;
-        for (auto& h : hooks) {
-            if (h.name == nullptr) break;
-            hook_count++;
-        }
-        std::vector<const char*> hook_names(hook_count);
-        std::vector<void*> hook_vals(hook_count);
-        for (size_t i = 0; i < hook_count; i++) {
-            hook_names[i] = hooks[i].name;
-            hook_vals[i] = hooks[i].value;
-        }
-
-        rust_handle = linker_rust_dlopen_ext("libminecraftpe.so", 0,
-                                              hook_names.data(), hook_vals.data(),
-                                              hook_count);
-        if (rust_handle != 0) {
-            Log::info("MinecraftUtils", "Rust linker loaded libminecraftpe.so (handle=%zu)", rust_handle);
-        } else {
-            Log::warn("MinecraftUtils", "Rust linker failed to load libminecraftpe.so, falling back to C++");
-        }
-    }
-
-    // Phase 0 gate: MCPELAUNCHER_LINKER_RUST_ONLY=1 aborts if Rust linker failed
-    if (rust_handle == 0) {
-        const char* rust_only = getenv("MCPELAUNCHER_LINKER_RUST_ONLY");
-        if (rust_only && rust_only[0] == '1' && rust_only[1] == '\0') {
-            Log::error("MinecraftUtils", "MCPELAUNCHER_LINKER_RUST_ONLY=1 is set but Rust linker failed — aborting");
-            abort();
-        }
-    }
-
-    if (rust_handle != 0) {
-        // Rust linker loaded the game — handle is a Rust handle (small int).
-        // Hooks were applied during Rust relocation (external_symbols preferred).
-        // All C++ APIs (dlsym, get_library_base, etc.) use mcpelauncher_dispatch_*
-        // which resolve Rust handles to Rust FFI calls automatically.
-        handle = reinterpret_cast<void*>(rust_handle);
-        for(auto&& h : hooks) {
-            if(h.name) {
-                void* addr = mcpelauncher_dispatch_dlsym(handle, h.name);
-                Log::trace("MinecraftUtils", "Found hook: %s @ %p (stub=%p)", h.name, addr, h.value);
-                if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
-                    Log::trace("MinecraftUtils", "with value: %p", h.value);
-                    res->second.callback(res->second.user, h.value);
-                }
-            }
-        }
-        HookManager::instance.addLibrary(handle);
-    } else {
-        // Fallback to C++ loader
-        handle = linker::dlopen_ext("libminecraftpe.so", 0, &extinfo);
-        if(libc) {
-            mcpelauncher_dispatch_dlclose(libc);
-        }
-        if(libcxx) {
-            mcpelauncher_dispatch_dlclose(libcxx);
-        }
-        if(libstdcxx) {
-            mcpelauncher_dispatch_dlclose(libstdcxx);
-        }
-        if(handle == nullptr) {
-            Log::error("MinecraftUtils", "Failed to load Minecraft: %s", linker::dlerror());
-        } else {
-            if(fmod) {
-                mcpelauncher_dispatch_dlclose(fmod);
-            }
-            for(auto&& h : hooks) {
-                if(h.name) {
-                    Log::trace("MinecraftUtils", "Found hook: %s @ %p", h.name, mcpelauncher_dispatch_dlsym(handle, h.name));
-                    if(auto&& res = preinitHooks.find(h.name); res != preinitHooks.end() && res->second.callback != nullptr) {
-                        Log::trace("MinecraftUtils", "with value: %p", h.value);
-                        res->second.callback(res->second.user, h.value);
-                    }
-                }
-            }
-            HookManager::instance.addLibrary(handle);
-        }
-    }
-    return handle;
-}
 const char* MinecraftUtils::getLibraryAbi() {
     return PathHelper::getAbiDir();
 }
@@ -836,4 +623,45 @@ void MinecraftUtils::setupGLES2Symbols(void* (*resolver)(const char*)) {
         i++;
     }
     linker::load_library("libGLESv2.so", syms);
+}
+
+// ============================================================
+// Phase 4 Rust FFI helpers — orchestration moved to minecraft_load.rs,
+// but preinitHooks / HookManager state stays in C++.
+// ============================================================
+
+extern "C" const char* mc_find_data_file(const char* path) {
+    try {
+        static std::string cached; // single-threaded load path
+        cached = PathHelper::findDataFile(path);
+        return cached.c_str();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+extern "C" size_t mc_get_preinit_hooks(const char** names, void** vals, size_t max) {
+    size_t i = 0;
+    for (auto& e : MinecraftUtils::preinitHooks) {
+        if (i >= max) break;
+        names[i] = e.first.c_str();
+        vals[i] = e.second.value;
+        i++;
+    }
+    return i;
+}
+
+extern "C" void mc_finalize_load(void* handle, const char* const* names, void* const* vals, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        const char* name = names[i];
+        if (!name) continue;
+        void* addr = mcpelauncher_dispatch_dlsym(handle, name);
+        Log::trace("MinecraftUtils", "Found hook: %s @ %p (stub=%p)", name, addr, vals[i]);
+        auto res = MinecraftUtils::preinitHooks.find(name);
+        if (res != MinecraftUtils::preinitHooks.end() && res->second.callback != nullptr) {
+            Log::trace("MinecraftUtils", "with value: %p", vals[i]);
+            res->second.callback(res->second.user, vals[i]);
+        }
+    }
+    HookManager::instance.addLibrary(handle);
 }

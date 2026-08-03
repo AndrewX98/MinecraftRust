@@ -359,27 +359,7 @@ extern "C" void* mc_dlsym(void* handle, const char* symbol) {
     return mcpelauncher_dispatch_dlsym(handle, symbol);
 }
 
-// (bridge function ported to Rust — see jni_support.rs)
-
-// ============================================================
-// Minecraft library loading (uses MinecraftUtils + linker)
-// ============================================================
-
-extern "C" void* mc_load_minecraft() {
-    std::vector<mcpelauncher_hook_t> hooks(15);
-    fake_swappygl_fill_hooks(hooks.data(), hooks.size());
-
-    void* handle = MinecraftUtils::loadMinecraftLib(
-        reinterpret_cast<void*>(&core_patches_show_mouse_pointer),
-        reinterpret_cast<void*>(&core_patches_hide_mouse_pointer),
-        reinterpret_cast<void*>(&core_patches_set_fullscreen),
-        reinterpret_cast<void*>(&FakeLooper::onGameActivityClose),
-        hooks);
-    if (handle) {
-        core_patches_install(handle);
-    }
-    return handle;
-}
+// (bridge function ported to Rust — see minecraft_load.rs)
 
 // ============================================================
 // C-linkage wrapper for eglSwapBuffers (called from Rust)

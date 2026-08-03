@@ -42,6 +42,12 @@ void FakeLooper::onGameActivityClose(GameActivity *native) {
     activity->quitCallback();
 }
 
+// C-linkage thunk so the Rust load path (minecraft_load.rs) can pass a C-safe
+// function pointer for the GameActivity_finish hook.
+extern "C" void fake_looper_on_game_activity_close(void* native) {
+    FakeLooper::onGameActivityClose((GameActivity*)native);
+}
+
 void FakeLooper::initializeWindow() {
     if(associatedWindow) {
         return;

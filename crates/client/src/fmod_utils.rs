@@ -1,0 +1,92 @@
+//! Rust port of `FmodUtils` (mcpelauncher-core fmod_utils.cpp).
+//! Holds the FMOD System function pointers and provides the `init` hook that
+//! the game's `FMOD::System::init` is redirected to.
+
+use std::ffi::c_void;
+use std::sync::OnceLock;
+
+type FmodInit = unsafe extern "C" fn(*mut c_void, i32, u32, *mut c_void) -> i32;
+type FmodSetSoftwareFormat = unsafe extern "C" fn(*mut c_void, i32, i32, i32) -> i32;
+type FmodSetDspBufferSize = unsafe extern "C" fn(*mut c_void, u32, i32) -> i32;
+type FmodGetDspBufferSize = unsafe extern "C" fn(*mut c_void, *mut u32, *mut i32) -> i32;
+
+struct FmodPointers {
+    system_init: FmodInit,
+    set_software_format: FmodSetSoftwareFormat,
+    set_dsp_buffer_size: FmodSetDspBufferSize,
+    get_dsp_buffer_size: FmodGetDspBufferSize,
+}
+
+static FMOD_PTRS: OnceLock<FmodPointers> = OnceLock::new();
+
+const SAMPLE_RATE: i32 = 48000;
+
+fn read_env_int(name: &str, def: i32) -> i32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(def)
+}
+
+/// dlsym the four FMOD System functions off `handle` (Rust linker handle).
+/// Returns true only when all four are present.
+pub unsafe fn setup(handle: usize) -> bool {
+    let init = linker::dlsym(handle, "_ZN4FMOD6System4initEijPv");
+    let set_software_format =
+        linker::dlsym(handle, "_ZN4FMOD6System17setSoftwareFormatEi16FMOD_SPEAKERMODEi");
+    let set_dsp_buffer_size =
+        linker::dlsym(handle, "_ZN4FMOD6System16setDSPBufferSizeEji");
+    let get_dsp_buffer_size =
+        linker::dlsym(handle, "_ZN4FMOD6System16getDSPBufferSizeEPjPi");
+
+    let (init, set_software_format, set_dsp_buffer_size, get_dsp_buffer_size) = match (
+        init,
+        set_software_format,
+        set_dsp_buffer_size,
+        get_dsp_buffer_size,
+    ) {
+        (Some(init), Some(sf), Some(dsb), Some(gdsb)) => (init, sf, dsb, gdsb),
+        _ => return false,
+    };
+
+    let _ = FMOD_PTRS.set(FmodPointers {
+        system_init: std::mem::transmute(init),
+        set_software_format: std::mem::transmute(set_software_format),
+        set_dsp_buffer_size: std::mem::transmute(set_dsp_buffer_size),
+        get_dsp_buffer_size: std::mem::transmute(get_dsp_buffer_size),
+    });
+    true
+}
+
+/// Hook replacing `FMOD::System::init`: apply environment overrides for the
+/// DSP buffer size / speaker mode before forwarding to the real implementation.
+pub extern "C" fn init_hook(
+    system: *mut c_void,
+    maxchannels: i32,
+    flags: u32,
+    extradriverdata: *mut c_void,
+) -> i32 {
+    let Some(f) = FMOD_PTRS.get() else {
+        return -1;
+    };
+    let mut default_buffer_len: u32 = 0;
+    let mut default_num_buffers: i32 = 0;
+    unsafe {
+        (f.get_dsp_buffer_size)(system, &mut default_buffer_len, &mut default_num_buffers);
+        (f.set_dsp_buffer_size)(
+            system,
+            read_env_int("FMOD_DSP_BUFFER_LENGTH", default_buffer_len as i32) as u32,
+            read_env_int("FMOD_DSP_NUM_BUFFERS", default_num_buffers),
+        );
+        (f.set_software_format)(
+            system,
+            SAMPLE_RATE,
+            read_env_int("FMOD_SPEAKER_MODE", 0),
+            0,
+        );
+        (f.system_init)(system, maxchannels, flags, extradriverdata)
+    }
+}
+
+/// Hook replacing `FMOD::System::setOutput` — no-op stub to keep the game on aaudio.
+pub extern "C" fn set_output_hook() {}
