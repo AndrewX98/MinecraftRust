@@ -53,7 +53,7 @@ All 11 former cmake-built static libs are now compiled locally by `cc::Build` in
 
 | Library | Role | Status |
 |---------|------|--------|
-| `bionic linker` | Full ELF dynamic linker | Local `.a` via `cc::Build` |
+| `bionic linker` | ~~Full ELF dynamic linker~~ | **DELETED Phase 6** — Rust `crates/linker/` is the only loader |
 | `mcpelauncher-core` | Game loading, hooks, patching, mod loader | Local `.a` via `cc::Build` |
 | `game-window` | X11/EGL window, input handling | Local `.a` via `cc::Build` |
 | `linux-gamepad` | evdev joystick + SDL mappings | Local `.a` via `cc::Build` |

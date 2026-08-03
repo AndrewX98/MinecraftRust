@@ -1,8 +1,12 @@
 # Linker Porting Progress — C++ Bionic → Rust
 
-**Repo:** `crates/linker/` (Rust) vs `crates/client/src/mcpelauncher-linker/` + `crates/cpp-bridge-sys/` (C++)
+**Repo:** `crates/linker/` (Rust) — **Phase 6 complete: the C++ bionic linker is DELETED.**
 
-The Rust linker handles all stub registration (libc, EGL, OpenSLES, android, etc.) and game library loading (`libminecraftpe.so`). C++ bionic linker soinfo is still created for `libminecraftpe.so` (for bionic solist compatibility with `dladdr`, `dlopen(RTLD_NOLOAD)`, libfmod) and for a few stubs (`libc.so`, `libstdc++.so`, `libaaudio.so`) that C++ code accesses via `linker::dlopen`.
+The Rust linker handles all stub registration (libc, EGL, OpenSLES, android, etc.) and game
+library loading (`libminecraftpe.so`). The `mcpelauncher-linker/` source tree and its
+`linker`/`linker-c` cc::Build targets were removed in Phase 6 (commit `15d07a2e` + follow-up);
+the binary links zero bionic symbols. The local `<mcpelauncher/linker.h>` shim in
+`crates/client/include/` (with `ElfW` now defined in `hook.h`) supplies the remaining C++ targets.
 
 ## Legend
 - [x] Ported to Rust — functionally complete
@@ -285,9 +289,9 @@ The Rust linker handles all stub registration (libc, EGL, OpenSLES, android, etc
 
 ### 29. Integration: Rust Linker as Primary
 
-- [x] `linker_init_rust()` now initializes BOTH Rust and C++ linker states — calls C++ `mcpelauncher_linker_cpp_init()` (wraps `linker::init()`) then Rust `init()`
+- [x] `linker_init_rust()` now initializes BOTH Rust and C++ linker states — calls C++ `mcpelauncher_linker_cpp_init()` (wraps `linker::init()`) then Rust `init()` *(Phase 6: `mcpelauncher_linker_cpp_init` removed; Rust `init()` only)*
 - [x] `capi.cpp` `mc_load_core_libraries()` calls `linker_init_rust()` instead of `linker::init()` — Rust linker is the primary entry point
-- [x] C++ bionic linker state still initialized as a side effect, keeping game library loading (`do_dlopen`, `__loader_*`) functional
+- [x] C++ bionic linker state still initialized as a side effect, keeping game library loading (`do_dlopen`, `__loader_*`) functional *(Phase 6: C++ linker deleted entirely)*
 - [x] `mcpelauncher_linker_cpp_init()` added to `src/linker.cpp` as an `extern "C"` wrapper for Rust FFI call
 - [x] **Phase 0 instrumentation added:**
     - Rust linker logs detailed success/failure per stage (load, C++ registration)

@@ -37,7 +37,7 @@ main()  [main.rs:15]
 │     ├── linker::load_library() for stub libs:
 │     │   libOpenSLES.so, libGLESv1_CM.so, libstdc++.so,
 │     │   libGLESv2.so (stub funcs), liblog.so, libmcpelauncher_gamewindow.so
-│     └── __loader_android_update_LD_LIBRARY_PATH(libDir)
+│     └── linker_rust_add_search_path(libDir) — register Rust linker search path
 │
 ├─ 7. capi::setup_android_hooks()
 │     → mc_setup_android_hooks() [jni_bridge_stub.cpp]
@@ -67,8 +67,9 @@ main()  [main.rs:15]
 │     → mc_load_minecraft() [jni_bridge_stub.cpp]
 │     C++:
 │     ├── Fill SwappyGL hooks (15 Rust stubs)
-│     └── MinecraftUtils::loadMinecraftLib() → __loader_android_dlopen_ext
-│         → bionic linker loads libminecraftpe.so ELF, resolves relocs
+│     └── MinecraftUtils::loadMinecraftLib() → Rust port [minecraft_load.rs]
+│         → Rust linker loads libminecraftpe.so ELF, resolves relocs
+│         (bionic linker deleted in Phase 6)
 │     → CorePatches::install(handle) patches game vtable
 │
 ├─ 10. rust_bridge::jni_set_game_handle()
@@ -185,9 +186,9 @@ The `fake_egl_make_current` function (rust_bridge.rs:940) is critical:
 - Step 14: Rust libjnivm-sys VM created — **primary JNI dispatch** for the game
 - Step 20: `(*ga).env = get_env()` **switches game dispatch** from Baron to libjnivm-sys. All game `CallXxxMethod`/`FindClass`/`RegisterNatives` now go through the Rust vtable. `ga->vm` still points to Baron for VM-level operations.
 
-### Dual Linker Registration
+### Single Rust Linker (C++ bionic linker deleted in Phase 6)
 - Step 5: Rust linker registers libc symbols
-- Step 6: C++ linker re-registers them via `getLibCSymbols()`
+- Step 6: Rust linker re-registers merged C++ + Rust libc symbols via `getLibCSymbols()`
 
 ### What the Rust `jni_support_start_game()` Actually Does
 The Rust version at `jni_support.rs:493` is the **active** start path. It:
@@ -197,4 +198,4 @@ The Rust version at `jni_support.rs:493` is the **active** start path. It:
 4. Bridges to C++ FakeJni via `jni_support_start_game_with_baron()` for `GameActivity_onCreate` (game caches Baron `vm`, but `env` is already switched to libjnivm-sys)
 5. All 57 MainActivity methods and 9 wrapper classes handled by Rust (`main_activity.rs`, `jnivm_class_wrappers.rs`)
 6. Calls lifecycle callbacks (onStart, onNativeWindowCreated) after game returns
-7. C++ FakeJni still needed for: `ga->vm` operations (AttachCurrentThread), FakeLooper::onGameActivityClose, and linker compatibility
+7. C++ FakeJni still needed for: `ga->vm` operations (AttachCurrentThread) and FakeLooper::onGameActivityClose

@@ -1,6 +1,6 @@
 # AGENTS.md — MinecraftRust
 
-Pure-Rust launcher for Minecraft Bedrock on Linux (replacing [mcpelauncher-manifest](https://github.com/minecraft-linux/mcpelauncher-manifest/)). ~8.5% Rust by total lines (17K of 200K+), but all game-facing JNI dispatch and startup orchestration is Rust. Loads to main menu.
+Pure-Rust launcher for Minecraft Bedrock on Linux (replacing [mcpelauncher-manifest](https://github.com/minecraft-linux/mcpelauncher-manifest/)). All game-facing JNI dispatch and startup orchestration is Rust. Loads to main menu.
 
 ## Build & Run
 
@@ -16,7 +16,7 @@ RUST_LOG=linker=info ./target/debug/client -dg /home/andrew/.local/MinecraftLaun
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.
 
-No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 13 static libs built there; `client/build.rs` only emits link directives. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
+No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 12 static libs built there; `client/build.rs` only emits link directives. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
 
 - **Initial build:** ~3 min (all C++ files compiled)
 - **Single C++ file change:** ~2s (hash-based incremental)
@@ -34,9 +34,9 @@ cargo build -p client
 | Crate | Role |
 |-------|------|
 | **client** | Sole binary — eglut, FakeEGL, CorePatches, JNI, event dispatch |
-| **cpp-bridge-sys** | C++ cc::Build compilation (13 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
+| **cpp-bridge-sys** | C++ cc::Build compilation (12 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
 | **libc-shim** | 602 pure Rust libc replacements (FILE*, pthreads, sockets, mmap) |
-| **linker** | Pure Rust ELF linker (stub libs only — game lib still uses C++ bionic linker) |
+| **linker** | Pure Rust ELF linker — the **only** loader (C++ bionic linker deleted in Phase 6) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 fn JNIEnv vtable) |
 | **eglut** (in `client/src/`) | Pure Rust X11/EGL windowing — active path (the `game-window` winit/glutin crate was removed) |
 | others | util, apkinfo, axml-parser, simple-ipc, daemon-utils, msa-daemon-client, cll-telemetry, common, minecraft-imported-symbols |
@@ -54,16 +54,15 @@ Startup (21 steps, detailed in `docs/STARTUP_FLOW.md`):
 2. C++ path setup
 3. Init version
 4. Merge C+++Rust libc symbols → register with Rust linker
-5. Load core libs, stub libs via Rust linker + C++ bionic linker
+5. Load core libs, stub libs via Rust linker
 6. Android hooks (FakeLooper, FakeAssetManager, FakeInputQueue) — Rust hooks registered
 7. Create X11 window + GLES2
-8. Load `libminecraftpe.so` via C++ bionic linker
+8. Load `libminecraftpe.so` via Rust linker (bionic linker deleted in Phase 6)
 9. Both JNI VMs created, classes + natives registered on both
 10. `jni_support_start_game` (Rust) calls `GameActivity_onCreate` via Baron bridge → game thread starts
 
-**Two linkers:**
-- **Rust linker** (`linker/`) — loads libc, libdl, stub libs
-- **C++ bionic linker** (37 files, compiled by build.rs) — loads `libminecraftpe.so` with full ELF relocation
+**Single linker (Rust):**
+- **Rust linker** (`linker/`) — loads libc, libdl, stub libs, and `libminecraftpe.so` with full ELF relocation; exports the `mcpelauncher_dispatch_*` surface natively
 
 **Key EGL fix** (`rust_bridge.rs:940`): Real EGL context + surface created on the game thread (not main), avoiding Mesa X11 thread affinity `EGL_BAD_ACCESS`. Per-thread surfaces stored in TLS.
 
@@ -86,12 +85,12 @@ Runtime files: `runtime/lib/x86_64/libsqliteX.so`, `runtime/gamecontrollerdb/gam
 ## Docs (read these)
 
 All in `docs/`:
-- `ARCHITECTURE.md` — crate deps, two-VM/two-linker coexistence
+- `ARCHITECTURE.md` — crate deps, two-VM coexistence, single Rust linker
 - `STARTUP_FLOW.md` — 21-step annotated sequence
 - `CXX_BRIDGE.md` — all ~154 extern "C" FFI symbols
 - `JNI_VM.md` — libjnivm-sys vs FakeJni/Baron details
 - `PORTING_PROGRESS.md` — per-file status for JNI + static libs
-- `STATIC_LIBS.md` — 13 `cc::Build` targets, line counts, dep graph
+- `STATIC_LIBS.md` — 12 `cc::Build` targets, line counts, dep graph
 
 ## Porting (if adding Rust code)
 

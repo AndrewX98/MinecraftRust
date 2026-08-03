@@ -205,7 +205,6 @@ fn main() {
     let client_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../client");
     let local_inc = client_dir.join("include");
-    let linker_src = client_dir.join("src/mcpelauncher-linker");
     let core_src = client_dir.join("src/mcpelauncher-core");
 
     // --- mcpelauncher-client-bridge (1 file) ---
@@ -233,13 +232,7 @@ fn main() {
     incr_compile("mcpelauncher-core", &core_sources, |b| {
         b.cpp(true).std("c++17").flag_if_supported("-w");
         b.include(core_src.join("include"));
-        b.include(linker_src.join("include"));
-        b.include(linker_src.join("bionic/libc"));
-        b.include(linker_src.join("core/base/include"));
-        b.include(linker_src.join("core/liblog/include"));
-        b.include(linker_src.join("core/libcutils/include"));
-        b.include(linker_src.join("public_include"));
-        b.include(&linker_src);
+        b.include(&local_inc);
         b.include(local_inc.join("android-support-headers"));
         b.include(local_inc.join("logger"));
         b.include(local_inc.join("mcpelauncher-common"));
@@ -250,8 +243,6 @@ fn main() {
         b.include(local_inc.join("libc-shim"));
         b.define("PATH_MAX", "256");
         b.define("_GNU_SOURCE", None);
-        b.flag("-include");
-        b.flag("compat.h");
     });
 
     // --- mcpelauncher-manifest-libs (4 files) ---

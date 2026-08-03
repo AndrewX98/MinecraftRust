@@ -5,6 +5,8 @@
 // headers that are incompatible with GCC 16.1.1.
 
 #include <cstddef>
+#include <cstdint>
+#include <dlfcn.h>
 #include <string>
 #include <unordered_map>
 

@@ -15,7 +15,11 @@
 #ifndef __INTRODUCED_IN
 #define __INTRODUCED_IN(...)
 #endif
-#include "../../../mcpelauncher-linker/include/link.h"
+#if defined(__LP64__)
+#define ElfW(type) Elf64_ ## type
+#else
+#define ElfW(type) Elf32_ ## type
+#endif
 
 class HookManager {
 

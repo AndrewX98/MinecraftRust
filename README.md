@@ -1,6 +1,6 @@
 # MinecraftRust — Rust Minecraft Bedrock Launcher
 
-Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaffolding, every subsystem should end up pure Rust. **~8.5% Rust by total lines (17K of 200K+), but all game-facing JNI dispatch, class registration, and startup orchestration is Rust. Loads to main menu.**
+Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaffolding, every subsystem should end up pure Rust. **All game-facing JNI dispatch, class registration, and startup orchestration is Rust. Loads to main menu.**
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaff
 |-------|------|
 | **client** | Main binary — eglut, FakeEGL, CorePatches, JNI modules, event dispatch, FakeLooper |
 | **libc-shim** | 602 pure Rust libc replacement symbols (FILE\*, pthreads, sockets, mmap, etc.) |
-| **linker** | Pure Rust ELF linker (loads stub libs; game lib still uses C++ bionic linker) |
+| **linker** | Pure Rust ELF linker — the **only** loader (C++ bionic linker deleted in Phase 6) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 function JNIEnv vtable) — active for ALL JNI dispatch after env switch |
 | **eglut** | Pure Rust X11/EGL windowing + event loop |
 | **game-window** | winit/glutin abstraction (not active — eglut path used) |
@@ -25,7 +25,7 @@ Pure-Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaff
 | **axml-parser** | Binary XML (AXML) parser for Android manifests |
 
 Two JNI VMs coexist: Rust libjnivm-sys (active — env switch done, game JNI dispatch through Rust vtable) and C++ FakeJni/Baron (legacy — kept for `ga->vm` operations and FakeLooper exit callback).  
-Two linkers coexist: Rust linker for stub libs + `libc.so`, C++ bionic linker for `libminecraftpe.so`.
+Single Rust linker: loads stub libs, `libc.so`, and `libminecraftpe.so` (C++ bionic linker deleted in Phase 6).
 
 See `docs/ARCHITECTURE.md`.
 
@@ -80,10 +80,10 @@ XAL cache lives in `~/.local/share/mcpelauncher/xal/` and `~/.local/MinecraftLau
 | JNI VM | 100% | 100% (bridge only remaining) |
 | EGL | 100% | 100% |
 | FakeLooper | ~70% | 100% |
-| ELF linker (bionic) | ~30% | 100% |
+| ELF linker (bionic) | 100% | 100% (C++ bionic linker deleted, Rust-only loader) |
 | Game window | ~30% | 100% |
 | JNI classes | ~70% | 100% (all 57 MainActivity methods + 9 wrappers done) |
-| mcpelauncher-core | ~0% | 100% (game loading, hooks, patching, mod loading) |
+| mcpelauncher-core | ~20% | 100% (game loading ported to Rust in `minecraft_load.rs`; hooks/patching/mod loading still C++) |
 | Startup orchestration | ~60% | 100% |
 | Build system | 100% | 100% (no cmake) |
 | IPC/Telemetry | ~0% | 100% (Rust crates exist) |
@@ -113,7 +113,7 @@ This project builds on the work of the [mcpelauncher-manifest](https://github.co
 
 Key components ported from the original C++ codebase:
 
-* **bionic linker** — full ELF dynamic linker for loading `libminecraftpe.so`
+* **bionic linker** — full ELF dynamic linker for loading `libminecraftpe.so` *(fully ported to Rust and deleted in Phase 6)*
 * **mcpelauncher-core** — game loading, hook injection, mod loader, crash handling
 * **FakeJni / Baron** — Android JNI VM implementation (class registration, method dispatch)
 * **libjnivm** — C++ JNI library that provides the JNIEnv vtable
@@ -127,9 +127,9 @@ All docs live in `docs/`:
 
 | Document | Description |
 |----------|-------------|
-| `ARCHITECTURE.md` | High-level architecture, crate layout, two JVM/linker coexistence |
+| `ARCHITECTURE.md` | High-level architecture, crate layout, two-VM coexistence, single Rust linker |
 | `PORTING_PROGRESS.md` | Porting status per JNI file, static libs, bridge stubs |
 | `JNI_VM.md` | JNI VM architecture — libjnivm-sys vs FakeJni/Baron, class registration |
-| `STATIC_LIBS.md` | All 13 cc::Build instances, dependency graph, port complexity |
+| `STATIC_LIBS.md` | All 12 cc::Build instances, dependency graph, port complexity |
 | `CXX_BRIDGE.md` | Rust/C++ FFI interface — extern "C", #[no_mangle], all bridge files |
 | `STARTUP_FLOW.md` | Startup sequence from main() to game thread, step by step |

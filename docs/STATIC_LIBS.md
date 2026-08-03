@@ -1,13 +1,11 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **13 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **12 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
 
 ## Libraries Compiled by build.rs
 
 | Library | Role | Objects | Complexity |
 |---------|------|---------|-----------|
-| `linker` (bionic, C++) | Full ELF dynamic linker | ~37 C++ files | **VERY LARGE** |
-| `linker-c` (C) | strlcpy/strlcat support | 2 C files | SMALL |
 | `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 9 objects | **LARGE** |
 | `mcpelauncher-manifest-libs` | logger, file-util, mcpelauncher-common | 4 objects | **SMALL** |
 | `mcpelauncher-base64` | Base64 encoding | 1 object | TRIVIAL |
@@ -42,37 +40,15 @@ Central orchestration hub. **9 source files:**
 
 **Port complexity: LARGE.** Deeply coupled with bionic linker soinfo internals. The `minecraft_utils.cpp` monolith is 1007 lines of gnarly C++.
 
-### `linker` (3.8 MB) — CRITICAL
+### `linker` — DELETED in Phase 6 ✅
 
-A full bionic-compatible ELF dynamic linker compiled from ~37 C++ files + 2 C files.
+The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**. Its `linker`/`linker-c` cc::Build targets and the entire `crates/client/src/mcpelauncher-linker/` source tree were removed in Phase 6 (commit `15d07a2e` + follow-up). The game binary now links **zero** bionic linker symbols.
 
-| Component | Files | Role |
-|-----------|-------|------|
-| Core linker | `linker.cpp`, `linker_phdr.cpp`, `linker_soinfo.cpp`, `linker_relocate.cpp` | ELF loading, symbol resolution, relocation |
-| Namespaces | `linker_namespaces.cpp` | ELF namespace isolation |
-| Init | `linker_main.cpp` | Entry point |
-| dlfcn | `dlfcn.cpp` | dlopen/dlsym/dlclose |
-| Support | `mapped_file.cpp`, `linker_block_allocator.cpp`, `linker_mapped_file_fragment.cpp` | Memory management |
-| Debug | `linker_gdb_support.cpp`, `linker_debug.cpp` | GDB integration |
-| Config | `linker_config.cpp`, `linker_utils.cpp`, `linker_globals.cpp`, `linker_cfi.cpp`, `linker_sdk_versions.cpp`, `linker_logger.cpp`, `linker_dlwarning.cpp` | Configuration, CFI, SDK compat |
-| Android | `liblog_symbols.cpp`, `properties.cpp`, `async_safe_log.cpp`, `strings.cpp`, `stringprintf.cpp`, `logger_write.cpp`, `threads.cpp`, `parsebool.cpp` | Android logging/properties |
-| Archive | `zip_archive.cpp`, `zip_archive_stream_entry.cc` | APK zip reading |
-| Misc | `libdl.cpp`, `strlcpy.c`, `strlcat.c`, `bionic_call_ifunc_resolver.cpp`, `rt.cpp`, `file.cpp`, `logging.cpp` | Various |
-
-**Used at runtime?** CRITICAL. Entire game loading depends on it.
-
-**Rust linker crate** (`MinecraftRust/crates/linker/`, 539 lines in 5 modules) is **partially active**:
-- Used by Rust code to load `libc.so` symbols from `main.rs:36` (`linker::load_library("libc.so", &libc_syms)`)
-- The C++ linker handles all game library loading (libminecraftpe.so, libfmod.so, etc.)
-- Rust linker delegates to C++ bionic linker via `linker::dlopen` for real game libs
-
-**Full port still needs:**
-- Complete ELF relocation handling (RELA, REL, JUMP_SLOT, GLOB_DAT, etc.)
-- TLS support
-- Namespace isolation
-- `dlopen_ext` for hook injection during load
-- `dladdr`, `dl_iterate_phdr`
-- Zip archive reading
+**The Rust linker crate** (`crates/linker/`) is now the **only loader**:
+- Loads `libc.so` symbols (merged C++ + Rust libc symbols) via `main.rs:36` (`linker::load_library("libc.so", &libc_syms)`)
+- Loads `libminecraftpe.so` with full ELF relocation, DT_NEEDED resolution, and hook injection (via `minecraft_load.rs`, the Rust port of `MinecraftUtils::loadMinecraftLib`)
+- Loads stub libs (libEGL.so, libGLESv2.so, libfmod.so, libaaudio.so, libHttpClient.Android.so, etc.)
+- Exports the full `mcpelauncher_dispatch_*` surface (`dlopen`/`dlsym`/`dlclose`/`dladdr`/`relocate`/`unload_library`/`get_library_base`/`get_library_code_region`) and `mcpelauncher_linker_{resolve,get}_rust_handle` natively
 
 ### `game-window` (916 KB) — MEDIUM
 
@@ -147,8 +123,7 @@ mcpelauncher-common  (no deps)
 linux-gamepad  (no deps, used by game-window)
 game-window  →  linux-gamepad
 
-linker  (no deps, everything uses it)
-mcpelauncher-core  →  linker, mcpelauncher-common, logger
+mcpelauncher-core  →  mcpelauncher-common, logger
 
 simpleipc  (no deps)
 daemon-client-utils  →  simpleipc, logger, file-util, mcpelauncher-common

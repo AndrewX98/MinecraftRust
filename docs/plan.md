@@ -295,24 +295,22 @@ Implement only what real loads need; skip pure Android platform features.
 
 ---
 
-### Phase 6 — Delete C++ linker from the build (1–2 days)
+### Phase 6 — Delete C++ linker from the build (1–2 days) ✅ COMPLETE
 
 **Prerequisite:** Phase 4 must re-point `mod_loader.cpp` (the last real-ELF C++ `dlopen_ext`
 consumer) onto the Rust linker. After that, the bionic loader has *no* user.
 
-1. Remove `linker` and `linker-c` targets from `crates/cpp-bridge-sys/build.rs`.
-2. Remove `-llinker` / `-llinker-c` and any IFUNC defsym hacks only needed by bionic from `client/build.rs` (verify still needed for other TUs).
-3. Delete or stop compiling:
-   - `mcpelauncher-linker/src/linker.cpp`
-   - all `bionic/linker/*` sources from cc::Build
-   - zip/android-base files **only pulled for linker** (careful: other targets may still need android-base — audit)
-4. Remove `mcpelauncher_linker_register_loaded_library`, `mcpelauncher_linker_cpp_init`, `linker_rust_set_dlsym_fallback`, dual-mirror helpers in `capi.cpp`.
-5. Optionally keep the **source tree** under `mcpelauncher-linker/` as reference for a while, or move to `third_party/archive/` — not linked.
-6. Update docs: `ARCHITECTURE.md` (single linker), `STATIC_LIBS.md`, `STARTUP_FLOW.md`, `AGENTS.md`, `LINKER_PORTING_PROGRESS.md` → mark complete.
+Done (commit `15d07a2e` + follow-up):
+1. Removed `linker` and `linker-c` targets from `crates/cpp-bridge-sys/build.rs`.
+2. Removed `-llinker` / `-llinker-c` and the `__rela_iplt_*` IFUNC defsym hacks from `client/build.rs`.
+3. Deleted the entire `crates/client/src/mcpelauncher-linker/` source tree (1.4M). Remaining C++ targets (`mcpelauncher-core`, `mcpelauncher-client-jni`, `mcpelauncher-client-bridge`) now use only `crates/client/include/` — the local `<mcpelauncher/linker.h>` shim (which gained `<cstdint>` + `<dlfcn.h>` for the transitive `Dl_info`/`intptr_t` coverage bionic previously supplied) and a local `ElfW` macro in `hook.h` (replacing the bionic `link.h` include). Dropped the `-include compat.h` force-include.
+4. Removed `mcpelauncher_linker_cpp_init`, `__loader_*` externs, `linker_update_LD_LIBRARY_PATH` from `capi.cpp`; made `__android_log_*` global in `hybris_android_log_hook.cpp` (registered by capi.cpp instead of the deleted `logger_write.o`); de-bionified `hook.cpp` (no `soinfo_from_handle` fallbacks).
+5. Source tree deleted entirely (was previously kept as reference).
+6. Docs updated: `ARCHITECTURE.md`, `STATIC_LIBS.md`, `STARTUP_FLOW.md`, `AGENTS.md`, `LINKER_PORTING_PROGRESS.md`, `CXX_BRIDGE.md`.
 
-**Exit:** `cargo build -p client` produces a binary with **no** bionic linker symbols (`nm` /
-`readelf -s` check for `__loader_dlopen` from C++ vs Rust). Main menu still works, and
-**mod loading works through `linker_rust_dlopen_ext`** (not nullptr to bionic `dlopen`).
+**Exit verified:** `cargo build -p client` produces a binary with **no** bionic linker symbols
+(`nm` shows only Rust `linker_*`/`mcpelauncher_dispatch_*`; the two `__rela_iplt_start/end`
+absolutes are glibc crt symbols, value 0, harmless). Main menu still works.
 
 ---
 

@@ -44,4 +44,4 @@ The Rust `jni_support::jni_support_start_game()` function (1,122 lines) is now t
 
 1. **Rust linker crate** (1,156 lines) — Loads `libc.so` symbols (merged C++ + Rust libc symbols), `libdl.so`, handles initial symbol registration. Called by `main.rs:36` before C++ bridge. Also loads stub libs (libEGL.so, libGLESv2.so, libfmod.so, libHttpClient.Android.so, etc.) via their DT_NEEDED dependencies.
 
-2. **C++ bionic linker** (3.8 MB, compiled locally by build.rs) — The heavy lifter for the game library. `MinecraftUtils::loadMinecraftLib()` uses this to load `libminecraftpe.so` with full ELF relocation, DT_NEEDED resolution, and hook injection. The Rust linker can't load the game library yet.
+2. **C++ bionic linker** — **DELETED in Phase 6.** The `mcpelauncher-linker/` source tree and its `linker`/`linker-c` cc::Build targets are gone. The Rust linker is now the *only* loader: it loads `libminecraftpe.so` (with full ELF relocation, DT_NEEDED resolution, and hook injection via `mcpelauncher_dispatch_*`), and exports the whole dispatch surface natively. The binary links zero bionic symbols (`nm` shows only Rust `linker_*`/`mcpelauncher_dispatch_*`).
