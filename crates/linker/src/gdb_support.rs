@@ -115,6 +115,22 @@ pub fn notify_gdb_of_unload(map: *mut LinkMap) {
     rtld_db_dlactivity();
 }
 
+/// Build a persistent `LinkMap` for a just-loaded ELF and publish it to the
+/// debugger's `r_debug` chain. Name and map are intentionally leaked: GDB keeps
+/// `l_name`/`l_next` pointers for the lifetime of the process.
+pub fn notify_gdb_of_soinfo_load(base: usize, soname: &str, dynamic: Option<usize>) {
+    let name = std::ffi::CString::new(soname).unwrap_or_default();
+    let name_ptr = name.into_raw();
+    let map = Box::into_raw(Box::new(LinkMap {
+        l_addr: base,
+        l_name: name_ptr,
+        l_ld: dynamic.unwrap_or(0) as *mut u8,
+        l_next: std::ptr::null_mut(),
+        l_prev: std::ptr::null_mut(),
+    }));
+    notify_gdb_of_load(map);
+}
+
 pub fn notify_gdb_of_libraries() {
     with_r_debug_mut(|rdebug| rdebug.r_state = RDebugState::RtAdd);
     rtld_db_dlactivity();
@@ -228,6 +244,24 @@ mod tests {
                 assert_eq!(rdebug.r_version, 1);
                 assert_eq!(rdebug.r_state, RDebugState::RtConsistent);
                 assert_ne!(rdebug.r_brk, 0);
+            });
+        });
+    }
+
+    #[test]
+    fn test_notify_gdb_soinfo_load_registers_map() {
+        with_clean_gdb_state(|| {
+            notify_gdb_of_soinfo_load(0xdead_0000, "libtest.so", Some(0xdead_0100));
+            with_r_debug_mut(|rdebug| {
+                assert!(!rdebug.r_map.is_null());
+                let map = unsafe { &*rdebug.r_map };
+                assert_eq!(map.l_addr, 0xdead_0000);
+                assert_eq!(map.l_ld as usize, 0xdead_0100);
+                assert!(!map.l_name.is_null());
+                let name = unsafe { std::ffi::CStr::from_ptr(map.l_name) }
+                    .to_str()
+                    .unwrap();
+                assert_eq!(name, "libtest.so");
             });
         });
     }

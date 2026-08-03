@@ -450,6 +450,9 @@ fn load_library_internal(
                     }
 
                     let soname = loaded.soinfo.soname.clone();
+                    let lib_base = loaded.soinfo.base;
+                    let lib_soname = loaded.soinfo.soname.clone();
+                    let lib_dynamic = loaded.soinfo.dynamic;
                     let lib = LoadedLibrary {
                         soinfo: loaded.soinfo,
                         ref_count: 1,
@@ -462,6 +465,7 @@ fn load_library_internal(
                     if soname != name {
                         state.libraries_by_name.insert(name.to_string(), handle);
                     }
+                    gdb_support::notify_gdb_of_soinfo_load(lib_base, &lib_soname, lib_dynamic);
                     return handle;
                 }
                 Err(e) => {
@@ -1717,6 +1721,9 @@ fn load_library_internal_no_ctors(
         );
 
         let soname = loaded.soinfo.soname.clone();
+        let lib_base = loaded.soinfo.base;
+        let lib_soname = loaded.soinfo.soname.clone();
+        let lib_dynamic = loaded.soinfo.dynamic;
         let lib = LoadedLibrary {
             soinfo: loaded.soinfo,
             ref_count: 1,
@@ -1729,6 +1736,7 @@ fn load_library_internal_no_ctors(
         if soname != name {
             state.libraries_by_name.insert(name.to_string(), handle);
         }
+        gdb_support::notify_gdb_of_soinfo_load(lib_base, &lib_soname, lib_dynamic);
         return handle;
     }
 

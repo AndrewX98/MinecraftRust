@@ -140,7 +140,8 @@ The Rust linker handles all stub registration (libc, EGL, OpenSLES, android, etc
 - Provides: `LinkMap`, `RDebug` structures, `rtld_db_dlactivity()` stub, `insert_link_map_into_debug_map`, `remove_link_map_from_debug_map`, `notify_gdb_of_load`, `notify_gdb_of_unload`, `notify_gdb_of_libraries`
 - Also provides `LinkerLogger` class (`ResetState`/`Log`/`IsEnabled`), `G_LINKER_LOGGER` global, `G_GREYLIST_DISABLED`, `parse_property`
 - Note: `rdebug.r_map` and `_r_debug` stored behind `Mutex` instead of raw `static mut`; `R_DEBUG_TAIL` stored as `usize` (not `AtomicPtr`) to avoid `!Send` pointer issues
-- 5 tests, all passing
+- Phase 5: `notify_gdb_of_soinfo_load()` (added) is called from both `load_library_internal` and `load_library_internal_no_ctors` after a real ELF map succeeds, so `libminecraftpe.so` + deps appear in `info sharedlibrary` / `_r_debug` under gdb. Name + LinkMap are intentionally leaked (GDB holds the pointers for process lifetime).
+- 6 tests, all passing
 - C++ counterparts: `linker_gdb_support.cpp`, `rt.cpp`, `linker_logger.cpp`
 - Still C++ only: `linker_globals.cpp` (67 lines)
 
@@ -313,6 +314,27 @@ The Rust linker handles all stub registration (libc, EGL, OpenSLES, android, etc
 - [x] `mc_relocate_glesv2_symbols` uses `rust_add_symbols` only (no C++ `linker::relocate`)
 - [x] `fake_egl_stub.cpp` `linker_load_library` delegate uses `linker_load_library_rust` only (no C++ `linker::load_library`)
 - [x] `mirror_rust_load` → `rust_load_stub`, `mirror_rust_add_symbols` → `rust_add_symbols` (renamed to reflect primary status)
+
+### Phase 5 (feature gaps, opportunistic) — complete
+
+- [x] Audited the actual game + all deps (`readelf -d/-rW/-sW` on the extracted
+      `lib/x86_64/` tree) for Phase 5 features. **None are required by the shipped libs:**
+- [x] Zip/APK-contained `.so` — not needed (extracted dir); `utils.rs` path parser already exists
+- [x] Linker namespaces / `ld.config` — not needed (single-game load); `linker_config.rs` + `namespaces.rs` stubs suffice
+- [x] CFI shadow wiring — not needed on desktop; left unwired (`cfi.rs` exists)
+- [x] Packed Android RELA/RELR — **zero** `DT_ANDROID_*` / `DT_RELR` across
+      `libminecraftpe.so`, `libfmod.so`, `libc++_shared.so`, and all 7 other game deps
+- [x] IRELATIVE / IFUNC — **zero** `R_X86_64_IRELATIVE` in game or fmod; hot-path
+      `reloc.rs` needs no change (all deps use only `RELATIVE`/`JUMP_SLOT`/`GLOB_DAT`)
+- [x] TLS relocs — none present in any game dep (`TPOFF64`/`DTPMOD*` absent), so the
+      live path needs no TLS-reloc work beyond the existing `tls.rs` module
+- [x] `__loader_*` export names — **no** `__loader_*` / `dlopen` / `dlsym` / `dladdr`
+      UND symbols in any game lib; game binds none of them, so `libdl.rs` surface suffices
+- [x] GDB `r_debug` notify — **wired**: added `gdb_support::notify_gdb_of_soinfo_load()`,
+      called from both `load_library_internal` and `load_library_internal_no_ctors` after a
+      real ELF map, so the game + deps appear in `info sharedlibrary` under gdb
+- [x] Exit criterion met: no runtime dependency on missing features for the main-menu path
+      (`cargo build -p client` green, game reaches main menu)
 
 ## Summary
 

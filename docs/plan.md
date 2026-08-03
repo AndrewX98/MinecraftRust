@@ -270,7 +270,15 @@ except deleted tree); `mod_loader.cpp` loads mods through `linker_rust_dlopen_ex
 
 ---
 
-### Phase 5 — Feature gaps only if required by the game (1–5 days, opportunistic)
+### Phase 5 — Feature gaps only if required by the game (1–5 days, opportunistic) — **DONE**
+
+**Result (2026-08-03):** audited the real shipped libs; none require Phase 5 features.
+`readelf` across `libminecraftpe.so` + all 8 game deps shows **zero** `DT_ANDROID_*` /
+`DT_RELR`, zero `R_X86_64_IRELATIVE`, zero TLS relocs, zero `__loader_*`/`dl*` UND
+symbols. All relocation work is `RELATIVE`/`JUMP_SLOT`/`GLOB_DAT`, which `reloc.rs`
+already handles. Only change: wired `gdb_support::notify_gdb_of_soinfo_load()` into
+both load paths so the game + deps appear in gdb `info sharedlibrary`. See
+`docs/LINKER_PORTING_PROGRESS.md` Phase 5 section.
 
 Implement only what real loads need; skip pure Android platform features.
 
