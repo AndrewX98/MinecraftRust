@@ -42,7 +42,6 @@ extern "C" int mcpelauncher_dispatch_dladdr(const void* addr, Dl_info* info);
 extern "C" size_t mcpelauncher_dispatch_get_library_base(void* handle);
 extern "C" void mcpelauncher_dispatch_relocate(void* handle, const char* const* keys, void* const* vals, size_t len);
 extern "C" int mcpelauncher_dispatch_unload_library(void* handle);
-extern "C" int linker_mirror_registration_enabled_rust();
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>

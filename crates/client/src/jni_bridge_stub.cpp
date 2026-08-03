@@ -146,8 +146,8 @@ extern "C" void mc_setup_android_hooks() {
     // FMOD setOutput is stubbed to keep AAudio; FMOD then dlopen's libaaudio.so
     // and calls AAudio_* symbols. Without this shim, do_dlopen fails or the
     // Streaming Pool thread SIGSEGVs on null AAudio function pointers.
-    // NOTE: C++ soinfo is REQUIRED here — FMOD calls dlopen("libaaudio.so")
-    // through libc-shim (→ bionic __loader_dlopen), which searches the C++ solist.
+    // The Rust linker stub handles this: linker_rust_dlopen_fmod overrides FMOD's
+    // relocations and find_library finds the Rust stub (no C++ soinfo involved).
     {
         std::unordered_map<std::string, void*> audio_syms;
         FakeAudio::initHybrisHooks(audio_syms);

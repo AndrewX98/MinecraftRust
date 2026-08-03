@@ -18,8 +18,6 @@ fn main() {
     // target but not the binary — same-package lib+bin skips the rlib.
     static STATIC_LIBS: &[&str] = &[
         "mcpelauncher-client-bridge",
-        "linker",
-        "linker-c",
         "mcpelauncher-core",
         "mcpelauncher-manifest-libs",
         "mcpelauncher-base64",
@@ -36,10 +34,4 @@ fn main() {
         println!("cargo:rustc-link-arg-bins=-l{lib}");
     }
     println!("cargo:rustc-link-arg-bins=-Wl,-Bdynamic");
-
-    // Linker defsym flags (expected by mcpelauncher-linker)
-    println!("cargo:rustc-link-arg-bins=-Wl,--defsym=__rela_iplt_start=0");
-    println!("cargo:rustc-link-arg-bins=-Wl,--defsym=__rela_iplt_end=0");
-    println!("cargo:rustc-link-arg-bins=-Wl,--defsym=__rel_iplt_start=0");
-    println!("cargo:rustc-link-arg-bins=-Wl,--defsym=__rel_iplt_end=0");
 }

@@ -26,19 +26,22 @@ static LogLevel convertAndroidLogLevel(int level) {
         return LogLevel::LOG_ERROR;
     return LogLevel::LOG_ERROR;
 }
-static void __android_log_vprint(int prio, const char *tag, const char *fmt, va_list args) {
+// Non-static: capi.cpp takes these addresses to register the liblog.so stub
+// symbols with the Rust linker (previously provided by the C++ linker tree's
+// logger_write.o).
+extern "C" void __android_log_vprint(int prio, const char *tag, const char *fmt, va_list args) {
     Log::vlog(convertAndroidLogLevel(prio), tag, fmt, args);
 }
-static void __android_log_print(int prio, const char *tag, const char *fmt, ...) {
+extern "C" void __android_log_print(int prio, const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     Log::vlog(convertAndroidLogLevel(prio), tag, fmt, args);
     va_end(args);
 }
-static void __android_log_write(int prio, const char *tag, const char *text) {
+extern "C" void __android_log_write(int prio, const char *tag, const char *text) {
     Log::log(convertAndroidLogLevel(prio), tag, "%s", text);
 }
-static void __android_log_assert(const char* cond, const char* tag, const char* fmt, ...) {
+extern "C" void __android_log_assert(const char* cond, const char* tag, const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     if (fmt) {

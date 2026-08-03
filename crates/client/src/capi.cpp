@@ -82,15 +82,6 @@ namespace linker {
     void relocate(void* handle, const std::unordered_map<std::string, void*>& symbols);
 }
 
-// Forward declarations for bionic linker functions
-extern "C" void __loader_android_update_LD_LIBRARY_PATH(const char*);
-extern "C" void* __loader_android_dlopen_ext(const char*, int, const void*, const void*);
-extern "C" void* __loader_dlopen(const char* filename, int flags, const void* caller_addr);
-extern "C" void* __loader_dlsym(void* handle, const char* symbol, const void* caller_addr);
-static void linker_update_LD_LIBRARY_PATH(const char* path) {
-    __loader_android_update_LD_LIBRARY_PATH(path);
-}
-
 // Bionic RTLD_NOLOAD (same value as glibc). Do not use system RTLD_GLOBAL
 // values — they differ from bionic and are not needed here.
 #ifndef MCPE_RTLD_NOLOAD
@@ -149,7 +140,6 @@ extern "C" size_t linker_rust_dlopen_ext(const char* filename, int flags,
                                          const char* const* hook_names, void* const* hook_vals,
                                          size_t hook_count);
 extern "C" size_t linker_rust_find_library(const char* name);
-extern "C" int linker_mirror_registration_enabled_rust();
 
 extern "C" {
 
@@ -184,17 +174,15 @@ int mc_get_libc_symbols(shim_shimmed_symbol* buf, int max_entries) {
 }
 
 extern "C" void linker_init_rust();
-extern "C" void mcpelauncher_linker_cpp_init();
 
 /// Runs the core init sequence that the original main.cpp performs.
 /// Call this AFTER mc_setup_paths and mc_init_version.
 int mc_load_core_libraries(const char* lib_dir) {
-    // 0) Initialize Rust linker first, then C++ bionic linker.
+    // 0) Initialize Rust linker (single owner of all libraries).
     //    Phase 2: Rust-primary stub registration. Rust owns all stub state;
     //    other stubs (libOpenSLES, libGLESv1_CM, libGLESv2, liblog,
     //    libmcpelauncher_gamewindow) are Rust-only.
     linker_init_rust();
-    mcpelauncher_linker_cpp_init();
 
     // 1) Register libc symbols with Rust linker first, then C++
     auto libC = MinecraftUtils::getLibCSymbols();
@@ -281,9 +269,6 @@ int mc_load_core_libraries(const char* lib_dir) {
     // 5) Set up library search path so dlopen_ext can find libminecraftpe.so etc.
     //    This must match the original main.cpp: update_LD_LIBRARY_PATH with the lib dir
     std::string libDir = _ZN10PathHelper8pathInfoE.gameDir + "lib/" + MinecraftUtils::getLibraryAbi();
-    linker_update_LD_LIBRARY_PATH(libDir.c_str());
-
-    // Also register the search path for the Rust linker
     linker_rust_add_search_path(libDir.c_str());
 
     return 0;

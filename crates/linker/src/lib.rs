@@ -28,23 +28,6 @@ use std::sync::{LazyLock, RwLock};
 
 pub type Handle = usize;
 
-/// Phase 1 gate: when MCPELAUNCHER_LINKER_RUST_ONLY=1 is set, skip creating the
-/// C++ bionic soinfo mirror for Rust-loaded libraries. All C++ consumers must
-/// use mcpelauncher_dispatch_* (handle-agnostic) instead of soinfo_from_handle.
-pub fn mirror_registration_enabled() -> bool {
-    std::env::var("MCPELAUNCHER_LINKER_RUST_ONLY")
-        .map(|v| v != "1")
-        .unwrap_or(true)
-}
-
-/// C++-callable equivalent of `mirror_registration_enabled()`. Lets C++
-/// consumers (capi.cpp, setupHybris) gate their stub-mirror registrations on
-/// the same RUST_ONLY flag so stubs exist only in Rust state under Phase 2.
-#[no_mangle]
-pub extern "C" fn linker_mirror_registration_enabled_rust() -> i32 {
-    if mirror_registration_enabled() { 1 } else { 0 }
-}
-
 #[derive(Clone)]
 pub struct LoadedLibrary {
     pub soinfo: SoInfo,
@@ -811,53 +794,7 @@ pub unsafe extern "C" fn linker_rust_dlopen_ext(
     // NOTE: We skip calling init functions (DT_INIT and DT_INIT_ARRAY) for
     // libminecraftpe.so because its constructors require a JNI environment
     // that isn't available at this point in the startup sequence. The game
-    // will lazily initialize its global state when needed. The C++ bionic
-    // linker also marks constructors as called without running them when
-    // registering Rust-loaded libraries.
-
-    // Register with C++ bionic linker solist so bionic APIs (dladdr, dlopen(RTLD_NOLOAD),
-    // symbol resolution for libfmod.so, etc.) can find this library.  Return the Rust handle
-    // regardless — all C++ consumers use mcpelauncher_dispatch_* wrappers.
-    let is_stub = {
-        let state = STATE.read().unwrap();
-        match state.libraries_by_handle.get(&rust_handle) {
-            None => true,
-            Some(lib) => lib.is_stub,
-        }
-    };
-
-    if !is_stub {
-        let (base, dynamic) = {
-            let state = STATE.read().unwrap();
-            match state.libraries_by_handle.get(&rust_handle) {
-                None => (0, 0),
-                Some(lib) => (
-                    lib.soinfo.base,
-                    lib.soinfo.dynamic.unwrap_or(0),
-                ),
-            }
-        };
-
-        if base != 0 && dynamic != 0 && mirror_registration_enabled() {
-            extern "C" {
-                fn mcpelauncher_linker_register_loaded_library(
-                    name: *const libc::c_char,
-                    base: usize,
-                    rust_handle: usize,
-                ) -> usize;
-            }
-            let cpp_handle =
-                mcpelauncher_linker_register_loaded_library(filename, base, rust_handle);
-            if cpp_handle != 0 {
-                log::info!(
-                    "linker: C++ soinfo registration succeeded for '{}' (rust_handle={}, cpp_handle={})",
-                    path, rust_handle, cpp_handle
-                );
-            } else {
-                log::warn!("linker: C++ soinfo registration FAILED for '{}' (base=0x{:x})", path, base);
-            }
-        }
-    }
+    // will lazily initialize its global state when needed.
 
     log::info!("linker: Rust dlopen_ext succeeded for '{}' (handle={})", path, rust_handle);
     rust_handle
@@ -902,38 +839,6 @@ pub unsafe extern "C" fn linker_rust_dlopen_sqlite(
         });
     }
 
-    // Register with C++ bionic linker so dladdr/dlopen(RTLD_NOLOAD) work
-    let (base, dynamic) = {
-        let state = STATE.read().unwrap();
-        match state.libraries_by_handle.get(&handle) {
-            None => (0, 0),
-            Some(lib) => (lib.soinfo.base, lib.soinfo.dynamic.unwrap_or(0)),
-        }
-    };
-
-    if base != 0 && dynamic != 0 && mirror_registration_enabled() {
-        extern "C" {
-            fn mcpelauncher_linker_register_loaded_library(
-                name: *const libc::c_char,
-                base: usize,
-                rust_handle: usize,
-            ) -> usize;
-        }
-        let cpp_handle =
-            mcpelauncher_linker_register_loaded_library(filename, base, handle);
-        if cpp_handle != 0 {
-            log::info!(
-                "linker: sqlite C++ soinfo registration succeeded (handle={})",
-                handle
-            );
-        } else {
-            log::warn!(
-                "linker: sqlite C++ soinfo registration FAILED (base=0x{:x})",
-                base
-            );
-        }
-    }
-
     log::info!("linker: Rust dlopen_sqlite succeeded for '{}' (handle={})", path, handle);
     handle
 }
@@ -961,38 +866,6 @@ pub unsafe extern "C" fn linker_rust_dlopen_pairipcore(
         return 0;
     }
 
-    // Register with C++ bionic linker so dladdr/dlopen(RTLD_NOLOAD) work
-    let (base, dynamic) = {
-        let state = STATE.read().unwrap();
-        match state.libraries_by_handle.get(&handle) {
-            None => (0, 0),
-            Some(lib) => (lib.soinfo.base, lib.soinfo.dynamic.unwrap_or(0)),
-        }
-    };
-
-    if base != 0 && dynamic != 0 && mirror_registration_enabled() {
-        extern "C" {
-            fn mcpelauncher_linker_register_loaded_library(
-                name: *const libc::c_char,
-                base: usize,
-                rust_handle: usize,
-            ) -> usize;
-        }
-        let cpp_handle =
-            mcpelauncher_linker_register_loaded_library(filename, base, handle);
-        if cpp_handle != 0 {
-            log::info!(
-                "linker: pairipcore C++ soinfo registration succeeded (handle={})",
-                handle
-            );
-        } else {
-            log::warn!(
-                "linker: pairipcore C++ soinfo registration FAILED (base=0x{:x})",
-                base
-            );
-        }
-    }
-
     log::info!("linker: Rust dlopen_pairipcore succeeded for '{}' (handle={})", path, handle);
     handle
 }
@@ -1018,38 +891,6 @@ pub unsafe extern "C" fn linker_rust_dlopen_libcxx(
     if handle == 0 {
         log::warn!("linker: Rust load_library_internal failed for '{}'", path);
         return 0;
-    }
-
-    // Register with C++ bionic linker so dladdr/dlopen(RTLD_NOLOAD) work
-    let (base, dynamic) = {
-        let state = STATE.read().unwrap();
-        match state.libraries_by_handle.get(&handle) {
-            None => (0, 0),
-            Some(lib) => (lib.soinfo.base, lib.soinfo.dynamic.unwrap_or(0)),
-        }
-    };
-
-    if base != 0 && dynamic != 0 && mirror_registration_enabled() {
-        extern "C" {
-            fn mcpelauncher_linker_register_loaded_library(
-                name: *const libc::c_char,
-                base: usize,
-                rust_handle: usize,
-            ) -> usize;
-        }
-        let cpp_handle =
-            mcpelauncher_linker_register_loaded_library(filename, base, handle);
-        if cpp_handle != 0 {
-            log::info!(
-                "linker: libc++ C++ soinfo registration succeeded (handle={})",
-                handle
-            );
-        } else {
-            log::warn!(
-                "linker: libc++ C++ soinfo registration FAILED (base=0x{:x})",
-                base
-            );
-        }
     }
 
     log::info!("linker: Rust dlopen_libcxx succeeded for '{}' (handle={})", path, handle);
@@ -1498,6 +1339,149 @@ pub unsafe extern "C" fn linker_rust_find_library(name: *const libc::c_char) -> 
         .get(name_str)
         .copied()
         .unwrap_or(0)
+}
+
+/// Mirror of glibc/bionic `Dl_info` used by `mcpelauncher_dispatch_dladdr`.
+#[repr(C)]
+struct DlInfo {
+    dli_fname: *const libc::c_char,
+    dli_fbase: *mut libc::c_void,
+    dli_sname: *const libc::c_char,
+    dli_saddr: *mut libc::c_void,
+}
+
+/// Handle-type-agnostic dispatch wrappers (pure Rust, no C++ bionic fallback).
+///
+/// Ported from mcpelauncher-linker/src/linker.cpp. All libraries are
+/// Rust-owned after Phase 4/5, so a handle is either a Rust handle (small int,
+/// passed as an opaque pointer) or invalid. On miss, dlopen/dlsym return null
+/// and dlclose returns -1, matching bionic's dlerror semantics without any
+/// C++ linker dependency.
+///
+/// Consumers: hook.cpp, minecraft_utils.cpp, fmod_utils.cpp, patch_utils.cpp,
+/// crash_handler.cpp, jni_support.cpp, jni_bridge_stub.cpp, core_patches_stub.cpp,
+/// and the Rust libdl registration in `get_libdl_symbols` (fmod relocation override).
+
+/// Return the Rust handle encoded in an opaque pointer, or 0 if it is not a
+/// Rust handle (mirrors the old C++ `mcpelauncher_linker_resolve_rust_handle`).
+#[no_mangle]
+pub extern "C" fn mcpelauncher_linker_resolve_rust_handle(handle: *mut libc::c_void) -> usize {
+    let v = handle as usize;
+    if v > 0 && v < 10000 {
+        v
+    } else {
+        0
+    }
+}
+
+/// Compatibility shim — the C++ soinfo mirror map is gone, so there is never
+/// a C++-owned handle anymore. Always returns 0.
+#[no_mangle]
+pub extern "C" fn mcpelauncher_linker_get_rust_handle(_cpp_handle: *mut libc::c_void) -> usize {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_dlopen(
+    name: *const libc::c_char,
+    _flags: i32,
+) -> *mut libc::c_void {
+    if name.is_null() {
+        return std::ptr::null_mut();
+    }
+    let rh = unsafe { linker_rust_find_library(name) };
+    if rh != 0 {
+        rh as *mut libc::c_void
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_dlsym(
+    handle: *mut libc::c_void,
+    symbol: *const libc::c_char,
+) -> *mut libc::c_void {
+    let rh = mcpelauncher_linker_resolve_rust_handle(handle);
+    if rh == 0 || symbol.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { linker_rust_dlsym(rh, symbol) }
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_dlclose(handle: *mut libc::c_void) -> libc::c_int {
+    let rh = mcpelauncher_linker_resolve_rust_handle(handle);
+    if rh == 0 {
+        return -1;
+    }
+    unsafe { linker_rust_dlclose(rh) }
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_dladdr(
+    addr: *const libc::c_void,
+    info: *mut DlInfo,
+) -> libc::c_int {
+    if addr.is_null() || info.is_null() {
+        return 0;
+    }
+    let rh = unsafe { linker_rust_dladdr(addr as usize, std::ptr::null_mut(), 0) };
+    if rh == 0 {
+        return 0;
+    }
+    unsafe {
+        (*info).dli_fname = linker_rust_get_library_name(rh);
+        (*info).dli_fbase = linker_rust_get_library_base(rh) as *mut libc::c_void;
+        (*info).dli_sname = std::ptr::null();
+        (*info).dli_saddr = std::ptr::null_mut();
+    }
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_relocate(
+    handle: *mut libc::c_void,
+    keys: *const *const libc::c_char,
+    vals: *const *mut libc::c_void,
+    len: usize,
+) {
+    let rh = mcpelauncher_linker_resolve_rust_handle(handle);
+    if rh == 0 {
+        return;
+    }
+    unsafe { linker_rust_add_symbols_handle(rh, keys, vals, len) }
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_unload_library(handle: *mut libc::c_void) -> libc::c_int {
+    let rh = mcpelauncher_linker_resolve_rust_handle(handle);
+    if rh == 0 {
+        return -1;
+    }
+    unsafe { linker_rust_dlclose(rh) }
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_get_library_base(handle: *mut libc::c_void) -> usize {
+    let rh = mcpelauncher_linker_resolve_rust_handle(handle);
+    if rh == 0 {
+        return 0;
+    }
+    unsafe { linker_rust_get_library_base(rh) }
+}
+
+#[no_mangle]
+pub extern "C" fn mcpelauncher_dispatch_get_library_code_region(
+    handle: *mut libc::c_void,
+    base: *mut usize,
+    size: *mut usize,
+) {
+    let rh = mcpelauncher_linker_resolve_rust_handle(handle);
+    if rh == 0 {
+        return;
+    }
+    unsafe { linker_rust_get_library_code_region(rh, base, size) }
 }
 
 /// Same as load_library_internal but skips calling init/init_array constructors.

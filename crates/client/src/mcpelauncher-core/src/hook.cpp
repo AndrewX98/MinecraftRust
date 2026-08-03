@@ -7,14 +7,33 @@
 #include <elf.h>
 #include <sys/mman.h>
 #include <log.h>
-#include <mcpelauncher/linker.h>
-#include <bionic/linker/linker_soinfo.h>
-#include <bionic/linker/linker_relocs.h>
-#include <bionic/linker/linker.h>
+
+// ELF macros formerly provided by the bionic linker headers
+// (mcpelauncher-linker/bionic/...), kept out of the build in Phase 6.
+// ElfW comes from <mcpelauncher/linker.h>'s link.h include.
+#if defined(__LP64__)
+#define ELFW(what) ELF64_ ## what
+#else
+#define ELFW(what) ELF32_ ## what
+#endif
+
+#define R_GENERIC_NONE 0 // R_*_NONE is always 0
+
+#if defined(__x86_64__)
+#define R_GENERIC_JUMP_SLOT     R_X86_64_JUMP_SLOT
+#define R_GENERIC_ABSOLUTE      R_X86_64_64
+#define R_GENERIC_GLOB_DAT      R_X86_64_GLOB_DAT
+#elif defined(__i386__)
+#define R_GENERIC_JUMP_SLOT     R_386_JMP_SLOT
+#define R_GENERIC_ABSOLUTE      R_386_32
+#define R_GENERIC_GLOB_DAT      R_386_GLOB_DAT
+#elif defined(__aarch64__)
+#define R_GENERIC_JUMP_SLOT     R_AARCH64_JUMP_SLOT
+#define R_GENERIC_ABSOLUTE      R_AARCH64_ABS64
+#define R_GENERIC_GLOB_DAT      R_AARCH64_GLOB_DAT
+#endif
 
 #define TAG "HookManager"
-
-soinfo* soinfo_from_handle(void* handle);
 
 // Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker)
 extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
@@ -31,18 +50,8 @@ HookManager HookManager::instance;
 
 HookManager::LibInfo::LibInfo(void *handle) : handle(handle) {
     size_t rust_handle = mcpelauncher_linker_resolve_rust_handle(handle);
-    if (rust_handle != 0) {
-        this->base = (void*) linker_rust_get_library_base(rust_handle);
-    } else {
-        this->base = (void*) soinfo_from_handle(handle)->base;
-    }
-
-    ElfW(Dyn)* dynData;
-    if (rust_handle != 0) {
-        dynData = (ElfW(Dyn)*) linker_rust_get_library_dynamic(rust_handle);
-    } else {
-        dynData = (ElfW(Dyn)*) soinfo_from_handle(handle)->dynamic;
-    }
+    this->base = (void*) linker_rust_get_library_base(rust_handle);
+    ElfW(Dyn)* dynData = (ElfW(Dyn)*) linker_rust_get_library_dynamic(rust_handle);
 
     for (int i = 0; ; i++) {
         if (dynData[i].d_tag == DT_NULL)
@@ -262,17 +271,7 @@ void HookManager::applyHooks() {
 
 ElfW(Word) HookManager::getSymbolIndex(void *lib, const char *symbolName) {
     size_t rust_handle = mcpelauncher_linker_resolve_rust_handle(lib);
-    if (rust_handle != 0) {
-        return linker_rust_find_symbol_index_by_name(rust_handle, symbolName);
-    }
-    auto slib = soinfo_from_handle(lib);
-    SymbolName n{ symbolName };
-    auto sym = slib->find_symbol_by_name(n, nullptr);
-    if (sym) {
-        return sym - slib->symtab_;
-    }
-    
-    return (ElfW(Word)) -1;
+    return linker_rust_find_symbol_index_by_name(rust_handle, symbolName);
 }
 
 std::string HookManager::translateConstructorName(const char *name) {
