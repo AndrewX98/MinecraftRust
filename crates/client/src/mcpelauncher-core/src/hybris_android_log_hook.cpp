@@ -1,8 +1,5 @@
 #include <mcpelauncher/hybris_utils.h>
-#include <mcpelauncher/linker.h>
 #include <log.h>
-
-extern "C" int linker_mirror_registration_enabled_rust();
 
 enum class AndroidLogPriority {
     ANDROID_LOG_UNKNOWN = 0,
@@ -51,16 +48,4 @@ static void __android_log_assert(const char* cond, const char* tag, const char* 
     }
     va_end(args);
     abort();
-}
-
-void HybrisUtils::hookAndroidLog() {
-    // liblog is registered in Rust state via rust_load_stub in capi.cpp.
-    // Mirror into C++ bionic solist only when not running RUST_ONLY.
-    if (!linker_mirror_registration_enabled_rust()) return;
-    linker::load_library("liblog.so", {
-        {"__android_log_print", (void*) __android_log_print},
-        {"__android_log_vprint", (void*) __android_log_vprint},
-        {"__android_log_write", (void*) __android_log_write},
-        {"__android_log_assert", (void*) __android_log_assert},
-    });
 }

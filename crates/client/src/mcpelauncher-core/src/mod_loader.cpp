@@ -8,25 +8,46 @@
 #include <mcpelauncher/minecraft_utils.h>
 #include <fake-jni/fake-jni.h>
 
+extern "C" size_t linker_rust_dlopen_ext(const char*, int, const char* const*, void* const*, size_t);
+extern "C" size_t linker_rust_dlopen(const char*, int);
+extern "C" void* linker_rust_dlsym(size_t, const char*);
+extern "C" int linker_rust_dlclose(size_t);
+extern "C" const char* linker_rust_dlerror();
+
+static void* mod_loader_dlopen(const char* name, int flags) {
+    return (void*)linker_rust_dlopen(name, flags);
+}
+static void* mod_loader_dlsym(void* handle, const char* name) {
+    return linker_rust_dlsym((size_t)handle, name);
+}
+static int mod_loader_dlclose(void* handle) {
+    return linker_rust_dlclose((size_t)handle);
+}
+
 void* ModLoader::loadMod(std::string const& path, bool preinit) {
-    android_dlextinfo extinfo = { 0 };
     auto api = MinecraftUtils::getApi();
     std::vector<mcpelauncher_hook_t> hooks;
     for (auto && entry : api) {
         hooks.emplace_back(mcpelauncher_hook_t{ entry.first.data(), entry.second });
     }
     hooks.emplace_back(mcpelauncher_hook_t{ nullptr, nullptr });
-    extinfo.flags = ANDROID_DLEXT_MCPELAUNCHER_HOOKS;
-    extinfo.mcpelauncher_hooks = hooks.data();
-    void* handle = linker::dlopen_ext(path.c_str(), 0, &extinfo);
+
+    std::vector<const char*> hook_names;
+    std::vector<void*> hook_vals;
+    for (auto const& h : hooks) {
+        if (h.name == nullptr) break;
+        hook_names.push_back(h.name);
+        hook_vals.push_back(h.value);
+    }
+    void* handle = (void*)linker_rust_dlopen_ext(path.c_str(), 0, hook_names.data(), hook_vals.data(), hook_names.size());
     if (handle == nullptr) {
-        Log::error("ModLoader", "Failed to load mod %s: %s", path.c_str(), linker::dlerror());
+        Log::error("ModLoader", "Failed to load mod %s: %s", path.c_str(), linker_rust_dlerror());
         return nullptr;
     }
     auto entry = mods.find(handle);
     if(entry != mods.end()) {
         // loaded the same mod more than once
-        linker::dlclose(handle);
+        linker_rust_dlclose((size_t)handle);
         if(preinit ? entry->second.preinit : entry->second.init) {
             return handle;
         }
@@ -35,7 +56,7 @@ void* ModLoader::loadMod(std::string const& path, bool preinit) {
     // Always call this for preinit, and only call for init if preinit wasn't called before
     if(preinit || !mods[handle].preinit) {
         FakeJni::LocalFrame localFrame;
-        localFrame.getJniEnv().getVM().attachLibrary(path.c_str(), "", { linker::dlopen, linker::dlsym, linker::dlclose });
+        localFrame.getJniEnv().getVM().attachLibrary(path.c_str(), "", { mod_loader_dlopen, mod_loader_dlsym, mod_loader_dlclose });
     }
 
     mods[handle].preinit |= preinit;
@@ -45,7 +66,7 @@ void* ModLoader::loadMod(std::string const& path, bool preinit) {
 
     void (*initFunc)();
     auto&& initname = preinit ? "mod_preinit" : "mod_init";
-    initFunc = (void (*)()) linker::dlsym(handle, initname);
+    initFunc = (void (*)()) linker_rust_dlsym((size_t)handle, initname);
     if (((void*) initFunc) == nullptr) {
         Log::warn("ModLoader", "Mod %s does not have a %s function", path.c_str(), initname);
         return handle;

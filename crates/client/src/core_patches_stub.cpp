@@ -118,7 +118,6 @@ void CorePatches::loadGameWindowLibrary() {
         FakeEGL::addSwapBuffersCallback(user, callback);
     };
 
-    linker::load_library("libmcpelauncher_gamewindow.so", syms);
     // Mirror symbols to Rust linker state (lib already registered from capi.cpp)
     {
         size_t n = syms.size();

@@ -2,21 +2,10 @@
 #include <mcpelauncher/path_helper.h>
 #include <log.h>
 #include <dlfcn.h>
-#include <mcpelauncher/linker.h>
 
 const char* HybrisUtils::TAG = "LinkerUtils";
 
 extern "C" size_t linker_load_library_rust(const char*, const char* const*, void* const*, size_t);
-
-
-bool HybrisUtils::loadLibrary(std::string path) {
-    void* handle = linker::dlopen(PathHelper::findDataFile("libs/hybris/" + path).c_str(), 0);
-    if (handle == nullptr) {
-        Log::error(TAG, "Failed to load hybris library %s: %s", path.c_str(), linker::dlerror());
-        return false;
-    }
-    return true;
-}
 
 void* HybrisUtils::loadLibraryOS(const char *name, std::string const &path, const char** symbols) {
     return loadLibraryOS(name, path, symbols, std::unordered_map<std::string, void*>());
@@ -39,8 +28,7 @@ void* HybrisUtils::loadLibraryOS(const char *name, std::string const &path, cons
             syms[sym] = ptr;
         i++;
     }
-    linker::load_library(name, syms);
-    // Mirror the resolved OS-library symbols into the Rust linker's
+    // Register the resolved OS-library symbols with the Rust linker's
     // global_symbols so Rust-loaded images (e.g. libfmod) resolve libm / etc.
     // imports from the Rust linker state instead of a C++ dlsym fallback.
     if (!syms.empty()) {
@@ -67,5 +55,13 @@ void HybrisUtils::stubSymbols(const char *name, const char** symbols, void* stub
         syms[sym] = stubfunc;
         i++;
     }
-    linker::load_library(name, syms);
+    std::vector<const char*> keys;
+    std::vector<void*> vals;
+    keys.reserve(syms.size());
+    vals.reserve(syms.size());
+    for (auto& [k, v] : syms) {
+        keys.push_back(k.c_str());
+        vals.push_back(v);
+    }
+    linker_load_library_rust(name, keys.data(), vals.data(), keys.size());
 }

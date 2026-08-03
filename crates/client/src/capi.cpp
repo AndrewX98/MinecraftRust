@@ -67,7 +67,6 @@ struct MinecraftUtils {
     static std::unordered_map<std::string, void*> getLibCSymbols();
     static void* loadLibM();
     static void setupHybris();
-    static void setupGLES2Symbols(void* (*resolver)(const char*));
     static const char* getLibraryAbi();
 };
 
@@ -192,10 +191,8 @@ extern "C" void mcpelauncher_linker_cpp_init();
 int mc_load_core_libraries(const char* lib_dir) {
     // 0) Initialize Rust linker first, then C++ bionic linker.
     //    Phase 2: Rust-primary stub registration. Rust owns all stub state;
-    //    C++ soinfo is still created only for libc.so and libstdc++.so
-    //    (needed by loadMinecraftLib's linker::dlopen calls). Other stubs
-    //    (libOpenSLES, libGLESv1_CM, libGLESv2, liblog, libmcpelauncher_gamewindow)
-    //    are Rust-only with C++ registration handled elsewhere.
+    //    other stubs (libOpenSLES, libGLESv1_CM, libGLESv2, liblog,
+    //    libmcpelauncher_gamewindow) are Rust-only.
     linker_init_rust();
     mcpelauncher_linker_cpp_init();
 
@@ -212,11 +209,6 @@ int mc_load_core_libraries(const char* lib_dir) {
     // then returns. The main thread blocks on executeMainThread but the game
     // thread runs the event loop and renders.
     rust_load_stub("libc.so", libC);
-    // Phase 2: mirror libc into C++ bionic solist ONLY when mirrors are enabled
-    // (i.e. not RUST_ONLY). Under RUST_ONLY the stub exists only in Rust state.
-    if(linker_mirror_registration_enabled_rust()) {
-        linker::load_library("libc.so", libC);
-    }
 
     // 2) Load libm
     MinecraftUtils::loadLibM();
@@ -238,24 +230,18 @@ int mc_load_core_libraries(const char* lib_dir) {
     {
 
         // libOpenSLES.so: Rust-only stub registration.
-        // C++ registration happens in MinecraftUtils::setupHybris().
         auto empty = std::unordered_map<std::string, void*>();
         rust_load_stub("libOpenSLES.so", empty);
     }
     {
         // libGLESv1_CM.so: Rust-only stub registration.
-        // C++ registration happens in MinecraftUtils::setupHybris().
         auto empty = std::unordered_map<std::string, void*>();
         rust_load_stub("libGLESv1_CM.so", empty);
     }
     {
-        // libstdc++.so: C++ registration kept — loadMinecraftLib calls
-        // linker::dlopen("libstdc++.so", 0) directly and expects a C++ handle.
+        // libstdc++.so: Rust-only stub registration.
         auto empty = std::unordered_map<std::string, void*>();
         rust_load_stub("libstdc++.so", empty);
-        if(linker_mirror_registration_enabled_rust()) {
-            linker::load_library("libstdc++.so", empty);
-        }
     }
 
     // Register libGLESv2.so with stub functions (real GL context needed for proper symbols)
@@ -301,14 +287,6 @@ int mc_load_core_libraries(const char* lib_dir) {
     linker_rust_add_search_path(libDir.c_str());
 
     return 0;
-}
-
-/// Registered GLES2 symbols using a real eglGetProcAddress-like resolver.
-/// Call this AFTER mc_load_core_libraries but BEFORE mc_load_minecraft.
-/// The resolver must be a function that takes a GL symbol name and returns
-/// a function pointer from the real GL driver.
-void mc_setup_graphics(void* (*proc_addr)(const char*)) {
-    MinecraftUtils::setupGLES2Symbols(proc_addr);
 }
 
 /// Replace the stub libGLESv2.so symbols with real GL functions obtained via

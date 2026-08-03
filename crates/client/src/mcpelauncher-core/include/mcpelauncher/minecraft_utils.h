@@ -43,6 +43,4 @@ public:
     static const char* getLibraryAbi();
 
     static size_t getLibraryBase(void* handle);
-
-    static void setupGLES2Symbols(void* (*resolver)(const char*));
 };

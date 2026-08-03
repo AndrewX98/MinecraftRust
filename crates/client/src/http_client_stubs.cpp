@@ -637,8 +637,7 @@ extern "C" void http_client_register_stubs() {
 
     char* name_stable = (char*)malloc(strlen("libHttpClient.Android.so") + 1);
     strcpy(name_stable, "libHttpClient.Android.so");
-    void* handle = linker::load_library(name_stable, syms);
-    // Mirror to Rust linker state
+    // Register with Rust linker state (no C++ soinfo consumer)
     {
         size_t n = syms.size();
         std::vector<const char*> keys(n);
@@ -651,6 +650,6 @@ extern "C" void http_client_register_stubs() {
         }
         linker_load_library_rust(name_stable, keys.data(), vals.data(), n);
     }
-    fprintf(stderr, "LAUNCHER: http_client_register_stubs: registered %zu symbols, handle=%p\n",
-            sizeof(table) / sizeof(table[0]), handle);
+    fprintf(stderr, "LAUNCHER: http_client_register_stubs: registered %zu symbols\n",
+            sizeof(table) / sizeof(table[0]));
 }

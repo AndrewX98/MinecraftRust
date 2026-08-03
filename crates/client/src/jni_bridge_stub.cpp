@@ -151,13 +151,11 @@ extern "C" void mc_setup_android_hooks() {
     {
         std::unordered_map<std::string, void*> audio_syms;
         FakeAudio::initHybrisHooks(audio_syms);
-        linker::load_library("libaaudio.so", audio_syms);
         rust_load_stub("libaaudio.so", audio_syms);
     }
     {
         std::unordered_map<std::string, void*> audio_syms;
         FakeAudio::initHybrisHooks(audio_syms);
-        linker::load_library("libaaudio.so.2", audio_syms);
         rust_load_stub("libaaudio.so.2", audio_syms);
     }
 

@@ -150,17 +150,7 @@ void MinecraftUtils::setupHybris() {
 #endif
                                ,
                                libz_symbols);
-    HybrisUtils::hookAndroidLog();
     setupApi();
-    // Phase 2: under RUST_ONLY, these stubs exist only in Rust state (they are
-    // registered via rust_load_stub in capi.cpp), so skip the C++ bionic mirrors.
-    if (linker_mirror_registration_enabled_rust()) {
-        linker::load_library("libOpenSLES.so", {});
-        linker::load_library("libGLESv1_CM.so", {});
-
-        linker::load_library("libstdc++.so", {});
-        linker::load_library("libz.so", {});  // needed for <0.17
-    }
 }
 
 static std::vector<const char*> convertToC(std::vector<std::string> const& v) {
@@ -516,14 +506,16 @@ std::unordered_map<std::string, void*> MinecraftUtils::getApi() {
         }
     };
     syms["mcpelauncher_load_library"] = (void*)+[](const char* name, size_t count, hook_entry* entries) {
-        std::unordered_map<std::string, void*> ventries;
+        std::vector<const char*> keys(count);
+        std::vector<void*> vals(count);
         for(size_t i = 0; i < count; i++) {
-            ventries[entries[i].name] = entries[i].hook;
+            keys[i] = entries[i].name;
+            vals[i] = entries[i].hook;
         }
-        linker::load_library(name, ventries);
+        linker_load_library_rust(name, keys.data(), vals.data(), count);
     };
     syms["mcpelauncher_unload_library"] = (void*)mcpelauncher_dispatch_unload_library;
-    syms["mcpelauncher_dlclose_unlocked"] = (void*)linker::dlclose_unlocked;
+    syms["mcpelauncher_dlclose_unlocked"] = (void*)mcpelauncher_dispatch_dlclose;
     syms["mcpelauncher_package_name"] = (void*)MinecraftVersion::package.c_str();
     syms["mcpelauncher_package_version_code"] = (void*)&MinecraftVersion::code;
     syms["mcpelauncher_package_version_major"] = (void*)&MinecraftVersion::major;
@@ -597,7 +589,16 @@ std::unordered_map<std::string, void*> MinecraftUtils::getApi() {
 }
 
 void MinecraftUtils::setupApi() {
-    linker::load_library("libmcpelauncher_mod.so", getApi());
+    auto syms = getApi();
+    std::vector<const char*> keys;
+    std::vector<void*> vals;
+    keys.reserve(syms.size());
+    vals.reserve(syms.size());
+    for (auto& e : syms) {
+        keys.push_back(e.first.c_str());
+        vals.push_back(e.second);
+    }
+    linker_load_library_rust("libmcpelauncher_mod.so", keys.data(), vals.data(), keys.size());
 }
 
 std::unordered_map<std::string, MinecraftUtils::HookEntry> MinecraftUtils::preinitHooks;
@@ -608,21 +609,6 @@ const char* MinecraftUtils::getLibraryAbi() {
 
 size_t MinecraftUtils::getLibraryBase(void* handle) {
     return mcpelauncher_dispatch_get_library_base(handle);
-}
-
-
-
-void MinecraftUtils::setupGLES2Symbols(void* (*resolver)(const char*)) {
-    int i = 0;
-    std::unordered_map<std::string, void*> syms;
-    while(true) {
-        const char* sym = glesv2_symbols[i];
-        if(sym == nullptr)
-            break;
-        syms[sym] = resolver(sym);
-        i++;
-    }
-    linker::load_library("libGLESv2.so", syms);
 }
 
 // ============================================================
