@@ -9,7 +9,6 @@ members = [
     "crates/cll-telemetry",
     "crates/libc-shim",
     "crates/libjnivm-sys",
-    "crates/game-window",
     "crates/util",
     "crates/common",
     "crates/apkinfo",

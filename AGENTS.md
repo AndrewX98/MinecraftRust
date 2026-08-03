@@ -38,7 +38,7 @@ cargo build -p client
 | **libc-shim** | 602 pure Rust libc replacements (FILE*, pthreads, sockets, mmap) |
 | **linker** | Pure Rust ELF linker (stub libs only — game lib still uses C++ bionic linker) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 fn JNIEnv vtable) |
-| **eglut** (in `client/src/`) | Pure Rust X11/EGL windowing — active path; `game-window` crate (winit/glutin) is NOT active |
+| **eglut** (in `client/src/`) | Pure Rust X11/EGL windowing — active path (the `game-window` winit/glutin crate was removed) |
 | others | util, apkinfo, axml-parser, simple-ipc, daemon-utils, msa-daemon-client, cll-telemetry, common, minecraft-imported-symbols |
 
 ## Architecture (must-know)
@@ -99,5 +99,5 @@ All in `docs/`:
 |---------|-------|------------|
 | JNI classes (7 files) | `crates/client/src/jni/` | `main_activity.cpp` → `store.cpp` → rest; all 57 MainActivity methods ported to Rust (`main_activity.rs`); 9 wrapper classes ported (`jnivm_class_wrappers.rs`); C++ files still linked due to FakeJni registration deps in `jni_support.cpp` |
 | FakeLooper remaining | `fake_looper.rs` vs `fake_looper_stub.cpp` | window callbacks |
-| Game window | eglut vs `crates/game-window/` | eglut works, winit path inactive |
+| Game window | eglut (pure Rust X11/EGL) | winit/glutin crate removed |
 | IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | Rust versions exist; C++ bridge still active |

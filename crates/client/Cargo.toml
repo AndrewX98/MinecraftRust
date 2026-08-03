@@ -12,7 +12,6 @@ thiserror = "2"
 cpp-bridge-sys = { path = "../cpp-bridge-sys" }
 linker = { path = "../linker" }
 libc-shim = { path = "../libc-shim" }
-game-window = { path = "../game-window" }
 util = { path = "../util" }
 apkinfo = { path = "../apkinfo" }
 libjnivm-sys = { path = "../libjnivm-sys" }
