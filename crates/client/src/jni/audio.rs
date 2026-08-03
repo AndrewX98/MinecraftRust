@@ -125,6 +125,65 @@ fn audio_thread_running() -> &'static Mutex<bool> {
     AUDIO_THREAD_RUNNING.get_or_init(|| Mutex::new(false))
 }
 
+fn fill_output(data: &mut [f32], _: &cpal::OutputCallbackInfo) {
+    if let Ok(mut buf) = audio_buffer().lock() {
+        buf.pop_samples(data);
+    }
+}
+
+fn open_output_stream(
+    device: &cpal::Device,
+    channels: u16,
+    sample_rate: u32,
+) -> Result<cpal::Stream, cpal::BuildStreamError> {
+    use cpal::traits::DeviceTrait;
+    let mut config = cpal::StreamConfig {
+        channels,
+        sample_rate: cpal::SampleRate(sample_rate),
+        buffer_size: cpal::BufferSize::Default,
+    };
+    match device.build_output_stream(&config, fill_output, |err| {
+        log::error!("Audio stream error: {}", err);
+    }, None) {
+        Ok(s) => Ok(s),
+        Err(first) => {
+            // Fall back to the device's default config if the requested rate/channels
+            // are unsupported.
+            if let Ok(default_config) = device.default_output_config() {
+                config.channels = default_config.channels();
+                config.sample_rate = default_config.sample_rate();
+                device.build_output_stream(&config, fill_output, |err| {
+                    log::error!("Audio stream error: {}", err);
+                }, None)
+            } else {
+                Err(first)
+            }
+        }
+    }
+}
+
+// Some systems (e.g. PipeWire desktops without a working ALSA `default` route)
+// fail to open cpal's hardcoded "default" device. The explicit `pipewire`/`pulse`
+// ALSA PCM names are always configured when those servers are installed, so fall
+// back to them.
+fn output_device_candidates(host: &cpal::Host) -> Vec<cpal::Device> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let mut candidates: Vec<cpal::Device> = Vec::new();
+    if let Some(d) = host.default_output_device() {
+        candidates.push(d);
+    }
+    if let Ok(devices) = host.devices() {
+        for d in devices {
+            if let Ok(name) = d.name() {
+                if name == "pipewire" || name == "pulse" {
+                    candidates.push(d);
+                }
+            }
+        }
+    }
+    candidates
+}
+
 fn start_audio_thread(channels: u16, sample_rate: u32) {
     let mut running = match audio_thread_running().lock() {
         Ok(r) => r,
@@ -139,65 +198,25 @@ fn start_audio_thread(channels: u16, sample_rate: u32) {
         use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
 
         let host = cpal::default_host();
-        let device = match host.default_output_device() {
-            Some(d) => d,
-            None => {
-                log::error!("No audio output device found");
-                return;
+        let mut stream: Option<cpal::Stream> = None;
+        for device in output_device_candidates(&host) {
+            let name = device.name().unwrap_or_else(|_| String::from("?"));
+            match open_output_stream(&device, channels, sample_rate) {
+                Ok(s) => {
+                    log::info!("Audio device opened: '{}' ({} Hz, {} ch)", name, sample_rate, channels);
+                    stream = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("audio: failed to open output device '{}' ({}); trying next", name, e);
+                }
             }
-        };
-
-        let mut config = cpal::StreamConfig {
-            channels,
-            sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Default,
-        };
-
-        let stream = match device.build_output_stream(
-            &config,
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                if let Ok(mut buf) = audio_buffer().lock() {
-                    buf.pop_samples(data);
-                }
-            },
-            |err| {
-                log::error!("Audio stream error: {}", err);
-            },
-            None,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!(
-                    "Failed to create audio stream at {} Hz / {} ch ({}); falling back to device defaults",
-                    sample_rate,
-                    channels,
-                    e
-                );
-                if let Ok(default_config) = device.default_output_config() {
-                    config.channels = default_config.channels();
-                    config.sample_rate = default_config.sample_rate();
-                    match device.build_output_stream(
-                        &config,
-                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                            if let Ok(mut buf) = audio_buffer().lock() {
-                                buf.pop_samples(data);
-                            }
-                        },
-                        |err| {
-                            log::error!("Audio stream error: {}", err);
-                        },
-                        None,
-                    ) {
-                        Ok(s) => s,
-                        Err(e2) => {
-                            log::error!("Failed to create audio stream with defaults: {}", e2);
-                            return;
-                        }
-                    }
-                } else {
-                    log::error!("No default output config available: {}", e);
-                    return;
-                }
+        }
+        let stream = match stream {
+            Some(s) => s,
+            None => {
+                log::error!("audio: no usable audio output device found");
+                return;
             }
         };
 
