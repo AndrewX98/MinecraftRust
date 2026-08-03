@@ -147,7 +147,7 @@ fn start_audio_thread(channels: u16, sample_rate: u32) {
             }
         };
 
-        let config = cpal::StreamConfig {
+        let mut config = cpal::StreamConfig {
             channels,
             sample_rate: cpal::SampleRate(sample_rate),
             buffer_size: cpal::BufferSize::Default,
@@ -167,8 +167,37 @@ fn start_audio_thread(channels: u16, sample_rate: u32) {
         ) {
             Ok(s) => s,
             Err(e) => {
-                log::error!("Failed to create audio stream: {}", e);
-                return;
+                log::warn!(
+                    "Failed to create audio stream at {} Hz / {} ch ({}); falling back to device defaults",
+                    sample_rate,
+                    channels,
+                    e
+                );
+                if let Ok(default_config) = device.default_output_config() {
+                    config.channels = default_config.channels();
+                    config.sample_rate = default_config.sample_rate();
+                    match device.build_output_stream(
+                        &config,
+                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                            if let Ok(mut buf) = audio_buffer().lock() {
+                                buf.pop_samples(data);
+                            }
+                        },
+                        |err| {
+                            log::error!("Audio stream error: {}", err);
+                        },
+                        None,
+                    ) {
+                        Ok(s) => s,
+                        Err(e2) => {
+                            log::error!("Failed to create audio stream with defaults: {}", e2);
+                            return;
+                        }
+                    }
+                } else {
+                    log::error!("No default output config available: {}", e);
+                    return;
+                }
             }
         };
 
@@ -306,6 +335,29 @@ pub unsafe extern "C" fn Java_org_fmod_AudioDevice_close(
     if let Ok(mut buf) = audio_buffer().lock() {
         buf.samples.clear();
     }
+}
+
+// C bridge used by the C++ AAudio shim (fake_audio.cpp).
+#[no_mangle]
+pub extern "C" fn rust_audio_start(channels: i32, sample_rate: i32) -> i32 {
+    start_audio_thread(channels as u16, sample_rate as u32);
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_audio_push_i16(samples: *const i16, count: i32) {
+    if samples.is_null() || count <= 0 {
+        return;
+    }
+    let slice = std::slice::from_raw_parts(samples, count as usize);
+    if let Ok(mut buf) = audio_buffer().lock() {
+        buf.push_samples(slice);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_audio_stop() {
+    stop_audio_thread();
 }
 
 // Register native methods with libjnivm-sys

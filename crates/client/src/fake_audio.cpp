@@ -1,9 +1,15 @@
 #include "fake_audio.h"
-#include <game_window_manager.h>
 #include <mcpelauncher/fmod_utils.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
+
+extern "C" {
+int32_t rust_audio_start(int32_t channels, int32_t sampleRate);
+void rust_audio_push_i16(const int16_t* samples, int32_t count);
+void rust_audio_stop();
+}
 
 int32_t FakeAudio::defaultSampleRate = 48000;
 int32_t FakeAudio::defaultNumChannels = 2;
@@ -31,9 +37,6 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     };
     syms["AAudio_createStreamBuilder"] = (void*)+[](FakeAudioStreamBuilder** builder) -> aaudio_result_t {
         fprintf(stderr, "=== FakeAudio: AAudio_createStreamBuilder called ===\n");
-        SDL_Init(SDL_INIT_AUDIO);
-        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_ICON_NAME, "mcpelauncher");
-        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Minecraft");
         FakeAudio::updateDefaults();
         *builder = new FakeAudioStreamBuilder{};
         return AAUDIO_OK;
@@ -79,6 +82,10 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     // Real: aaudio_result_t AAudioStream_close(AAudioStream*)
     syms["AAudioStream_close"] = (void*)+[](FakeAudioStream* stream) -> aaudio_result_t {
         if (!stream) return AAUDIO_OK;
+        stream->running = false;
+        if (stream->playbackThread.joinable()) {
+            stream->playbackThread.join();
+        }
         free(stream->audioBuffer);
         stream->audioBuffer = nullptr;
         stream->audioBufferSize = 0;
@@ -107,9 +114,11 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     // Real: aaudio_result_t AAudioStream_requestStop(AAudioStream*)
     syms["AAudioStream_requestStop"] = (void*)+[](FakeAudioStream* stream) -> aaudio_result_t {
         if (!stream) return AAUDIO_OK;
-        SDL_AudioStream* s = stream->s;
-        stream->s = nullptr;
-        if (s) SDL_DestroyAudioStream(s);
+        stream->running = false;
+        if (stream->playbackThread.joinable()) {
+            stream->playbackThread.join();
+        }
+        rust_audio_stop();
         return AAUDIO_OK;
     };
     syms["AAudioStream_getBufferCapacityInFrames"] = (void*)+[](FakeAudioStream* stream) -> int32_t {
@@ -128,14 +137,10 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     syms["AAudioStreamBuilder_setPerformanceMode"] = (void*)+[](FakeAudioStreamBuilder*, aaudio_performance_mode_t) -> void {
     };
     syms["AAudioStream_getState"] = (void*)+[](FakeAudioStream* stream) -> aaudio_stream_state_t {
-        if (!stream->s) {
+        if (!stream || !stream->started) {
             return AAUDIO_STREAM_STATE_CLOSED;
         }
-        SDL_AudioDeviceID devid = SDL_GetAudioStreamDevice(stream->s);
-        if (!devid) {
-            return AAUDIO_STREAM_STATE_CLOSED;
-        }
-        return SDL_AudioDevicePaused(devid) ? AAUDIO_STREAM_STATE_PAUSED : AAUDIO_STREAM_STATE_STARTED;
+        return stream->running ? AAUDIO_STREAM_STATE_STARTED : AAUDIO_STREAM_STATE_STOPPED;
     };
     syms["AAudioStream_getFormat"] = (void*)+[](FakeAudioStream* stream) -> aaudio_format_t {
         return stream->format;
@@ -144,81 +149,71 @@ void FakeAudio::initHybrisHooks(std::unordered_map<std::string, void*>& syms) {
     };
     syms["AAudioStream_requestStart"] = (void*)+[](FakeAudioStream* stream) -> aaudio_result_t {
         fprintf(stderr, "=== FakeAudio: AAudioStream_requestStart called ===\n");
-        SDL_AudioSpec spec;
-        spec.channels = stream->channelCount;
-        switch (stream->format) {
-        case AAUDIO_FORMAT_PCM_I16:
-            spec.format = SDL_AUDIO_S16LE;
-            break;
-        case AAUDIO_FORMAT_PCM_I32:
-            spec.format = SDL_AUDIO_S32LE;
-            break;
-        default:
-            spec.format = SDL_AUDIO_S16LE;
-            break;
-        }
-        spec.freq = stream->sampleRate;
         fprintf(stderr, "=== FakeAudio: requestStart stream=%p rate=%d ch=%d fmt=%d bufSize=%d dataCb=%p user=%p ===\n",
                 (void*)stream, stream->sampleRate, stream->channelCount, (int)stream->format,
                 stream->bufferSize, (void*)stream->dataCallback, stream->dataCallbackUser);
-        stream->s = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
-            [](void* userdata, SDL_AudioStream* sdlStream, int additional_amount, int total_amount) {
-                FakeAudioStream* stream = (FakeAudioStream*)userdata;
-                static int cb_count = 0;
-                if (stream->dataCallback == nullptr || stream->s == nullptr || stream->audioBuffer == nullptr) {
-                    return;
-                }
-                if (additional_amount > stream->audioBufferSize) {
-                    stream->audioBufferSize = additional_amount;
+        stream->started = true;
+        stream->running = true;
+        rust_audio_start(stream->channelCount, stream->sampleRate);
+        if (stream->dataCallback == nullptr) {
+            return AAUDIO_OK;
+        }
+        int chunkFrames = stream->bufferSize > 0 ? stream->bufferSize : 512;
+        int sampleRate = stream->sampleRate > 0 ? stream->sampleRate : 48000;
+        stream->playbackThread = std::thread([stream, chunkFrames, sampleRate]() {
+            std::vector<int16_t> scratch;
+            while (stream->running.load()) {
+                int bytesPerSample = stream->getBytesPerSample();
+                int amount = chunkFrames * stream->channelCount * bytesPerSample;
+                if (amount > stream->audioBufferSize) {
+                    stream->audioBufferSize = amount;
                     stream->audioBuffer = realloc(stream->audioBuffer, stream->audioBufferSize);
                 }
-                int frames = additional_amount / (stream->channelCount * stream->getBytesPerSample());
-                if (frames <= 0) {
-                    return;
-                }
                 // Zero buffer so underrun is silence if FMOD writes nothing.
-                memset(stream->audioBuffer, 0, (size_t)additional_amount);
-                if (cb_count < 3) {
-                    fprintf(stderr, "=== FakeAudio: dataCallback #%d frames=%d amount=%d cb=%p user=%p ===\n",
-                            cb_count, frames, additional_amount, (void*)stream->dataCallback, stream->dataCallbackUser);
-                }
-                cb_count++;
-                stream->dataCallback((AAudioStream*)stream, stream->dataCallbackUser, stream->audioBuffer, frames);
-                if (cb_count <= 3) {
-                    fprintf(stderr, "=== FakeAudio: dataCallback #%d returned ===\n", cb_count - 1);
-                }
-                if (!SDL_PutAudioStreamData(stream->s, stream->audioBuffer, additional_amount)) {
-                    if (stream->errorCallback != nullptr) {
-                        stream->errorCallback((AAudioStream*)stream, stream->errorCallbackUser, AAUDIO_ERROR_DISCONNECTED);
+                memset(stream->audioBuffer, 0, (size_t)amount);
+                stream->dataCallback((AAudioStream*)stream, stream->dataCallbackUser, stream->audioBuffer, chunkFrames);
+                int sampleCount = chunkFrames * stream->channelCount;
+                switch (stream->format) {
+                case AAUDIO_FORMAT_PCM_I16:
+                    rust_audio_push_i16((const int16_t*)stream->audioBuffer, sampleCount);
+                    break;
+                case AAUDIO_FORMAT_PCM_I32: {
+                    scratch.resize(sampleCount);
+                    const int32_t* src = (const int32_t*)stream->audioBuffer;
+                    for (int i = 0; i < sampleCount; i++) {
+                        scratch[i] = (int16_t)(src[i] >> 16);
                     }
+                    rust_audio_push_i16(scratch.data(), sampleCount);
+                    break;
                 }
-            }, stream);
-        if (stream->s == nullptr) {
-            auto errormsg = SDL_GetError();
-            fprintf(stderr, "=== FakeAudio: SDL_OpenAudioDeviceStream FAILED: %s ===\n",
-                    errormsg ? errormsg : "(null)");
-            auto handler = GameWindowManager::getManager()->getErrorHandler();
-            if (handler) {
-                handler->onError("sdl3audio failed",
-                    std::string("sdl3audio SDL_OpenAudioDeviceStream failed, audio will be unavailable: ") + (errormsg ? errormsg : "No message"));
+                case AAUDIO_FORMAT_PCM_FLOAT: {
+                    scratch.resize(sampleCount);
+                    const float* src = (const float*)stream->audioBuffer;
+                    for (int i = 0; i < sampleCount; i++) {
+                        float v = src[i];
+                        if (v > 1.0f) v = 1.0f;
+                        else if (v < -1.0f) v = -1.0f;
+                        scratch[i] = (int16_t)(v * 32767.0f);
+                    }
+                    rust_audio_push_i16(scratch.data(), sampleCount);
+                    break;
+                }
+                default:
+                    break;
+                }
+                int64_t chunkUs = (int64_t)chunkFrames * 1000000 / sampleRate;
+                std::this_thread::sleep_for(std::chrono::microseconds(chunkUs));
             }
-            return AAUDIO_OK;  // fmod retries on failure
-        }
-        fprintf(stderr, "=== FakeAudio: SDL stream opened s=%p, resuming ===\n", (void*)stream->s);
-        SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(stream->s));
+        });
         fprintf(stderr, "=== FakeAudio: requestStart DONE ===\n");
         return AAUDIO_OK;
     };
 }
 
 void FakeAudio::updateDefaults() {
-    SDL_AudioSpec spec;
-    int sampleFrames;
-    SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, &sampleFrames);
-
-    defaultSampleRate = ReadEnvInt("AUDIO_SAMPLE_RATE", spec.freq);
-    defaultNumChannels = spec.channels;
-    defaultBufSize = sampleFrames;
+    defaultSampleRate = ReadEnvInt("AUDIO_SAMPLE_RATE", 48000);
+    defaultNumChannels = ReadEnvInt("AUDIO_CHANNEL_COUNT", 2);
+    defaultBufSize = ReadEnvInt("AUDIO_BUFFER_FRAMES", 512);
 
     FmodUtils::setSampleRate(defaultSampleRate);
 }

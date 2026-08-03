@@ -1,7 +1,6 @@
 #pragma once
 
 #include <fake-jni/fake-jni.h>
-#include <SDL3/SDL.h>
 #include "asset_manager.h"
 
 class FMOD : public FakeJni::JObject {

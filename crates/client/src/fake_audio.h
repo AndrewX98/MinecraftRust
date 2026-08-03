@@ -4,8 +4,8 @@
 #include <string>
 #include <cstdint>
 #include <cstddef>
-
-#include <SDL3/SDL.h>
+#include <thread>
+#include <atomic>
 
 // AAudio types self-contained — the Android NDK audio.h uses _Nonnull/_Nullable
 // annotations that GCC rejects. We only need the types that FMOD's AAudio backend
@@ -92,7 +92,9 @@ private:
         void *audioBuffer;
         int audioBufferSize = 0;
 
-        SDL_AudioStream *s = nullptr;
+        std::thread playbackThread;
+        std::atomic<bool> started{false};
+        std::atomic<bool> running{false};
 
         int32_t getBytesPerSample() {
             switch (format) {

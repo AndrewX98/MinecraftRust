@@ -578,7 +578,6 @@ fn main() {
         "store_stub.cpp",
         "uuid_stub.cpp",
         "pulseaudio_stub.cpp",
-        "sdl3audio_stub.cpp",
         // AAudio shim — FMOD forces AAudio via setOutput hook, then dlopen's libaaudio.so
         "fake_audio.cpp",
         // Prevents loading the real libHttpClient.Android.so (broken under
@@ -634,7 +633,6 @@ fn main() {
         b.include(local_inc.join("cll-telemetry"));
         b.include(local_inc.join("file-util"));
         b.include(local_inc.join("mcpelauncher-core"));
-        b.include(local_inc.join("sdl3"));
         b.include(local_inc.join("daemon-utils"));
         b.include(local_inc.join("simple-ipc"));
         b.include(local_inc.join("epoll-shim"));
@@ -654,8 +652,5 @@ fn main() {
         b.define("JNI_RETURN_NON_ZERO", "1");
         b.define("JNIVM_FAKE_JNI_SYNTAX", "0");
         b.define("JNIVM_FAKE_JNI_MINECRAFT_LINUX_COMPAT", "1");
-        // FMOD AAudio path: enables AudioDevice registration + matches upstream
-        // mcpelauncher-client. FakeAudio (libaaudio.so) is always linked.
-        b.define("HAVE_SDL3AUDIO", "1");
     });
 }
