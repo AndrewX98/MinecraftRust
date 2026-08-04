@@ -1,20 +1,20 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **9 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **5 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+
+The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils**) has been **ported to Rust** (`crates/simple-ipc/`, `crates/msa-daemon-client/`, `crates/daemon-utils/`) and removed from the C++ build — see `docs/PORT_SIMPLEIPC.md`, `docs/PORT_MSA_DAEMON_CLIENT.md`, `docs/PORT_DAEMON_UTILS.md`.
 
 ## Libraries Compiled by build.rs
 
 | Library | Role | Objects | Complexity |
 |---------|------|---------|-----------|
 | `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 9 objects | **LARGE** |
-| `simpleipc` | Unix IPC + RPC framework | 14 objects | LARGE (skippable) |
 | `cll-telemetry` | Telemetry collection + upload | 15 objects | LARGE (skippable) |
-| `msa-daemon-client` | Microsoft Account auth | 2 objects | **MEDIUM** |
-| `linux-gamepad` | evdev joystick + SDL mappings | 5 objects | **MEDIUM** |
 | `game-window` | X11/EGL window, input handling | 7 objects | **MEDIUM** |
-| `daemon-client-utils` | Daemon forking/inotify | 1 object | SMALL (skippable) |
 | `mcpelauncher-client-bridge` | Rust ↔ C++ bridge (capi.cpp) | 1 object | SMALL |
 | `mcpelauncher-client-jni` | JNI stubs, class wrappers, libjnivm C++ | ~35+ objects | **LARGE** |
+
+**Ported to Rust (removed):** `simpleipc` → `crates/simple-ipc/`, `msa-daemon-client` → `crates/msa-daemon-client/`, `daemon-client-utils` → `crates/daemon-utils/`. `linux-gamepad` and `logger` were already handled previously (Rust `gamepad` module / `util::logger`).
 
 ## Detailed Analysis
 
@@ -71,21 +71,17 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 
 **Port complexity: MEDIUM.** Clean separation of concerns. Rust `gilrs` crate could replace most of this.
 
-### `msa-daemon-client` (1.4 MB) — MEDIUM
+### `msa-daemon-client` — PORTED to Rust ✅
 
-**2 files:** `service_client.cpp` (59 lines), `token.cpp` (24 lines).
+**2 files:** `service_client.cpp` (59 lines), `token.cpp` (24 lines). **Removed from the C++ build.**
 
-**Role:** RPC client for MSA daemon. Methods: `getAccounts()`, `addAccount()`, `removeAccount()`, `pickAccount()`, `requestToken()`.
+**Rust replacement:** `crates/msa-daemon-client/` — `client.rs` (`ServiceClient`: `get_accounts`, `add_account`, `remove_account`, `pick_account`, `request_token`), `types.rs` (token/account JSON), `launcher.rs` (`ServiceLauncher`). Wired via `crates/client/src/xbox_auth.rs` → `jni/xbox_live.rs`.
 
-**Note:** The game currently loads `libHttpClient.Android.so` from disk and XAL works with valid cache data (per AGENTS.md). The daemon may only be needed for initial login or cache expiry. Could be replaced by in-process auth.
+### `simpleipc` — PORTED to Rust ✅
 
-### `simpleipc` (7.5 MB) — LARGE (skippable)
+**14 files:** Unix domain sockets, RPC layer, JSON/CBOR encoding, epoll I/O handler. **Removed from the C++ build.**
 
-**14 files:** Unix domain sockets, RPC layer, JSON/CBOR encoding, epoll I/O handler.
-
-**Role:** Transport layer for communicating with the mcpelauncher-ui-qt daemon process. Used by `msa-daemon-client`, `daemon-client-utils`, file picker, Google credential request.
-
-**Note:** If MSA auth is handled in-process (via loaded `libHttpClient.Android.so`), this entire library drops out.
+**Rust replacement:** `crates/simple-ipc/` — wire-compatible port (`varint.rs`, `message.rs`, `encoding.rs`, `client.rs`, `server.rs`), locked with 23 golden-bytes/E2E tests in `tests/wire.rs`. See `docs/PORT_SIMPLEIPC.md`.
 
 ### `cll-telemetry` (7.1 MB) — LARGE (skippable)
 
@@ -107,7 +103,7 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 
 | Library | File(s) | Role | Port |
 |---------|---------|------|------|
-| `daemon-client-utils` | `daemon_launcher.cpp` (194 lines) | Fork daemon, inotify wait | SMALL (skippable) |
+| `daemon-client-utils` | `daemon_launcher.cpp` (194 lines) | Fork daemon, inotify wait | **PORTED** — Rust `crates/daemon-utils/` |
 | `logger` | `log.cpp` (22 lines) | printf-style logging | **PORTED** — Rust `util::logger` + thin `logger_stub.cpp` shim |
 
 ## Dependency Graph Between Libraries
@@ -120,12 +116,10 @@ game-window  →  linux-gamepad
 
 mcpelauncher-core  →  mcpelauncher-common
 
-simpleipc  (no deps)
-daemon-client-utils  →  simpleipc, mcpelauncher-common
-msa-daemon-client  →  simpleipc, daemon-client-utils
-
 cll-telemetry  (standalone)
 ```
+
+**Ported to Rust and removed from the C++ graph:** `simpleipc` → `crates/simple-ipc/`, `daemon-client-utils` → `crates/daemon-utils/`, `msa-daemon-client` → `crates/msa-daemon-client/`. Their C++ dependency chain (`simpleipc` ← `daemon-client-utils` ← `msa-daemon-client`) is now `crates/simple-ipc/` ← `crates/daemon-utils/` ← `crates/msa-daemon-client/` ← `client`.
 
 `logger` and `file-util` are no longer C++ static libs — both are ported to Rust (`crates/util/src/logger.rs`, `crates/util/src/file_util.rs`). The C++ bridge reaches them through FFI shims (`logger_stub.cpp` for `Log::vlog`, `env_path_util_*`/`file_util_*` for file-util).
 

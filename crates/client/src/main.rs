@@ -2,6 +2,7 @@ mod capi;
 mod rust_bridge;
 mod jni_support;
 mod file_picker;
+mod gamepad;
 mod eglut;
 mod fake_looper;
 mod main_activity;
@@ -12,6 +13,7 @@ mod text_input_handler;
 mod fmod_utils;
 mod minecraft_load;
 mod path_helper;
+mod xbox_auth;
 
 use std::ffi::{c_char, c_void, CStr};
 

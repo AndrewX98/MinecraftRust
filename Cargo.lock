@@ -273,16 +273,20 @@ dependencies = [
  "apkinfo",
  "cpal",
  "cpp-bridge-sys",
+ "daemon-utils",
  "env_logger",
  "libc",
  "libc-shim",
  "libjnivm-sys",
  "linker",
  "log",
+ "msa-daemon-client",
  "p256",
  "rand_core",
  "reqwest 0.11.27",
+ "simple-ipc",
  "thiserror 2.0.18",
+ "tokio",
  "tungstenite",
  "url",
  "util",
@@ -1463,6 +1467,7 @@ dependencies = [
  "serde_json",
  "simple-ipc",
  "thiserror 1.0.69",
+ "tokio",
  "util",
 ]
 
@@ -2170,6 +2175,7 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

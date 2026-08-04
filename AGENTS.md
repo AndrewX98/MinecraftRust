@@ -16,11 +16,11 @@ RUST_LOG=linker=info ./target/debug/client -dg /home/andrew/.local/MinecraftLaun
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.
 
-No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 9 static libs built there; `client/build.rs` only emits link directives. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
+No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 5 static libs built there (`mcpelauncher-client-bridge`, `mcpelauncher-core`, `mcpelauncher-cll-telemetry`, `mcpelauncher-gamewindow`, `mcpelauncher-client-jni`); `client/build.rs` only emits link directives. The IPC/auth chain (`simpleipc`, `daemon-client-utils`, `msa-daemon-client`) is **ported to Rust** (`crates/simple-ipc/`, `crates/daemon-utils/`, `crates/msa-daemon-client/`) — see `docs/PORT_SIMPLEIPC.md`. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
 
 - **Initial build:** ~3 min (all C++ files compiled)
 - **Single C++ file change:** ~2s (hash-based incremental)
-- **Header change:** ~2s (only `.cpp` tracked; `cargo clean -p cpp-bridge-sys` if headers affect many files)
+- **Header/C++ change:** hash tracked — cpp-bridge-sys only rebuilds changed files, no full rebuild from scratch
 - **Pure Rust change:** ~0.3s
 
 After mass C++ or header changes, force full recompilation:
@@ -34,7 +34,7 @@ cargo build -p client
 | Crate | Role |
 |-------|------|
 | **client** | Sole binary — eglut, FakeEGL, CorePatches, JNI, event dispatch |
-| **cpp-bridge-sys** | C++ cc::Build compilation (9 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
+| **cpp-bridge-sys** | C++ cc::Build compilation (5 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
 | **libc-shim** | 602 pure Rust libc replacements (FILE*, pthreads, sockets, mmap) |
 | **linker** | Pure Rust ELF linker — the **only** loader (C++ bionic linker deleted in Phase 6) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 fn JNIEnv vtable) |
@@ -77,6 +77,7 @@ Runtime files: `runtime/lib/x86_64/libsqliteX.so`, `runtime/gamecontrollerdb/gam
 - Game loads to main menu, mouse/keyboard work
 - No CI, no tests, no formatter/linter config — `cargo build -p client` is the only check
 - Rust edition 2021, resolver "2"
+- **Sign-in is offline-only (by design)**: the Rust chain (`simple-ipc`/`daemon-utils`/`msa-daemon-client` → real `msa-daemon` binary) is wired and E2E-verified (`daemon_e2e.rs`), but the game never invokes it. `rust_bridge.rs:272-276` patches `XalInitialize → S_OK` (real XAL crashes with stubbed libHttpClient) and the XBL bootstrap natives are missing in the Rust port: `MainActivity.nativeInitializeXboxLive`, `MainActivity.nativeInitializeLibHttpClient`, `WebView.urlOperationSucceeded`. Game runs as PlayFab guest (MCToken has `mc-realms-button-no-msa`); clicking sign-in shows "Error Code! Mooshroom" because `Interop.invokeMSA` is never reached. Re-enabling login requires real HTTP+XAL work (see `PORT_MSA_DAEMON_CLIENT.md`).
 - **XAL ECDSA key cache corruption**: delete `~/.local/share/mcpelauncher/xal/` and `~/.local/MinecraftLauncher/xal/` if auth fails. Look for files containing `"Serialized to SharedPreferences"`
 - CorePatches vtable warning (`_ZTV21AppPlatform_android23`) — non-fatal
 - Missing assets (`subdirs.txt`, `particles.brarchive`) — non-fatal
@@ -99,4 +100,4 @@ All in `docs/`:
 | JNI classes (7 files) | `crates/client/src/jni/` | `main_activity.cpp` → `store.cpp` → rest; all 57 MainActivity methods ported to Rust (`main_activity.rs`); 9 wrapper classes ported (`jnivm_class_wrappers.rs`); C++ files still linked due to FakeJni registration deps in `jni_support.cpp` |
 | FakeLooper remaining | `fake_looper.rs` vs `fake_looper_stub.cpp` | window callbacks |
 | Game window | eglut (pure Rust X11/EGL) | winit/glutin crate removed |
-| IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | Rust versions exist; C++ bridge still active |
+| IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | simple-ipc/daemon-utils/msa-daemon-client **wired** (C++ chain removed — see PORT docs); cll-telemetry C++ still active |

@@ -12,7 +12,7 @@ impl ServiceLauncher {
         let data_path = data_path
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("{}/msa", EnvPathUtil::get_data_home()));
-        let service_path = format!("{}/msa-daemon-ipc.sock", data_path);
+        let service_path = format!("{}/service", data_path);
         ServiceLauncher {
             executable_path: executable_path.to_string(),
             data_path,

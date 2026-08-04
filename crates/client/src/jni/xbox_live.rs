@@ -3,8 +3,11 @@ use std::path::Path;
 use libjnivm_sys::*;
 
 // Constants matching C++ xbox_live.h
+const TICKET_OK: i32 = 0;
+const TICKET_UI_INTERACTION_REQUIRED: i32 = 1;
 const TICKET_UNKNOWN_ERROR: i32 = 3;
 
+const AUTH_FLOW_OK: i32 = 0;
 const AUTH_FLOW_ERROR: i32 = 2;
 
 fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
@@ -112,11 +115,27 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_invokeMSA(
     log::info!("XboxInterop: invokeMSA requestCode={} cid={}", request_code, cid_str);
 
     if request_code == 1 {
-        // Silent sign-in — stub always fails
+        // Silent sign-in — request an XBL token from the MSA daemon.
+        log::info!("XboxInterop: silent token request for cid={}", cid_str);
         let cls = get_interop_class(env);
         if cls.is_null() { return; }
-        ticket_callback_impl(env, cls, "", request_code, TICKET_UNKNOWN_ERROR,
-            "Xbox Live not available (stub)");
+        match crate::xbox_auth::request_xbl_token(&cid_str, true) {
+            crate::xbox_auth::XblTokenResult::Token(token) => {
+                let ticket = token.binary_token
+                    .or(token.xml_data)
+                    .unwrap_or_default();
+                ticket_callback_impl(env, cls, &ticket, request_code, TICKET_OK, "");
+            }
+            crate::xbox_auth::XblTokenResult::MustShowUi => {
+                log::info!("XboxInterop: UI interaction required for silent sign-in");
+                ticket_callback_impl(env, cls, "", request_code, TICKET_UI_INTERACTION_REQUIRED,
+                    "UI interaction required");
+            }
+            crate::xbox_auth::XblTokenResult::Error(e) => {
+                log::warn!("XboxInterop: silent sign-in failed: {}", e);
+                ticket_callback_impl(env, cls, "", request_code, TICKET_UNKNOWN_ERROR, &e);
+            }
+        }
     } else if request_code == 6 {
         // Sign out
         sign_out_callback_impl(env);
@@ -137,7 +156,13 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_invokeAuthF
     log::info!("XboxInterop: invokeAuthFlow userPtr={}", user_ptr);
     let cls = get_interop_class(env);
     if cls.is_null() { return; }
-    auth_flow_callback_impl(env, cls, user_ptr, AUTH_FLOW_ERROR, "");
+    match crate::xbox_auth::pick_account() {
+        Ok(cid) => auth_flow_callback_impl(env, cls, user_ptr, AUTH_FLOW_OK, &cid),
+        Err(e) => {
+            log::warn!("XboxInterop: auth flow failed: {}", e);
+            auth_flow_callback_impl(env, cls, user_ptr, AUTH_FLOW_ERROR, "");
+        }
+    }
 }
 
 #[no_mangle]

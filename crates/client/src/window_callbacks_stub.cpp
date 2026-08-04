@@ -3,6 +3,7 @@
 /// mapping to Rust via extern "C".
 
 #include "window_callbacks.h"
+#include "fake_looper.h"
 #include "symbols.h"
 
 #include <mcpelauncher/minecraft_version.h>
@@ -726,4 +727,29 @@ int WindowCallbacks::mapMinecraftToAndroidKey(KeyCode code) {
 
 int WindowCallbacks::mapGamepadToAndroidKey(GamepadButtonId btn) {
     return window_callbacks_map_gamepad_key((int)btn);
+}
+
+// --- Pure-Rust gamepad dispatch thunks ---
+// The Rust gamepad stack (crates/client/src/gamepad/) forwards gamepad
+// events here on the game thread; FakeLooper::getCurrent() resolves to the
+// active looper/WindowCallbacks there.
+extern "C" void window_callbacks_on_gamepad_state(int gamepad, bool connected) {
+    auto* l = FakeLooper::getCurrent();
+    if (!l) return;
+    auto* cb = l->getWindowCallbacks();
+    if (cb) cb->onGamepadState(gamepad, connected);
+}
+
+extern "C" void window_callbacks_on_gamepad_button(int gamepad, int btn, bool pressed) {
+    auto* l = FakeLooper::getCurrent();
+    if (!l) return;
+    auto* cb = l->getWindowCallbacks();
+    if (cb) cb->onGamepadButton(gamepad, (GamepadButtonId)btn, pressed);
+}
+
+extern "C" void window_callbacks_on_gamepad_axis(int gamepad, int axis, float value) {
+    auto* l = FakeLooper::getCurrent();
+    if (!l) return;
+    auto* cb = l->getWindowCallbacks();
+    if (cb) cb->onGamepadAxis(gamepad, (GamepadAxisId)axis, value);
 }

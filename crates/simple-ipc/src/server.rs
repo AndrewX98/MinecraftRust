@@ -8,7 +8,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::encoding::Encoding;
 use crate::message::{
-    HelloRequest, HelloResponse, Message, ResponseMessage, ErrorMessage, ErrorBody,
+    HelloRequest, HelloResponse, Message, MessageId, ResponseMessage, ErrorMessage, ErrorBody,
     PROTOCOL_VERSION, METHOD_NOT_FOUND,
 };
 
@@ -50,12 +50,11 @@ struct Connection {
 }
 
 impl Connection {
-    async fn handle_hello(&mut self, params: serde_json::Value) -> Result<(), String> {
+    async fn handle_hello(&mut self, id: Option<MessageId>, params: serde_json::Value) -> Result<(), String> {
         let hello: HelloRequest = serde_json::from_value(params)
             .map_err(|e| format!("Invalid hello: {}", e))?;
         let encoding = Encoding::pick_from_preferred(&hello.encodings)
             .ok_or_else(|| "No common encoding".to_string())?;
-        self.encoding = encoding;
 
         let resp = HelloResponse {
             version: PROTOCOL_VERSION,
@@ -64,11 +63,17 @@ impl Connection {
         let result = serde_json::to_value(&resp)
             .map_err(|e| format!("Serialize hello response: {}", e))?;
 
+        // Echo the request id (C++ `rpc_handler::invoke` attaches the id when
+        // the request has one) and send the reply using the *current* encoding
+        // (C++ sends with the default encoding before switching).
         let msg = Message::Response(ResponseMessage {
-            id: None,
+            id,
             result,
         });
-        self.send_message(&msg).await
+        self.send_message(&msg).await?;
+
+        self.encoding = encoding;
+        Ok(())
     }
 
     async fn send_message(&mut self, msg: &Message) -> Result<(), String> {
@@ -112,7 +117,7 @@ impl Connection {
         match msg {
             Message::Rpc(rpc) => {
                 if rpc.method == ".hello" {
-                    if let Err(e) = self.handle_hello(rpc.params).await {
+                    if let Err(e) = self.handle_hello(rpc.id, rpc.params).await {
                         log::error!("simple-ipc: hello error: {}", e);
                         return Err(());
                     }

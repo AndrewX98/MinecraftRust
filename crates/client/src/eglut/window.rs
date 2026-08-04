@@ -182,6 +182,9 @@ pub unsafe extern "C" fn eglutShowWindow() {
     if let Some(win) = &STATE.current_window {
         XMapRaised(STATE.display, win.xwin);
     }
+    // First window: register gamepad stack + report already-connected gamepads
+    // (replaces EGLUTWindow::show → addWindowToGamepadManager).
+    crate::gamepad::add_window();
 }
 
 /// Match upstream eglut: `eglutMakeCurrent(int win)`. win == -1 unbinds.

@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use bytes::{Buf, BytesMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot};
+use tokio::task::JoinHandle;
 
 use crate::encoding::Encoding;
 use crate::message::{
@@ -23,29 +24,117 @@ pub enum ClientError {
     ConnectionClosed,
 }
 
+type PendingMap = HashMap<MessageId, oneshot::Sender<Result<serde_json::Value, ClientError>>>;
+
+/// Async RPC client over a unix socket.
+///
+/// Mirrors the C++ `simpleipc::client::service_client`: a background reader
+/// task owns the socket read half and dispatches each `response`/`error` to
+/// the pending one-shot channel registered under its message id. When the peer
+/// closes the connection, every pending call fails with `connection_closed`.
+/// The read and write halves are independent, so a blocked read never stalls
+/// a concurrent write.
 pub struct Client {
-    stream: Arc<Mutex<UnixStream>>,
-    encoding: Encoding,
+    writer: WriteHalf<UnixStream>,
+    encoding: Arc<RwLock<Encoding>>,
     next_id: AtomicI64,
-    pending: Arc<Mutex<HashMap<MessageId, oneshot::Sender<Result<serde_json::Value, ClientError>>>>>,
-    read_buf: BytesMut,
+    pending: Arc<Mutex<PendingMap>>,
+    reader: JoinHandle<()>,
+}
+
+fn spawn_reader(
+    mut reader: ReadHalf<UnixStream>,
+    encoding: Arc<RwLock<Encoding>>,
+    pending: Arc<Mutex<PendingMap>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let mut local = [0u8; 4096];
+            let n = match reader.read(&mut local).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            buf.extend_from_slice(&local[..n]);
+            let enc = *encoding.read().await;
+
+            loop {
+                match enc.decode_message(&buf) {
+                    Ok(Some((msg, consumed))) => {
+                        buf.advance(consumed);
+                        match msg {
+                            Message::Response(resp) => {
+                                if let Some(id) = resp.id {
+                                    let mut p = pending.lock().await;
+                                    if let Some(tx) = p.remove(&id) {
+                                        let _ = tx.send(Ok(resp.result));
+                                    }
+                                }
+                            }
+                            Message::Error(err) => {
+                                if let Some(id) = err.id {
+                                    let mut p = pending.lock().await;
+                                    if let Some(tx) = p.remove(&id) {
+                                        let _ = tx.send(Err(ClientError::Rpc {
+                                            code: err.error.code,
+                                            message: err.error.message,
+                                            data: err.error.data,
+                                        }));
+                                    }
+                                }
+                            }
+                            Message::Rpc(_) => {}
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        log::warn!("simple-ipc: client decode error: {}", e);
+                        let mut p = pending.lock().await;
+                        for (_, tx) in p.drain() {
+                            let _ = tx.send(Err(ClientError::Protocol(e.clone())));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Connection closed: fail all pending calls, like C++ `connection_closed`.
+        let mut p = pending.lock().await;
+        for (_, tx) in p.drain() {
+            let _ = tx.send(Err(ClientError::ConnectionClosed));
+        }
+    })
 }
 
 impl Client {
     pub async fn connect(path: &str) -> Result<Self, ClientError> {
+        Self::connect_with_preferred(path, crate::encoding::PREFERRED_ENCODINGS).await
+    }
+
+    /// Connect and negotiate an encoding, proposing the given preferred
+    /// encodings (in order) during the `.hello` handshake.
+    pub async fn connect_with_preferred(
+        path: &str,
+        preferred: &[&str],
+    ) -> Result<Self, ClientError> {
         let stream = UnixStream::connect(path).await?;
+        let (reader_half, writer_half) = tokio::io::split(stream);
+        let encoding = Arc::new(RwLock::new(Encoding::Json));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let reader = spawn_reader(reader_half, encoding.clone(), pending.clone());
         let mut client = Client {
-            stream: Arc::new(Mutex::new(stream)),
-            encoding: Encoding::Json, // temporary, will be negotiated
+            writer: writer_half,
+            encoding,
             next_id: AtomicI64::new(1),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            read_buf: BytesMut::with_capacity(4096),
+            pending,
+            reader,
         };
 
-        // Send hello
         let hello = HelloRequest {
             version: PROTOCOL_VERSION,
-            encodings: crate::encoding::PREFERRED_ENCODINGS.iter().map(|s| s.to_string()).collect(),
+            encodings: preferred.iter().map(|s| s.to_string()).collect(),
         };
         let hello_params = serde_json::to_value(&hello)
             .map_err(|e| ClientError::Protocol(format!("Serialize hello: {}", e)))?;
@@ -54,10 +143,9 @@ impl Client {
 
         let hello_resp: HelloResponse = serde_json::from_value(response)
             .map_err(|e| ClientError::Protocol(format!("Parse hello response: {}", e)))?;
-
-        let encoding = Encoding::from_name(&hello_resp.encoding)
+        let negotiated = Encoding::from_name(&hello_resp.encoding)
             .ok_or_else(|| ClientError::Protocol(format!("Unknown encoding: {}", hello_resp.encoding)))?;
-        client.encoding = encoding;
+        *client.encoding.write().await = negotiated;
 
         Ok(client)
     }
@@ -68,7 +156,7 @@ impl Client {
 
     async fn call_raw(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, ClientError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, _rx) = oneshot::channel();
+        let (tx, rx) = oneshot::channel();
 
         {
             let mut pending = self.pending.lock().await;
@@ -82,85 +170,12 @@ impl Client {
         });
 
         let mut buf = BytesMut::new();
-        self.encoding.encode_message(&msg, &mut buf);
+        self.encoding.read().await.encode_message(&msg, &mut buf);
+        self.writer.write_all(&buf).await?;
 
-        {
-            let mut stream = self.stream.lock().await;
-            stream.write_all(&buf).await?;
-        }
-
-        // Spawn reader task if not already running
-        // For simplicity, read response synchronously
-        let pending = self.pending.clone();
-        let stream = self.stream.clone();
-        let encoding = self.encoding;
-        let read_buf = &mut self.read_buf;
-
-        loop {
-            let mut local_buf = [0u8; 4096];
-            let n = {
-                let mut s = stream.lock().await;
-                s.read(&mut local_buf).await?
-            };
-            if n == 0 {
-                // Connection closed
-                let mut p = pending.lock().await;
-                if let Some(tx) = p.remove(&id) {
-                    let _ = tx.send(Err(ClientError::ConnectionClosed));
-                }
-                return Err(ClientError::ConnectionClosed);
-            }
-            read_buf.extend_from_slice(&local_buf[..n]);
-
-            loop {
-                match encoding.decode_message(read_buf) {
-                    Ok(Some((msg, consumed))) => {
-                        read_buf.advance(consumed);
-                        match msg {
-                            Message::Response(resp) => {
-                                if resp.id == Some(id) {
-                                    return Ok(resp.result);
-                                }
-                                // Mismatched ID, dispatch to pending
-                                if let Some(id_val) = resp.id {
-                                    let mut p = pending.lock().await;
-                                    if let Some(tx) = p.remove(&id_val) {
-                                        let _ = tx.send(Ok(resp.result));
-                                    }
-                                }
-                            }
-                            Message::Error(err) => {
-                                if err.id == Some(id) {
-                                    return Err(ClientError::Rpc {
-                                        code: err.error.code,
-                                        message: err.error.message,
-                                        data: err.error.data,
-                                    });
-                                }
-                                if let Some(id_val) = err.id {
-                                    let mut p = pending.lock().await;
-                                    if let Some(tx) = p.remove(&id_val) {
-                                        let _ = tx.send(Err(ClientError::Rpc {
-                                            code: err.error.code,
-                                            message: err.error.message,
-                                            data: err.error.data,
-                                        }));
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        let mut p = pending.lock().await;
-                        if let Some(tx) = p.remove(&id) {
-                            let _ = tx.send(Err(ClientError::Protocol(e)));
-                        }
-                        return Err(ClientError::Protocol("decode error".into()));
-                    }
-                }
-            }
+        match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(ClientError::ConnectionClosed),
         }
     }
 
@@ -171,31 +186,22 @@ impl Client {
             params,
         });
         let mut buf = BytesMut::new();
-        self.encoding.encode_message(&msg, &mut buf);
-        let mut stream = self.stream.lock().await;
-        stream.write_all(&buf).await?;
+        self.encoding.read().await.encode_message(&msg, &mut buf);
+        self.writer.write_all(&buf).await?;
         Ok(())
     }
 
     pub async fn close(&mut self) -> Result<(), ClientError> {
-        let mut stream = self.stream.lock().await;
-        stream.shutdown().await?;
+        self.writer.shutdown().await?;
         Ok(())
     }
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
-        // Best effort: notify all pending callbacks
-        let pending = self.pending.clone();
-        let stream = self.stream.clone();
-        tokio::spawn(async move {
-            let mut s = stream.lock().await;
-            let _ = s.shutdown().await;
-            let mut p = pending.lock().await;
-            for (_, tx) in p.drain() {
-                let _ = tx.send(Err(ClientError::ConnectionClosed));
-            }
-        });
+        // Stop the reader task. Dropping both halves closes the socket, and
+        // dropping the pending map fails every in-flight call with
+        // `ConnectionClosed` when its receiver observes the channel close.
+        self.reader.abort();
     }
 }

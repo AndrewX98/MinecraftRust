@@ -1,7 +1,6 @@
 #define EGLUT_NO_X11_INCLUDE
 #include "window_manager_eglut.h"
 #include "window_eglut.h"
-#include "joystick_manager_linux_gamepad.h"
 #include <eglut.h>
 #include <eglut_x11.h>
 #include <unistd.h>
@@ -12,6 +11,9 @@
 #include <cstring>
 
 extern "C" void eglGetProcAddress();
+// Pure-Rust gamepad mapping loaders (crates/client/src/gamepad/).
+extern "C" void gamepad_load_mappings_from_file(const char* path);
+extern "C" void gamepad_load_mappings(const char* content);
 
 EGLUTWindowManager::EGLUTWindowManager() {
     char buf[PATH_MAX];
@@ -31,11 +33,11 @@ std::shared_ptr<GameWindow> EGLUTWindowManager::createWindow(const std::string& 
 }
 
 void EGLUTWindowManager::addGamepadMappingFile(const std::string &path) {
-    LinuxGamepadJoystickManager::instance.loadMappingsFromFile(path);
+    gamepad_load_mappings_from_file(path.c_str());
 }
 
 void EGLUTWindowManager::addGamePadMapping(const std::string &content) {
-    LinuxGamepadJoystickManager::instance.loadMappings(content);
+    gamepad_load_mappings(content.c_str());
 }
 
 #ifndef FALLBACK_EGLUT

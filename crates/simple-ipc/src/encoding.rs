@@ -30,10 +30,14 @@ impl Encoding {
         }
     }
 
+    /// Pick an encoding from a peer's preference list, iterating in the peer's
+    /// order so the first mutually-supported encoding wins. This mirrors the
+    /// C++ `default_rpc_handler::handle_hello`, which walks the client's
+    /// `encodings` array and picks the first entry it recognizes.
     pub fn pick_from_preferred(preferred: &[String]) -> Option<Encoding> {
-        for name in PREFERRED_ENCODINGS {
-            if preferred.iter().any(|s| s == *name) {
-                return Encoding::from_name(name);
+        for name in preferred {
+            if let Some(enc) = Encoding::from_name(name) {
+                return Some(enc);
             }
         }
         None
@@ -95,10 +99,8 @@ impl Encoding {
         };
         let line = &buf[..end];
         if line.is_empty() {
-            return Ok(Some((Message::Response(ResponseMessage {
-                id: None,
-                result: Value::Null,
-            }), end + 1)));
+            // C++ nlohmann::json::parse("") throws -> parse_error
+            return Err("JSON parse error: empty message".into());
         }
         let value: serde_json::Value =
             serde_json::from_slice(line).map_err(|e| format!("JSON parse error: {}", e))?;
@@ -167,7 +169,10 @@ impl Encoding {
     }
 
     fn decode_cbor(&self, buf: &[u8]) -> Result<Option<(Message, usize)>, String> {
-        let (len, varint_size) = varint::decode_unsigned(buf)?;
+        let (len, varint_size) = match varint::try_decode_unsigned(buf)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
         let len = len as usize;
         let total = varint_size + len;
         if buf.len() < total {

@@ -269,62 +269,9 @@ fn main() {
     let nlohmann_json_include =
         local_inc.join("build/_deps/nlohmann_json_ext-src/single_include");
 
-    // --- simpleipc (14 files) ---
-    let sim = client_dir.join("src/manifest_libs/simpleipc");
-    let simpleipc_sources: Vec<PathBuf> = [
-        "common/connection_internal.cpp",
-        "common/encoding/encodings.cpp",
-        "common/encoding/encoding_json.cpp",
-        "common/encoding/encoding_json_cbor.cpp",
-        "common/encoding/varint.cpp",
-        "common/message/error_code.cpp",
-        "server/rpc_handler.cpp",
-        "server/default_rpc_handler.cpp",
-        "client/service_client.cpp",
-        "client/rpc_json_call.cpp",
-        "unix/common/unix_connection.cpp",
-        "unix/server/unix_service_impl.cpp",
-        "unix/client/unix_service_client.cpp",
-        "unix/epoll_io_handler.cpp",
-    ]
-    .iter()
-    .map(|f| sim.join(f))
-    .collect();
-    incr_compile("mcpelauncher-simpleipc", &simpleipc_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("simple-ipc"));
-        b.include(&sim);
-        if nlohmann_json_include.exists() {
-            b.include(&nlohmann_json_include);
-        }
-    });
-
-    // --- daemon-client-utils (1 file) ---
-    let daemon = client_dir.join("src/manifest_libs/daemon-utils");
-    incr_compile(
-        "mcpelauncher-daemon-client-utils",
-        &[daemon.join("client/src/daemon_launcher.cpp")],
-        |b| {
-            b.cpp(true).std("c++17").flag_if_supported("-w");
-            b.include(local_inc.join("daemon-utils"));
-            b.include(local_inc.join("simple-ipc"));
-            b.include(local_inc.join("logger"));
-            b.include(local_inc.join("mcpelauncher-common"));
-        },
-    );
-
-    // --- msa-daemon-client (2 files) ---
-    let msa = client_dir.join("src/manifest_libs/msa-daemon-client");
-    let msa_sources: Vec<PathBuf> =
-        ["src/service_client.cpp", "src/token.cpp"].iter().map(|f| msa.join(f)).collect();
-    incr_compile("mcpelauncher-msa-daemon-client", &msa_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("msa-daemon-client"));
-        b.include(local_inc.join("simple-ipc"));
-        b.include(local_inc.join("daemon-utils"));
-        b.include(local_inc.join("logger"));
-        b.include(&local_inc);
-    });
+    // --- simpleipc (14 files): ported to Rust crate simple-ipc (see docs/PORT_SIMPLEIPC.md) ---
+    // --- daemon-client-utils: ported to Rust crate daemon-utils ---
+    // --- msa-daemon-client: ported to Rust crate msa-daemon-client ---
 
     // --- cll-telemetry (15 files) ---
     let cll = client_dir.join("src/manifest_libs/cll-telemetry");
@@ -357,25 +304,7 @@ fn main() {
         }
     });
 
-    // --- linux-gamepad (5 files) ---
-    let gamepad = client_dir.join("src/manifest_libs/linux-gamepad");
-    let gamepad_sources: Vec<PathBuf> = [
-        "src/gamepad.cpp",
-        "src/gamepad_mapping.cpp",
-        "src/gamepad_manager.cpp",
-        "src/linux_joystick_manager.cpp",
-        "src/linux_joystick.cpp",
-    ]
-    .iter()
-    .map(|f| gamepad.join(f))
-    .collect();
-    incr_compile("mcpelauncher-linux-gamepad", &gamepad_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("linux-gamepad"));
-        b.include(gamepad.join("src"));
-    });
-
-    // --- gamewindow (7 files) ---
+    // --- gamewindow (6 files) ---
     let gwin = client_dir.join("src/manifest_libs/gamewindow");
     let gwin_sources: Vec<PathBuf> = [
         "game_window_manager.cpp",
@@ -383,7 +312,6 @@ fn main() {
         "joystick_manager.cpp",
         "window_eglut.cpp",
         "window_manager_eglut.cpp",
-        "joystick_manager_linux_gamepad.cpp",
         "window_with_linux_gamepad.cpp",
     ]
     .iter()
@@ -392,7 +320,6 @@ fn main() {
     incr_compile("mcpelauncher-gamewindow", &gwin_sources, |b| {
         b.cpp(true).std("c++17").flag_if_supported("-w");
         b.include(local_inc.join("game-window"));
-        b.include(local_inc.join("linux-gamepad"));
         b.include(local_inc.join("eglut"));
         b.include(&gwin);
     });
@@ -521,11 +448,8 @@ fn main() {
         b.include(local_inc.join("game-window"));
         b.include(local_inc.join("logger"));
         b.include(local_inc.join("mcpelauncher-common"));
-        b.include(local_inc.join("msa-daemon-client"));
         b.include(local_inc.join("cll-telemetry"));
         b.include(local_inc.join("mcpelauncher-core"));
-        b.include(local_inc.join("daemon-utils"));
-        b.include(local_inc.join("simple-ipc"));
         b.include(local_inc.join("epoll-shim"));
         b.include(local_inc.join("properties-parser"));
         b.include(local_inc.join("mcpelauncher-errorwindow"));

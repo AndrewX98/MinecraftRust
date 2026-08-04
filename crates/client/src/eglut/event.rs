@@ -142,6 +142,7 @@ pub unsafe fn handle_xevent(dpy: *mut Display, xevent: &mut XEvent) {
             if RELATIVE_MOVEMENT_ENABLED {
                 eglutSetMousePointerLocked(POINTER_LOCKED);
             }
+            crate::gamepad::on_window_focused(true);
             if let Some(win) = &STATE.current_window {
                 if let Some(cb) = win.focus_cb {
                     cb(FOCUSED);
@@ -152,6 +153,7 @@ pub unsafe fn handle_xevent(dpy: *mut Display, xevent: &mut XEvent) {
             if RELATIVE_MOVEMENT_ENABLED {
                 eglutSetMousePointerVisibility(POINTER_VISIBLE);
             }
+            crate::gamepad::on_window_focused(false);
             if let Some(win) = &STATE.current_window {
                 if let Some(cb) = win.focus_cb {
                     cb(NOT_FOCUSED);
@@ -289,6 +291,8 @@ pub unsafe extern "C" fn eglutPollEvents() {
         handle_xevent(dpy, &mut xevent);
     }
     XUnlockDisplay(dpy);
+    // Gamepad polling replaces the C++ `_eglutIdleFunc` (updateGamepad).
+    crate::gamepad::update();
     if STATE.redisplay {
         if let Some(win) = &STATE.current_window {
             if let Some(cb) = win.display_cb {

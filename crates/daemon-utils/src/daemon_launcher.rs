@@ -15,6 +15,11 @@ pub trait DaemonLauncher: Send {
         let mut cmd = Command::new(&args[0]);
         cmd.args(&args[1..]);
         cmd.current_dir(self.get_cwd());
+        // Detach from the launcher's stdio so the daemon (which may outlive the
+        // launcher) doesn't keep our stdout/stderr pipes open.
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
 
         let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {}", e))?;
         let pid = child.id().ok_or("no pid")?;

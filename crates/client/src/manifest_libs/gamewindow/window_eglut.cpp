@@ -1,5 +1,4 @@
 #include "window_eglut.h"
-#include "joystick_manager_linux_gamepad.h"
 #include <game_window_manager.h>
 
 #include <cstring>
@@ -82,7 +81,6 @@ void EGLUTWindow::show() {
 #endif
     eglutShowWindow();
     currentWindow = this;
-    addWindowToGamepadManager();
 }
 
 void EGLUTWindow::close() {
@@ -149,7 +147,6 @@ void EGLUTWindow::setSwapInterval(int interval) {
 void EGLUTWindow::_eglutIdleFunc() {
     if(currentWindow == nullptr)
         return;
-    currentWindow->updateGamepad();
     eglutPostRedisplay();
 }
 
@@ -409,7 +406,7 @@ void EGLUTWindow::_eglutPasteFunc(const char* str, int len) {
 void EGLUTWindow::_eglutFocusFunc(int action) {
     if(currentWindow == nullptr)
         return;
-    LinuxGamepadJoystickManager::instance.onWindowFocused(currentWindow, (action == EGLUT_FOCUSED));
+    // Gamepad focus tracking is handled by the Rust eglut event loop.
 }
 
 void EGLUTWindow::_eglutCloseWindowFunc() {
