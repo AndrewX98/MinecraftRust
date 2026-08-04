@@ -82,10 +82,9 @@ Goal: the only phase where you build test infrastructure instead of game code.
 > (`decode`, `get_string`, `#[no_mangle] mc_init_version` reusing the `mc_init_version` ABI).
 > `capi.rs::init_version` and `main.rs` now go through the Rust twin; `capi.cpp`'s
 > `mc_init_version` def + `MinecraftVersion` fwd-decl removed.
-> **Deletion of `minecraft_version.cpp` + header is deferred to Phase 6**: its data statics
-> (`major/minor/patch/revision/code/package`) are still linked by `minecraft_utils.cpp:526-531`
-> (`mcpelauncher_package_*` → `getApi`). Removing it now breaks the link. Rust keeps the tested
-> decode; the C++ file remains as a data-symbol stub until `getApi` is ported.
+> **Deletion of `minecraft_version.cpp` + header landed in Phase 6** (with `getApi`):
+> the version statics are now `static AtomicI32` mirrors in `minecraft_version.rs` and
+> `mc_workaround_locale_bug` is a Rust twin; the C++ file is gone.
 
 ---
 
@@ -217,9 +216,9 @@ Depends on `mcpelauncher_dispatch_*` + `linker_rust_*` + `mcpelauncher_linker_re
 > resolved at client final link (`#[cfg(test)]` stubs satisfy unit-build linking). Unit tests
 > (pure, in-memory): dynamic-offset parse, symbol-name resolution from a synthesized ELF,
 > RELA `applyHooks` GOT rewrite (mutation captured into `orig`), unknown-reloc skip, and the
-> create/delete hook chain. **`hook.cpp` stays compiled and is NOT re-pointed here** — its C++
-> callers (`minecraft_utils.cpp`, `mod_loader.cpp`) call mangled `HookManager::instance.*`;
-> the flip (and `hook.cpp` deletion) lands in Phase 6 with the `minecraft_utils` port. Boot is
+> create/delete hook chain. **`hook.cpp` stayed compiled through Phase 5** — its C++
+> callers (`minecraft_utils.cpp`, `mod_loader.cpp`) called mangled `HookManager::instance.*`;
+> the flip (and `hook.cpp` deletion) landed in Phase 6 with the `minecraft_utils` port. Boot is
 > a regression gate only (CorePatches vtable canary uses `VtableReplaceHelper`, not HookManager).
 
 ---
@@ -242,6 +241,33 @@ Depends on `mcpelauncher_dispatch_*` + `linker_rust_*` + `mcpelauncher_linker_re
 
 **Not unit-testable** (mod API tables over the live VM); gate on boot + a `getApi` symbol-
 presence assertion (Rust test listing required `mcpelauncher_*` keys).
+
+> **Implementation note (2026-08-04):** landed in `crates/corelib/src/minecraft_utils.rs`
+> (~430 lines + 5 test fns). `minecraft_utils.cpp` (654), `minecraft_version.cpp` (33),
+> `mod_loader.cpp` (204) and `hook.cpp` (302) are **deleted** from the build. Remaining:
+>
+> - `getLibCSymbols` → Rust `get_libc_symbols` (static `SHIMMED` table from `C_API_CPP`
+>   data), `loadLibM` → `load_lib_m`, `setupHybris` → `setup_hybris` (loads libz + registers
+>   the 50+ mod API intrinsics). `setupApi`/`getApi` registered via `HybrisUtils::stubSymbols`
+>   → Rust `linker::stub_symbols_rust`, keyed into `LIB_HOOK`/`LIB_GLOBAL` hashmaps.
+> - `loadMinecraftLib` (the master game loader) → already `minecraft_load.rs` (Phase 4).
+> - **`jnivm_register_method` was kept in C++** (user decision): a small `jnivm_mod_api.cpp`
+>   shim (option A) so it can build `jnivm::MethodHandle` objects against the real C++
+>   `libjnivm` headers. It also carries `mc_mod_log`/`mc_mod_vlog`
+>   (`va_list` → `Log::vlog`) and `mc_mod_request_google_credentials` (fork/exec helper).
+> - `mc_find_data_file`/`mc_get_preinit_hooks`/`mc_finalize_load` moved to Rust
+>   (`PreinitTable` wrapper around the loaded `preinit_hooks` function list).
+> - `capi.cpp` re-pointed: `mc_get_libc_symbols` → `core_minecraft_utils_get_libc_symbols`;
+>   `load_core_libraries` calls `core_minecraft_utils_register_libc_stub` + `load_lib_m` +
+>   `setup_hybris`; `libDir` uses `path_helper_get_abi_dir()`.
+> - **Boot bug fixed en route:** passing a `Box<Vec<*const c_char>>` as `const char**`
+>   crashed (Vec struct field misread as an array entry); now passes the Vec's contiguous
+>   buffer directly. Without the fix, boot segfaulted in `collect_symbol_names`.
+> - **Phase-6 note:** duplicate `libc.so` registration is avoided — main.rs no longer
+>   calls `linker::load_library` for libc; registration happens once inside
+>   `mc_load_core_libraries` via `core_minecraft_utils_register_libc_stub`. **Verified:**
+>   boot reaches main menu, `nm` shows zero `_ZN14MinecraftUtils/_ZN9ModLoader/
+>   _ZN14MinecraftVersion` symbols, 43 corelib tests pass.
 
 ---
 
@@ -296,15 +322,14 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 | Phase | File | Lines | Unit-testable ✅ | Risk | Depends on gone when |
 |-------|------|-------|-----------------|------|----------------------|
 | 0 | test harness | – | – | – | – |
-| 1 | minecraft_version | 33 | ✅ decode/getString | lo | 6 (getApi) |
-| 2 | patch_utils + hook (pure fns) | 100+302 | ✅ patternSearch/vtableSize/translateCtor | lo | 5/6 |
-| 3 | hybris_utils | 65 | – | lo | 6 |
-| 4 | mod_loader | 204 | ✅ getModDependencies | med | 5,6, jnivm |
-| 5 | hook (HookManager) | 302 | ✅ dynamic-parse/reloc-rewrite (in-mem) | **hi** | 6 |
-| 6 | minecraft_utils | 654 | – (symbol-set test) | **hi** | jnivm |
+| 1 | minecraft_version | 33 | ✅ decode/getString | lo | done (Phase 6) |
+| 2 | patch_utils + hook (pure fns) | 100+302 | ✅ patternSearch/vtableSize/translateCtor | lo | done |
+| 3 | hybris_utils | 65 | – | lo | done (Phase 6) |
+| 4 | mod_loader | 204 | ✅ getModDependencies | med | done (Phase 6) |
+| 5 | hook (HookManager) | 302 | ✅ dynamic-parse/reloc-rewrite (in-mem) | **hi** | done (Phase 6) |
+| 6 | minecraft_utils | 654 | – (symbol-set test) | **hi** | done (Phase 6) |
 | 7 | hybris_android_log_hook | 53 | ✅ convertAndroidLogLevel | lo | capi |
-| 8 | fmod_utils (finish) | 39 | – | lo | fake_audio |
-| 9 | crash_handler | 131 | – | lo | none (dormant) |
+| 8 | fmod_utils (finish) | 39 | – | lo | fake_audio || 9 | crash_handler | 131 | – | lo | none (dormant) |
 | 10 | capi.cpp bridge | 275 | – | med | all |
 
 **Ordering rule of thumb:** every phase is allowed only by an earlier phase that has already

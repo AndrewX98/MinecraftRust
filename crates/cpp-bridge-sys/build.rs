@@ -236,16 +236,14 @@ fn main() {
         b.include(local_inc.join("minecraft-imported-symbols"));
     });
 
-    // --- mcpelauncher-core (9 files) ---
+    // --- mcpelauncher-core (6 files; Phase 6 deleted minecraft_utils.cpp,
+    //     minecraft_version.cpp, mod_loader.cpp, hook.cpp; added jnivm_mod_api.cpp) ---
     let core_sources: Vec<PathBuf> = [
-        "src/hook.cpp",
-        "src/mod_loader.cpp",
         "src/hybris_utils.cpp",
         "src/hybris_android_log_hook.cpp",
         "src/crash_handler.cpp",
         "src/patch_utils.cpp",
-        "src/minecraft_utils.cpp",
-        "src/minecraft_version.cpp",
+        "src/jnivm_mod_api.cpp",
         "src/fmod_utils.cpp",
     ]
     .iter()

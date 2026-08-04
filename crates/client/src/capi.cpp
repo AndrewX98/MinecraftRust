@@ -39,13 +39,17 @@ extern "C" void path_helper_set_game_dir(const char* dir);
 extern "C" void path_helper_set_data_dir(const char* dir);
 extern "C" void path_helper_set_cache_dir(const char* dir);
 extern "C" const char* path_helper_get_game_dir();
+extern "C" const char* path_helper_get_abi_dir();
 
-struct MinecraftUtils {
-    static std::unordered_map<std::string, void*> getLibCSymbols();
-    static void* loadLibM();
-    static void setupHybris();
-    static const char* getLibraryAbi();
-};
+// Phase 6: MinecraftUtils logic moved to corelib (minecraft_utils.rs /
+// minecraft_version.rs). These clean-named Rust twins replace the former
+// `MinecraftUtils::*` C++ methods.
+// libc-shim symbol struct (forward-declared for the twin decl above)
+struct shim_shimmed_symbol;
+extern "C" int core_minecraft_utils_get_libc_symbols(shim_shimmed_symbol* buf, int max_entries);
+extern "C" void core_minecraft_utils_register_libc_stub();
+extern "C" void* core_minecraft_utils_load_lib_m();
+extern "C" void core_minecraft_utils_setup_hybris();
 
 // libc-shim symbol struct
 struct shim_shimmed_symbol {
@@ -128,22 +132,10 @@ void mc_setup_paths(const char* g, const char* d, const char* c) {
 
 /// No forward declarations needed — all extern symbols resolve via static libraries.
 
-/// Calls MinecraftUtils::getLibCSymbols() and copies merged C++ + Rust symbols
-/// into the caller-supplied buffer. Returns the number of symbols written.
+/// Calls corelib::minecraft_utils::getLibCSymbols() and copies merged C++ + Rust
+/// symbols into the caller-supplied buffer. Returns the number of symbols written.
 int mc_get_libc_symbols(shim_shimmed_symbol* buf, int max_entries) {
-    auto syms = MinecraftUtils::getLibCSymbols();
-    static std::vector<std::string> persistent;
-    persistent.clear();
-    persistent.reserve(static_cast<size_t>(max_entries));
-    int count = 0;
-    for (auto& [name, val] : syms) {
-        if (count >= max_entries) break;
-        persistent.push_back(name);
-        buf[count].name = persistent.back().c_str();
-        buf[count].value = val;
-        count++;
-    }
-    return count;
+    return core_minecraft_utils_get_libc_symbols(buf, max_entries);
 }
 
 extern "C" void linker_init_rust();
@@ -157,8 +149,8 @@ int mc_load_core_libraries(const char* lib_dir) {
     //    libmcpelauncher_gamewindow) are Rust-only.
     linker_init_rust();
 
-    // 1) Register libc symbols with Rust linker first, then C++
-    auto libC = MinecraftUtils::getLibCSymbols();
+    // 1) Register libc symbols with Rust linker first (Phase 6: corelib twin
+    //    of getLibCSymbols + rust_load_stub("libc.so", ...)).
     // NOTE: ThreadMover::hookLibC is intentionally NOT called here.
     // The original C++ launcher runs startGame on a detached helper thread so
     // the main thread is free for executeMainThread. In the Rust bridge, both
@@ -169,13 +161,13 @@ int mc_load_core_libraries(const char* lib_dir) {
     // waits for it to signal readiness (which it does after ALooper_prepare),
     // then returns. The main thread blocks on executeMainThread but the game
     // thread runs the event loop and renders.
-    rust_load_stub("libc.so", libC);
+    core_minecraft_utils_register_libc_stub();
 
     // 2) Load libm
-    MinecraftUtils::loadLibM();
+    core_minecraft_utils_load_lib_m();
 
     // 3) Setup hybris (loads libz, hooks android log, sets up mod API)
-    MinecraftUtils::setupHybris();
+    core_minecraft_utils_setup_hybris();
 
     // 4) Register stub libraries that libminecraftpe.so depends on
     //
@@ -238,7 +230,7 @@ int mc_load_core_libraries(const char* lib_dir) {
 
     // 5) Set up library search path so dlopen_ext can find libminecraftpe.so etc.
     //    This must match the original main.cpp: update_LD_LIBRARY_PATH with the lib dir
-    std::string libDir = std::string(path_helper_get_game_dir()) + "lib/" + MinecraftUtils::getLibraryAbi();
+    std::string libDir = std::string(path_helper_get_game_dir()) + "lib/" + path_helper_get_abi_dir();
     linker_rust_add_search_path(libDir.c_str());
 
     return 0;
