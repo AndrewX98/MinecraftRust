@@ -271,6 +271,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "apkinfo",
+ "corelib",
  "cpal",
  "cpp-bridge-sys",
  "daemon-utils",
@@ -383,6 +384,10 @@ checksum = "b9b4739a805a62757a83e5654fa3faabec0442666b263bb2287d5a8185bfd953"
 dependencies = [
  "bindgen",
 ]
+
+[[package]]
+name = "corelib"
+version = "0.1.0"
 
 [[package]]
 name = "cpal"

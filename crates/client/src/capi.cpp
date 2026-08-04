@@ -32,10 +32,6 @@ public:
 
 // ---------- Forward declarations ----------
 
-struct MinecraftVersion {
-    static void init(std::string, int);
-};
-
 // PathHelper state is owned by Rust (crates/client/src/path_helper.rs); the
 // C++ PathHelper class (path_helper.cpp) has been deleted. These are the Rust
 // FFI entry points that replaced it.
@@ -128,10 +124,6 @@ void mc_setup_paths(const char* g, const char* d, const char* c) {
     if (g) path_helper_set_game_dir(g);
     if (d) path_helper_set_data_dir(d);
     if (c) path_helper_set_cache_dir(c);
-}
-
-void mc_init_version(const char* pkg, int code) {
-    MinecraftVersion::init(std::string(pkg), code);
 }
 
 /// No forward declarations needed — all extern symbols resolve via static libraries.

@@ -78,6 +78,15 @@ Goal: the only phase where you build test infrastructure instead of game code.
 
 **Unit-testable: YES** (`#[test] decode("962112004") == "1.21.120.4"`, non-android passthrough).
 
+> **Implementation note (2026-08-04):** landed in `crates/corelib/src/minecraft_version.rs`
+> (`decode`, `get_string`, `#[no_mangle] mc_init_version` reusing the `mc_init_version` ABI).
+> `capi.rs::init_version` and `main.rs` now go through the Rust twin; `capi.cpp`'s
+> `mc_init_version` def + `MinecraftVersion` fwd-decl removed.
+> **Deletion of `minecraft_version.cpp` + header is deferred to Phase 6**: its data statics
+> (`major/minor/patch/revision/code/package`) are still linked by `minecraft_utils.cpp:526-531`
+> (`mcpelauncher_package_*` → `getApi`). Removing it now breaks the link. Rust keeps the tested
+> decode; the C++ file remains as a data-symbol stub until `getApi` is ported.
+
 ---
 
 ## Phase 2 — pure-logic halves of `patch_utils` and `hook` (mid-phase wins)

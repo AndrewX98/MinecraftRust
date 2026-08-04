@@ -5,7 +5,6 @@ use std::ffi::{CStr, CString};
 
 extern "C" {
     fn mc_setup_paths(game_dir: *const i8, data_dir: *const i8, cache_dir: *const i8);
-    fn mc_init_version(package: *const i8, version_code: i32);
     fn mc_get_libc_symbols(buf: *mut libc_shim::types::shimmed_symbol, max_entries: i32) -> i32;
     fn mc_load_core_libraries(lib_dir: *const i8) -> i32;
     fn mc_setup_android_hooks();
@@ -34,7 +33,7 @@ pub fn setup_paths(game_dir: Option<&str>, data_dir: Option<&str>, cache_dir: Op
 
 pub fn init_version(package: &str, version_code: i32) {
     if let Ok(p) = CString::new(package) {
-        unsafe { mc_init_version(p.as_ptr(), version_code); }
+        unsafe { corelib::minecraft_version::mc_init_version(p.as_ptr(), version_code); }
     }
 }
 
