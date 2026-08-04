@@ -137,6 +137,17 @@ Ship these functions behind `#[no_mangle]` extern names now; leave the stateful
 - Not really unit-testable (OS dlopen); rely on game-boot as the check. Lower priority but
   tiny and unblocks Phase 6.
 
+> **Implementation note (2026-08-04):** additive-only, same shape as Phase 2. Logic lives in
+> `crates/corelib/src/hybris_utils.rs` with pure `collect_symbol_names` (unit-tested: order,
+> termination, null list) plus clean-named `#[no_mangle]` twins `mc_hybris_load_library_os`
+> (`dlopen` + `dlsym` loop + optional `HybrisSym` overrides → `linker_load_library_rust`) and
+> `mc_hybris_stub_symbols`. **Deletion of `hybris_utils.cpp` deferred to Phase 6**: its callers
+> (`loadLibM`/`loadFMod`/`setupHybris`/`stubFMod` in `minecraft_utils.cpp`) still link against
+> the **mangled** C++ methods `_ZN11HybrisUtils14loadLibraryOSE…`/`_ZN11HybrisUtils11stubSymbolsE…`
+> which take C++-only types (`std::string const&`, by-value `std::unordered_map`). Rust cannot
+> cleanly emit those mangled names or receive those ABIs, so the twins are re-pointed by the
+> Phase-6 port of `minecraft_utils.cpp`. Tests avoid `dlopen`; boot is the check.
+
 ---
 
 ## Phase 4 — `mod_loader` (I/O separated; dependency parse is pure)
@@ -154,6 +165,20 @@ Ship these functions behind `#[no_mangle]` extern names now; leave the stateful
   tests.
 - The FakeJni `attachLibrary` call (`mod_loader.cpp:59`) depends on the JNI VM — see
   phase note in Phase 5 about `HookManager`/`jnivm`.
+
+> **Implementation note (2026-08-04):** scope confirmed by grep — `ModLoader` has **zero
+> external callers** (only self/header references), so only `getModDependencies` is ported now;
+> `mod_loader.cpp` stays compiled and whole-file deletion + the orchestration twins
+> (`loadMod`/`loadModMulti`/`loadModsFromDirectory`) defer to Phase 6, when `getApi`
+> (`minecraft_utils`) and `HookManager` (`hook`) are Rust. `crates/corelib/src/mod_loader.rs`
+> ships `get_mod_dependencies(path: &Path) -> Result<Vec<String>, String>` using **goblin**
+> (already a workspace dep via `linker`) — semantics mirror the C++ `fread` walk: bad
+> read/header → error, no `PT_DYNAMIC` → error, otherwise `DT_NEEDED` in file order.
+> Unit-tested against a synthesized in-memory ELF64 fixture (Ehdr + PT_DYNAMIC Phdr + 5 Dyn
+> entries + strtab) plus error cases (missing file, bad magic, no PT_DYNAMIC, truncated).
+> `#[no_mangle] mc_get_mod_dependencies` twin returns a null-terminated array; the C++ mangled
+> `_ZN9ModLoader18getModDependenciesE…` stays linked (no collision). The new code is NOT wired
+> into the boot path — boot is a regression gate only.
 
 ---
 
@@ -174,6 +199,28 @@ Depends on `mcpelauncher_dispatch_*` + `linker_rust_*` + `mcpelauncher_linker_re
 - Highest risk. Consider keeping the C++ `hook.cpp` compiled one extra phase while its Rust
   twin exists, and flip the entry only after a boot-canary passes (A/B aversion to the
   phase-3.4 style breakage).
+
+> **Implementation note (2026-08-04):** additive-only, same shape as Phases 2–4. The Rust
+> singleton `HookManager` lives in `crates/corelib/src/hook_manager.rs` behind
+> `OnceLock<Mutex<HookManager>>` (`unsafe impl Send/Sync`: all access through the mutex, raw
+> pointers into loaded-lib memory). Faithful port of the data model (arena-backed
+> `HookedSymbol` referenced by index from both the manager map and each `LibInfo::hooked_symbols`;
+> `HookInstance` is a leaked `Box`, freed by `deleteHook`). **RELA semantics on x86_64** — the
+> real `libminecraftpe.so` is `DT_PLTREL=RELA` with 24-byte entries; the C++ default
+> (`USE_RELA` unset, 16-byte `Elf64_Rel` stride) mis-walks a 24-byte table (harmless only
+> because `applyHooks` is off the boot path). This port reads correct 24-byte entries for both
+> `DT_RELA`/`DT_RELASZ` and `DT_JMPREL`/`DT_PLTRELSZ`. Reads the `dynamic` table and `PT_GNU_RELRO`
+> via raw offsets; strtab/symtab strings read directly from in-image memory (testable without the
+> linker). Clean-named `#[no_mangle]` twins (`hook_manager_add_library`/`remove_library`/
+> `create_hook`/`delete_hook`/`apply_hooks`/`find_symbol_index`) coexist with the still-linked
+> `_ZN11HookManager*` (verified via `nm`); the extern linker symbols are declared locally and
+> resolved at client final link (`#[cfg(test)]` stubs satisfy unit-build linking). Unit tests
+> (pure, in-memory): dynamic-offset parse, symbol-name resolution from a synthesized ELF,
+> RELA `applyHooks` GOT rewrite (mutation captured into `orig`), unknown-reloc skip, and the
+> create/delete hook chain. **`hook.cpp` stays compiled and is NOT re-pointed here** — its C++
+> callers (`minecraft_utils.cpp`, `mod_loader.cpp`) call mangled `HookManager::instance.*`;
+> the flip (and `hook.cpp` deletion) lands in Phase 6 with the `minecraft_utils` port. Boot is
+> a regression gate only (CorePatches vtable canary uses `VtableReplaceHelper`, not HookManager).
 
 ---
 
@@ -253,7 +300,7 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 | 2 | patch_utils + hook (pure fns) | 100+302 | ✅ patternSearch/vtableSize/translateCtor | lo | 5/6 |
 | 3 | hybris_utils | 65 | – | lo | 6 |
 | 4 | mod_loader | 204 | ✅ getModDependencies | med | 5,6, jnivm |
-| 5 | hook (HookManager) | 302 | – (boot canary) | **hi** | 6 |
+| 5 | hook (HookManager) | 302 | ✅ dynamic-parse/reloc-rewrite (in-mem) | **hi** | 6 |
 | 6 | minecraft_utils | 654 | – (symbol-set test) | **hi** | jnivm |
 | 7 | hybris_android_log_hook | 53 | ✅ convertAndroidLogLevel | lo | capi |
 | 8 | fmod_utils (finish) | 39 | – | lo | fake_audio |
@@ -262,7 +309,8 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 
 **Ordering rule of thumb:** every phase is allowed only by an earlier phase that has already
 moved its dependency to Rust, and every phase leaves `cargo build -p client` green **and**
-the game at main menu. Unit tests accumulate on the pure-logic functions (Phases 1, 2, 4, 7);
+the game at main menu. Unit tests accumulate on the pure-logic functions (Phases 1, 2, 4, 5,
+7);
 everything dynamic is gated on the boot canary (Phases 3, 5, 6, 8, 10). This is the same
 hybrid keep-the-bridge strategy that already got `PATH_FILE_UTIL`, `loadMinecraftLib`, and the
 CorePatches patching over cleanly.

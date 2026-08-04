@@ -389,7 +389,10 @@ dependencies = [
 name = "corelib"
 version = "0.1.0"
 dependencies = [
+ "goblin",
  "libc",
+ "log",
+ "tempfile",
 ]
 
 [[package]]
