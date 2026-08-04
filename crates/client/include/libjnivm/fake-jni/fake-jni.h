@@ -258,11 +258,15 @@ namespace FakeJni {
                                         }\
                                         static std::shared_ptr<jnivm::Class> registerClass();\
                                         static std::shared_ptr<jnivm::Class> getDescriptor();\
+                                        static std::shared_ptr<jnivm::Class> getDescriptor(jnivm::ENV* env);\
                                         virtual std::shared_ptr<jnivm::Class> getClassInternal(jnivm::ENV* env) override {\
-                                            return getDescriptor();\
+                                            return getDescriptor(env);\
                                         }
 #define BEGIN_NATIVE_DESCRIPTOR(name, ...)  std::shared_ptr<jnivm::Class> name ::getDescriptor() {\
-                                                auto cl = jnivm::ENV::FromJNIEnv(&FakeJni::JniEnvContext().getJniEnv())->GetClass< name >( name ::getClassName().data());\
+                                                return name::getDescriptor(jnivm::ENV::FromJNIEnv(&FakeJni::JniEnvContext().getJniEnv()));\
+                                            }\
+                                            std::shared_ptr<jnivm::Class> name ::getDescriptor(jnivm::ENV* env) {\
+                                                auto cl = env->GetClass< name >( name ::getClassName().data());\
                                                 if(cl->methods.size() == 0 && cl->fields.size() == 0 && !cl->Instantiate && !cl->baseclasses) {\
                                                     registerClass();\
                                                 }\

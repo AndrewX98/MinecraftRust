@@ -69,9 +69,7 @@ public:
         return instance;
     }
 
-    std::shared_ptr<FakeJni::JClass> loadClass(std::shared_ptr<FakeJni::JString> str) {
-        FakeJni::JniEnvContext context;
-        return std::const_pointer_cast<FakeJni::JClass>(
-            context.getJniEnv().getVM().findClass(str->asStdString().c_str()));
+    std::shared_ptr<FakeJni::JClass> loadClass(jnivm::ENV *env, std::shared_ptr<FakeJni::JString> str) {
+        return env->GetClass(str->asStdString().c_str());
     }
 };
