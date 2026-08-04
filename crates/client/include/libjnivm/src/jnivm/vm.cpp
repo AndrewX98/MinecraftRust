@@ -2,6 +2,7 @@
 #ifdef _WIN32
 #define pthread_self() GetCurrentThreadId()
 #endif
+#include <fake-jni/fake-jni.h>
 #include <jnivm/internal/skipJNIType.h>
 #include <jnivm/internal/findclass.h>
 #include <jnivm/internal/jValuesfromValist.h>
@@ -505,7 +506,14 @@ jnivm::VM::VM(bool skipInit, bool ReturnNull) : ninterface(ReturnNull ? GetNativ
 				auto&& nvm = *VM::FromJavaVM(vm);
 				std::lock_guard<std::mutex> lock(nvm.mtx);
 				auto&& nenv = nvm.jnienvs[pthread_self()];
-				if(!nenv) {
+				// pthread_t values are reused once a thread exits. If the previous
+				// owner of this pthread_t attached and never detached (e.g. a game
+				// thread torn down by its own libc++ without running our thread_local
+				// destructors), the map holds a stale env and the CreateEnv below would
+				// be skipped, leaving this thread's FakeJni thread_local null — any
+				// later `FakeJni::LocalFrame` then throws "No Env in this thread".
+				// Re-create the env whenever the current thread has no thread_local.
+				if(!nenv || !FakeJni::JniEnvContext::env.env.lock()) {
 					nenv = nvm.CreateEnv();
 				}
 				if(penv) {
