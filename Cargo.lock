@@ -388,6 +388,9 @@ dependencies = [
 [[package]]
 name = "corelib"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "cpal"

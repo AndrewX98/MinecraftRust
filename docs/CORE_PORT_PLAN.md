@@ -9,7 +9,7 @@ file-by-file while keeping the game reachable at main menu after **every** phase
 
 Same trick as `PORT_FILE_UTIL.md` / the phase-4 `loadMinecraftLib` port:
 
-1. Create `crates/client/src/mcpe_core/<name>.rs` exposing **`#[no_mangle] pub extern "C" fn`**
+1. Create `crates/corelib/src/<name>.rs` exposing **`#[no_mangle] pub extern "C" fn`**
    with the **exact same symbol names** the C++ file exports (so `capi.cpp` and the other
    still-C++ files link unchanged).
 2. Remove that `.cpp` from the `mcpelauncher-core` list in `cpp-bridge-sys/build.rs`
@@ -53,7 +53,7 @@ or delete wholesale.
 
 Goal: the only phase where you build test infrastructure instead of game code.
 
-- Add a `#[cfg(test)] mod tests` inside each `mcpe_core/*.rs` module. Rust integration
+- Add a `#[cfg(test)] mod tests` inside each `corelib/*.rs` module. Rust integration
   tests are compiled into the `client` binary's test harness; C++ `mc_*` wrappers are not
   exercised by these tests, so keep tests on **pure logic only**.
 - For pure logic, assert against golden values **derived** from the C++ now (do it while
@@ -69,7 +69,7 @@ Goal: the only phase where you build test infrastructure instead of game code.
 
 33 lines. Statics + `init` decode + `getString`. **No I/O, no linker, no JNI.**
 
-- Port to `mcpe_core/minecraft_version.rs`: `static Mutex<Version>` (Android/iOS schema,
+- Port to `corelib/minecraft_version.rs`: `static Mutex<Version>` (Android/iOS schema,
   950000000–990000000 and 1950000000–1990000000 branches from `minecraft_version.cpp:17-27`).
 - C++ currently publishes the statics to mods via `getApi` (`mcpelauncher_package_version_*`);
   the Rust twin must keep those symbols available.
@@ -109,6 +109,20 @@ Ship these functions behind `#[no_mangle]` extern names now; leave the stateful
 
 **Check:** these three `#[test]`s pass; game still boots (you only *added* Rust twins).
 
+> **Implementation note (2026-08-04):** additive-only. Pure logic lives in
+> `crates/corelib/src/patch_utils.rs` (`parse_pattern`, `scan_pattern`,
+> `get_vtable_size`, `patch_call_instruction_bytes`, all unit-tested) and
+> `crates/corelib/src/hook.rs` (`translate_constructor_name`, unit-tested). Each
+> is also exported as a **clean-named** `#[no_mangle]` extern twin
+> (`patternSearch`, `getVtableSize`, `patchCallInstruction`,
+> `translateConstructorName`) — no name collision with the still-compiled C++
+> mangled symbols (`_ZN10PatchUtils…`, `_ZN11HookManager…`). No caller is
+> re-pointed and nothing is deleted here; callers get switched to these twins in
+> Phases 5/6 (CorePatches vtable) and 6 (translateConstructorName in
+> `minecraft_utils.cpp:459`). `patchCallInstruction`/`patternSearch` twins call the
+> Rust linker dispatch (`mcpelauncher_dispatch_get_library_code_region`) and
+> `libc::mprotect`. ARM branch intentionally omitted (target is x86_64).
+
 ---
 
 ## Phase 3 — `hybris_utils` (FFI service wrapper)
@@ -116,7 +130,7 @@ Ship these functions behind `#[no_mangle]` extern names now; leave the stateful
 65 lines. `loadLibraryOS` = `dlopen` + `dlsym` loop + hand-off to
 `linker_load_library_rust`; `stubSymbols` = register a stub with the Rust linker.
 
-- Port to `mcpe_core/hybris_utils.rs`. Dependencies are already Rust (`dlopen`/`dlsym` in
+- Port to `corelib/hybris_utils.rs`. Dependencies are already Rust (`dlopen`/`dlsym` in
   `libc-shim`, `linker_load_library_rust`).
 - Consumers are still C++ (`minecraft_utils.cpp:101-160`) — keep symbol names identical so
   no `.cpp` changes.
@@ -225,7 +239,7 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 - `mc_load_core_libraries`, `mc_setup_android_hooks`, `mc_create_window_and_setup_graphics`,
   `mc_egl_swap_buffers`, `mc_dlsym` → already orchestrated from Rust (`minecraft_load.rs`,
   eglut, rust_bridge); strip remaining `MinecraftUtils::`/`HybrisUtils::` calls.
-- Re-point `capi.rs` extern block to the Rust `mcpe_core` `#[no_mangle]`s, delete `capi.cpp`,
+- Re-point `capi.rs` extern block to the Rust `corelib` `#[no_mangle]`s, delete `capi.cpp`,
   drop `mcpelauncher-client-bridge` from `cpp-bridge-sys/build.rs:233`.
 
 ---
