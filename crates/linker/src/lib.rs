@@ -562,7 +562,11 @@ pub fn dlsym(handle: Handle, symbol: &str) -> Option<*mut std::ffi::c_void> {
             }
         }
     }
-    None
+    // Fall back to the global scope (all loaded libraries, e.g. the JNI
+    // callback natives Java_com_xbox_httpclient_* exported by
+    // libHttpClient.Android.so but requested through libminecraftpe.so's
+    // handle). Matches real dlsym dependency-chain behavior.
+    dlsym_global(symbol)
 }
 
 pub fn dlsym_global(symbol: &str) -> Option<*mut std::ffi::c_void> {

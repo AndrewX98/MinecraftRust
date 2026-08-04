@@ -187,15 +187,12 @@ int mc_load_core_libraries(const char* lib_dir) {
 
     // 4) Register stub libraries that libminecraftpe.so depends on
     //
-    // libHttpClient.Android.so is stubbed before the game loads. Loading the
-    // real ELF currently still SIGSEGVs during XAL init (bad object pointer
-    // 0x20 after PlayGames), even with JUMP_SLOT self-resolution. Stubs keep
-    // the game offline-capable; HCInitialize returns S_OK so XAL does not
-    // throw Xal::Exception on hard-fail init.
-    {
-        extern void http_client_register_stubs();
-        http_client_register_stubs();
-    }
+    // libHttpClient.Android.so is NOT stubbed: the real ELF from the game dir
+    // is loaded by the Rust linker (matching mcpelauncher-manifest). Its
+    // HCHttpCall* API routes through the JNI com.xbox.httpclient classes,
+    // whose natives the Rust/C++ http_client implementation provides. The
+    // linker dlsym global-scope fallback makes the Java_com_xbox_httpclient_*
+    // callback symbols from libHttpClient.Android.so resolvable.
     {
 
         // libOpenSLES.so: Rust-only stub registration.
