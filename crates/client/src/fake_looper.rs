@@ -55,8 +55,8 @@ extern "C" {
     fn fake_looper_get_callbacks() -> *mut c_void;
     fn fake_looper_get_input_queue() -> *mut c_void;
     fn fake_looper_get_text_input_enabled() -> bool;
-    fn fake_looper_callbacks_start_send_events(callbacks: *mut c_void);
-    fn fake_looper_callbacks_mark_requeue_gamepad(callbacks: *mut c_void);
+    fn window_callbacks_start_send_events(callbacks: *mut c_void);
+    fn window_callbacks_mark_requeue_gamepad(callbacks: *mut c_void);
     fn fake_looper_window_poll_events(window: *mut c_void);
     fn fake_looper_window_start_text_input(window: *mut c_void);
     fn fake_looper_window_stop_text_input(window: *mut c_void);
@@ -164,7 +164,7 @@ unsafe fn attach_input_queue_impl(ident: i32, callback: *mut c_void, data: *mut 
 unsafe fn poll_all_impl(_timeout: i32, out_fd: *mut i32, out_events: *mut i32, out_data: *mut *mut c_void) -> i32 {
     let callbacks = fake_looper_get_callbacks();
     if !callbacks.is_null() {
-        fake_looper_callbacks_start_send_events(callbacks);
+        window_callbacks_start_send_events(callbacks);
     }
 
     let text_input_enabled = fake_looper_get_text_input_enabled();
@@ -214,7 +214,7 @@ unsafe fn poll_all_impl(_timeout: i32, out_fd: *mut i32, out_events: *mut i32, o
         fake_looper_window_poll_events(window);
     }
     if !callbacks.is_null() {
-        fake_looper_callbacks_mark_requeue_gamepad(callbacks);
+        window_callbacks_mark_requeue_gamepad(callbacks);
     }
     ALOOPER_POLL_TIMEOUT
 }

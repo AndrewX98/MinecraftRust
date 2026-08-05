@@ -15,7 +15,6 @@
 #include "xbox_live_helper.h"
 #include <game_window.h>
 #include <game_window_manager.h>
-#include <window_callbacks.h>
 #include <log.h>
 #include <minecraft/imported/android_symbols.h>
 #include "splitscreen_patch.h"
@@ -104,6 +103,8 @@ extern "C" {
     void core_patches_install(void* handle);
     void core_patches_set_game_window(void* window);
     void core_patches_set_game_window_callbacks(void* callbacks);
+    void* window_callbacks_create(void* window, void* jni_support, void* rust_jni_support, void* input_queue);
+    void window_callbacks_register(void* callbacks);
     void mc_register_game_window_symbols();
     void mc_relocate_glesv2_symbols(void* (*resolver)(const char*));
 }
@@ -194,16 +195,15 @@ extern "C" void fake_looper_notify_window_created() {
 
 extern "C" void fake_looper_create_window_callbacks() {
     auto* l = FakeLooper::getCurrent();
-    auto cb = std::make_shared<WindowCallbacks>(
-        *l->getWindow(), FakeLooper::getJniSupport(), FakeLooper::getRustJniSupport(), *l->getInputQueue());
-    cb->registerCallbacks();
-    l->setWindowCallbacks(std::move(cb));
+    l->setWindowCallbacks(window_callbacks_create(
+        (void*)l->getWindow(), FakeLooper::getJniSupport(), FakeLooper::getRustJniSupport(), (void*)l->getInputQueue()));
+    window_callbacks_register(l->getWindowCallbacks());
 }
 
 extern "C" void fake_looper_register_core_patches() {
     auto* l = FakeLooper::getCurrent();
     core_patches_set_game_window(l->getWindowShared().get());
-    core_patches_set_game_window_callbacks(l->getWindowCallbacksShared().get());
+    core_patches_set_game_window_callbacks(l->getWindowCallbacks());
 }
 
 extern "C" void fake_looper_show_window() {
@@ -239,12 +239,6 @@ extern "C" void* fake_looper_get_input_queue() {
 }
 extern "C" bool fake_looper_get_text_input_enabled() {
     return FakeLooper::getJniSupport()->getTextInputHandler().isEnabled();
-}
-extern "C" void fake_looper_callbacks_start_send_events(void* cb) {
-    ((WindowCallbacks*)cb)->startSendEvents();
-}
-extern "C" void fake_looper_callbacks_mark_requeue_gamepad(void* cb) {
-    ((WindowCallbacks*)cb)->markRequeueGamepadInput();
 }
 extern "C" void fake_looper_window_poll_events(void* w) {
     ((GameWindow*)w)->pollEvents();
@@ -449,7 +443,6 @@ extern "C" void jni_support_delete(void* s) {
 
 // ============================================================
 // JniSupport bridge functions (void* → JniSupport*)
-// Called from window_callbacks_stub.cpp
 // ============================================================
 
 extern "C" void* jni_support_get_text_input_handler(void*) {

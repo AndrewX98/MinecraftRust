@@ -8,7 +8,6 @@
 #include "splitscreen_patch.h"
 #include "gl_core_patch.h"
 #include "fake_egl.h"
-#include "window_callbacks.h"
 
 #include <sys/poll.h>
 #include <thread>
@@ -23,6 +22,10 @@ extern "C" void jni_support_on_window_created(void *s, void *window, void *input
 // Phase 2: CorePatches lives in Rust (core_patches.rs)
 extern "C" void core_patches_set_game_window(void* window);
 extern "C" void core_patches_set_game_window_callbacks(void* callbacks);
+
+// Phase 3: WindowCallbacks lives in Rust (window_callbacks.rs)
+extern "C" void window_callbacks_load_gamepad_mappings();
+extern "C" void window_callbacks_destroy(void* callbacks);
 
 JniSupport *FakeLooper::jniSupport;
 void *FakeLooper::rustJniSupport = nullptr;
@@ -61,49 +64,20 @@ void FakeLooper::initializeWindow() {
         return;
     }
     Log::info("Launcher", "Loading gamepad mappings");
-    WindowCallbacks::loadGamepadMappings();
+    window_callbacks_load_gamepad_mappings();
     Log::info("Launcher", "Creating window");
     associatedWindow = GameWindowManager::getManager()->createWindow("Minecraft",
                                                                      options.windowWidth, options.windowHeight, options.graphicsApi);
     FakeEGL::setupGLOverrides();
 }
 
-void FakeLooper::prepare() {
-    fprintf(stderr, "=== FakeLooper::prepare: tid=%lu ===\n",
-            (unsigned long)std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    jniSupport->setLooperRunning(true);
-    fprintf(stderr, "=== FakeLooper::prepare: initializeWindow ===\n");
-    initializeWindow();
-    fprintf(stderr, "=== FakeLooper::prepare: onWindowCreated window=%p ===\n",
-            (void*)associatedWindow.get());
-    jniSupport->onWindowCreated((ANativeWindow *)(void *)associatedWindow.get(),
-                                (AInputQueue *)(void *)&fakeInputQueue);
-    // Also forward the window to the Rust JniSupport so its lifecycle
-    // callbacks receive a valid window pointer.
-    if (rustJniSupport) {
-        jni_support_on_window_created(rustJniSupport,
-                                      (void *)associatedWindow.get(),
-                                      (void *)&fakeInputQueue);
-    }
-    fprintf(stderr, "=== FakeLooper::prepare: creating WindowCallbacks ===\n");
-    associatedWindowCallbacks = std::make_shared<WindowCallbacks>(*associatedWindow, (void*)jniSupport, rustJniSupport, fakeInputQueue);
-    associatedWindowCallbacks->registerCallbacks();
-
-    core_patches_set_game_window(associatedWindow.get());
-    core_patches_set_game_window_callbacks(associatedWindowCallbacks.get());
-
-    associatedWindow->show();
-    SplitscreenPatch::onGLContextCreated();
-    ShaderErrorPatch::onGLContextCreated();
-    fprintf(stderr, "=== FakeLooper::prepare: makeCurrent(false) ===\n");
-    associatedWindow->makeCurrent(false);
-    fprintf(stderr, "=== FakeLooper::prepare: done ===\n");
-}
-
 FakeLooper::~FakeLooper() {
     core_patches_set_game_window(nullptr);
+    if(windowCallbacks) {
+        core_patches_set_game_window_callbacks(nullptr);
+        window_callbacks_destroy(windowCallbacks);
+    }
     associatedWindow.reset();
-    associatedWindowCallbacks.reset();
 }
 
 int FakeLooper::addFd(int fd, int ident, int events, ALooper_callbackFunc callback, void *data) {
@@ -121,43 +95,4 @@ void FakeLooper::attachInputQueue(int ident, ALooper_callbackFunc callback, void
     if(callback != nullptr)
         throw std::runtime_error("callback is not supported");
     inputEntry = EventEntry(-1, ident, 0, data);
-}
-
-int FakeLooper::pollAll(int timeoutMillis, int *outFd, int *outEvents, void **outData) {
-    static int pollCount = 0;
-    pollCount++;
-    if (pollCount <= 5 || pollCount % 1000 == 0) {
-        fprintf(stderr, "=== FakeLooper::pollAll call #%d tid=%lu ===\n", pollCount,
-                (unsigned long)std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    }
-    associatedWindowCallbacks->startSendEvents();
-    if(textInput != jniSupport->getTextInputHandler().isEnabled()) {
-        textInput = jniSupport->getTextInputHandler().isEnabled();
-        if(textInput) {
-            associatedWindow->startTextInput();
-        } else {
-            associatedWindow->stopTextInput();
-        }
-    }
-
-    if(androidEvent) {
-        pollfd f;
-        f.fd = androidEvent.fd;
-        f.events = androidEvent.events;
-        if(poll(&f, 1, 0) > 0) {
-            androidEvent.fill(outFd, outData);
-            if(outEvents)
-                *outEvents = f.revents;
-            return androidEvent.ident;
-        }
-    }
-
-    if(inputEntry && fakeInputQueue.hasEvents()) {
-        inputEntry.fill(outFd, outData);
-        return inputEntry.ident;
-    }
-
-    associatedWindow->pollEvents();
-    associatedWindowCallbacks->markRequeueGamepadInput();
-    return ALOOPER_POLL_TIMEOUT;
 }

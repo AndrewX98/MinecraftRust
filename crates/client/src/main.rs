@@ -2,6 +2,7 @@
 
 mod capi;
 mod core_patches;
+mod window_callbacks;
 mod rust_bridge;
 mod jni_support;
 mod file_picker;

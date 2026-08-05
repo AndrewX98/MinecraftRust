@@ -25,3 +25,20 @@ void Settings::save() {
 
 std::string Settings::getPath() { return ""; }
 void Settings::load() {}
+
+// FFI accessors for the Rust WindowCallbacks (window_callbacks.rs).
+extern "C" int mc_settings_get_menubarsize() {
+    return Settings::menubarsize.load();
+}
+extern "C" bool mc_settings_get_enable_keyboard_autofocus_paste_patches_1_20_60() {
+    return Settings::enable_keyboard_autofocus_paste_patches_1_20_60;
+}
+extern "C" bool mc_settings_get_fullscreen() {
+    return Settings::fullscreen;
+}
+extern "C" void mc_settings_set_fullscreen(bool fs) {
+    Settings::fullscreen = fs;
+}
+extern "C" void mc_settings_save() {
+    Settings::save();
+}
