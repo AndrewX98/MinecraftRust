@@ -18,7 +18,8 @@ pub unsafe extern "C" fn jni_FindClass(_env: *mut JNIEnv, name: *const i8) -> jc
     let id = state.next_class_id;
     state.next_class_id += 1;
     state.handles.insert(id, s.clone());
-    state.classes.insert(s.clone(), JniClass { name: s, methods: HashMap::new() });
+    state.classes.insert(s.clone(), JniClass { name: s.clone(), methods: HashMap::new() });
+    log::debug!("FindClass: created unregistered class '{}' (auto-created)", s);
     id as jclass
 }
 pub unsafe extern "C" fn jni_FromReflectedMethod(_env: *mut JNIEnv, _method: jobject) -> jmethodID { std::ptr::null_mut() }

@@ -48,6 +48,7 @@ pub unsafe extern "C" fn jni_GetFieldID(_env: *mut JNIEnv, _clazz: jclass, name:
     if name.is_null() || sig.is_null() { return std::ptr::null_mut(); }
     let n = CStr::from_ptr(name).to_string_lossy().into_owned();
     let s = CStr::from_ptr(sig).to_string_lossy().into_owned();
+    log::debug!("GetFieldID: {} ({}) — generic field (no registered table)", n, s);
     Box::into_raw(Box::new((n, s))) as jfieldID
 }
 

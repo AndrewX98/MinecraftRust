@@ -156,6 +156,7 @@ pub fn register_all_classes() {
     crate::jnivm_class_wrappers::register_all(env);
     crate::main_activity::register(env);
     crate::jni::store::register_all(env);
+    crate::jni::class_stubs::register_all(env);
     crate::jni::audio::register(env);
     crate::jni::http_client::register(env);
     crate::jni::websocket::register(env);
