@@ -56,6 +56,14 @@ In `jni_support_start_game_with_baron` (and its caller), switch the game onto th
 - **Fix the known gap:** storage dir + `getExternalStoragePath` must resolve through the Rust VM (AppPlatform `CurrentFileStoragePath is now '…'` must not be empty).
 - **Gate:** boot to main menu; storage path log line non-empty; mouse/keyboard; rendering. This is the step that decides whether the whole port is viable — if libjnivm-sys handles the game's `ga->vm` traffic, everything else is cleanup.
 
+### Phase 3 result (2026-08-05) — partial: `ga->env` switched, `ga->vm` cannot
+
+Committed `3d23a2a`. **`(*ga).env` is now the Rust env (`get_env()`) and `(*ga).vm` MUST stay the Baron VM** — pointing `ga->vm` at the Rust VM segfaults on the game thread in `Java_com_mojang_minecraftpe_MainActivity_nativeSetIntegrityTokenErrorMessage` (null-deref at `mov (%r14),%rax` with r14=0, dispatched via C++ jnivm `MDispatch`). Root cause: the game acquires per-thread envs via `ga->vm->functions->AttachCurrentThread` for its whole life, and the FakeJni per-thread/LocalFrame state behind that is load-bearing. The full switch is the port's viability test and it **fails** — the game is deeply FakeJni-bound at runtime.
+
+Also landed in this phase: `jni_AttachCurrentThread`/`AttachCurrentThreadAsDaemon` in libjnivm-sys now write `*penv` (mirroring `GetEnv`); `set_baron_env`/`BARON_ENV` and the Baron `nativeRegisterThis` invoke deleted (no-op on both VMs — the `Java_*` symbol exists nowhere); the Baron LocalFrame is kept alive only for the dormant Baron chain. Gates pass (build, 26 tests, boot to main menu, storage path non-empty, missing-symbol set == C++ baseline).
+
+**Consequences for Phase 4/5:** `ga->vm` stays Baron until either (a) the game's runtime env acquisition is routed to the Rust VM (needs libjnivm-sys to provide per-thread envs + the game to attach via `ga->vm`), or (b) the FakeJni MainActivity state (`main_activity.cpp` members like `storageDirectory`, `textInput`, `quitCallback`) is fully replicated in Rust so the runtime natives stop depending on FakeJni. The 6 launcher-provided MainActivity natives are NOT re-implemented — they are dead no-ops (offline sign-in).
+
 ### Phase 4 — Port the callback dispatchers (they already run on Rust env)
 
 Verify/replace the remaining C++ dispatchers with libjnivm-sys calls on MainActivity:
