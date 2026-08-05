@@ -752,3 +752,46 @@ extern "C" void window_callbacks_on_gamepad_axis(int gamepad, int axis, float va
     auto* cb = l->getWindowCallbacks();
     if (cb) cb->onGamepadAxis(gamepad, (GamepadAxisId)axis, value);
 }
+
+// --- CorePatches-backed helpers (Phase 2) ---
+// The Rust CorePatches (core_patches.rs) forwards the game_window_* symbol
+// handlers through these until WindowCallbacks itself is ported (Phase 3).
+extern "C" int window_callbacks_get_input_mode(void* callbacks) {
+    auto* cb = (WindowCallbacks*)callbacks;
+    return cb ? (int)cb->getInputMode() : 0;
+}
+
+extern "C" void window_callbacks_set_cursor_locked(void* callbacks, bool locked) {
+    auto* cb = (WindowCallbacks*)callbacks;
+    if (cb) cb->setCursorLocked(locked);
+}
+
+extern "C" void window_callbacks_set_fullscreen(void* callbacks, bool fs) {
+    auto* cb = (WindowCallbacks*)callbacks;
+    if (cb) cb->setFullscreen(fs);
+}
+
+extern "C" void window_callbacks_set_delayed_paste(void* callbacks) {
+    auto* cb = (WindowCallbacks*)callbacks;
+    if (cb) cb->setDelayedPaste();
+}
+
+extern "C" void window_callbacks_add_keyboard_callback(void* callbacks, void* user, bool (*cb)(void*, int, int)) {
+    auto* wcb = (WindowCallbacks*)callbacks;
+    if (wcb) wcb->addKeyboardCallback(user, cb);
+}
+
+extern "C" void window_callbacks_add_mouse_button_callback(void* callbacks, void* user, bool (*cb)(void*, double, double, int, int)) {
+    auto* wcb = (WindowCallbacks*)callbacks;
+    if (wcb) wcb->addMouseButtonCallback(user, cb);
+}
+
+extern "C" void window_callbacks_add_mouse_position_callback(void* callbacks, void* user, bool (*cb)(void*, double, double, bool)) {
+    auto* wcb = (WindowCallbacks*)callbacks;
+    if (wcb) wcb->addMousePositionCallback(user, cb);
+}
+
+extern "C" void window_callbacks_add_mouse_scroll_callback(void* callbacks, void* user, bool (*cb)(void*, double, double, double, double)) {
+    auto* wcb = (WindowCallbacks*)callbacks;
+    if (wcb) wcb->addMouseScrollCallback(user, cb);
+}

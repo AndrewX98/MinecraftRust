@@ -247,14 +247,9 @@ pub unsafe extern "C" fn mc_glcorepatch_gl_bind_buffer(target: c_int, buffer: u3
 }
 
 // === CorePatches: vtable patching ===
-// Most functions are in core_patches_stub.cpp (C++). Only the vtable
-// patching logic is in Rust (port of PatchUtils::VtableReplaceHelper,
-// Phase 10: patch_utils.cpp deleted).
-
-/// C++ helper functions (defined in core_patches_stub.cpp)
-extern "C" {
-    fn core_linker_dlsym(handle: *mut c_void, sym: *const c_char) -> *mut c_void;
-}
+// The `game_window_*` symbols and state live in Rust now (core_patches.rs);
+// only the vtable patching logic is here (port of
+// PatchUtils::VtableReplaceHelper, Phase 10: patch_utils.cpp deleted).
 
 /// Rust port of `PatchUtils::VtableReplaceHelper::replace` (`patch_utils.cpp:80-93`,
 /// called via the former C++ `core_vtable_replace` in core_patches_stub.cpp).
@@ -296,7 +291,7 @@ extern "C" {
 /// SIGSEGVs on a bad object pointer. Offline / main-menu play does not need
 /// XAL; Xbox Live features remain unavailable until real HTTP+XAL work.
 unsafe fn patch_xal_initialize_noop(handle: *mut c_void) {
-    let sym = core_linker_dlsym(handle, c"XalInitialize".as_ptr());
+    let sym = linker::mcpelauncher_dispatch_dlsym(handle, c"XalInitialize".as_ptr());
     if sym.is_null() {
         log::warn!("CorePatches: XalInitialize not found — cannot soft-disable XAL");
         return;
@@ -335,7 +330,7 @@ unsafe fn patch_xal_initialize_noop(handle: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn core_patches_install_impl(handle: *mut c_void) {
     let vtable_sym = c"_ZTV21AppPlatform_android23";
-    let vtable_ptr = core_linker_dlsym(handle, vtable_sym.as_ptr());
+    let vtable_ptr = linker::mcpelauncher_dispatch_dlsym(handle, vtable_sym.as_ptr());
     if vtable_ptr.is_null() {
         log::warn!("CorePatches: vtable _ZTV21AppPlatform_android23 not found");
     } else {

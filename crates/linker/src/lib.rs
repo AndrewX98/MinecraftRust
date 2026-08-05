@@ -1387,7 +1387,8 @@ struct DlInfo {
 /// C++ linker dependency.
 ///
 /// Consumers: hook.cpp, minecraft_utils.cpp, fmod_utils.cpp, patch_utils.cpp,
-/// crash_handler.cpp, jni_support.cpp, jni_bridge_stub.cpp, core_patches_stub.cpp,
+/// crash_handler.cpp, jni_support.cpp, jni_bridge_stub.cpp (CorePatches now in
+/// Rust — core_patches.rs),
 /// and the Rust libdl registration in `get_libdl_symbols` (fmod relocation override).
 
 /// Return the Rust handle encoded in an opaque pointer, or 0 if it is not a

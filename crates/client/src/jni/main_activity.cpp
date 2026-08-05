@@ -20,12 +20,11 @@
 #include <fstream>
 #include <android/keycodes.h>
 #include <android/native_activity.h>
-class CorePatches {
-public:
-    static void showMousePointer();
-    static void hideMousePointer();
-    static void setPendingDelayedPaste();
-};
+// Phase 2: CorePatches is ported to Rust (core_patches.rs); these extern "C"
+// symbols replace the former CorePatches static methods.
+extern "C" void core_patches_show_mouse_pointer();
+extern "C" void core_patches_hide_mouse_pointer();
+extern "C" void core_patches_set_pending_delayed_paste();
 
 #include <log.h>
 
@@ -486,7 +485,7 @@ FakeJni::JInt MainActivity::getKeyFromKeyCode(FakeJni::JInt keyCode, FakeJni::JI
 #endif
     if(modCTRL && keyCode == AKEYCODE_V && (!textInput || !textInput->isEnabled())) {
         if(Settings::enable_keyboard_autofocus_paste_patches_1_20_60) {
-            CorePatches::setPendingDelayedPaste();
+            core_patches_set_pending_delayed_paste();
             return 'v';
         }
         return 0;
@@ -538,9 +537,9 @@ void MainActivity::setLastChar(FakeJni::JInt sym) {
 }
 
 void MainActivity::lockCursor() {
-    CorePatches::hideMousePointer();
+    core_patches_hide_mouse_pointer();
 }
 
 void MainActivity::unlockCursor() {
-    CorePatches::showMousePointer();
+    core_patches_show_mouse_pointer();
 }

@@ -7,8 +7,8 @@
 #include "shader_error_patch.h"
 #include "splitscreen_patch.h"
 #include "gl_core_patch.h"
-#include "core_patches.h"
 #include "fake_egl.h"
+#include "window_callbacks.h"
 
 #include <sys/poll.h>
 #include <thread>
@@ -19,6 +19,10 @@
 
 // Forward declare Rust's window setter
 extern "C" void jni_support_on_window_created(void *s, void *window, void *input_queue);
+
+// Phase 2: CorePatches lives in Rust (core_patches.rs)
+extern "C" void core_patches_set_game_window(void* window);
+extern "C" void core_patches_set_game_window_callbacks(void* callbacks);
 
 JniSupport *FakeLooper::jniSupport;
 void *FakeLooper::rustJniSupport = nullptr;
@@ -85,8 +89,8 @@ void FakeLooper::prepare() {
     associatedWindowCallbacks = std::make_shared<WindowCallbacks>(*associatedWindow, (void*)jniSupport, rustJniSupport, fakeInputQueue);
     associatedWindowCallbacks->registerCallbacks();
 
-    CorePatches::setGameWindow(associatedWindow);
-    CorePatches::setGameWindowCallbacks(associatedWindowCallbacks);
+    core_patches_set_game_window(associatedWindow.get());
+    core_patches_set_game_window_callbacks(associatedWindowCallbacks.get());
 
     associatedWindow->show();
     SplitscreenPatch::onGLContextCreated();
@@ -97,7 +101,7 @@ void FakeLooper::prepare() {
 }
 
 FakeLooper::~FakeLooper() {
-    CorePatches::setGameWindow(nullptr);
+    core_patches_set_game_window(nullptr);
     associatedWindow.reset();
     associatedWindowCallbacks.reset();
 }

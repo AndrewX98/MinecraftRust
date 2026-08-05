@@ -304,7 +304,6 @@ fn main() {
     // Stub files
     let stub_files = [
         "settings_stub.cpp",
-        "core_patches_stub.cpp",
         "xal_webview_factory_stub.cpp",
         "window_callbacks_stub.cpp",
         "fake_egl_stub.cpp",

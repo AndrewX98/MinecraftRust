@@ -18,7 +18,6 @@
 #include <window_callbacks.h>
 #include <log.h>
 #include <minecraft/imported/android_symbols.h>
-#include "core_patches.h"
 #include "splitscreen_patch.h"
 #include "shader_error_patch.h"
 #include <cstdio>
@@ -103,6 +102,9 @@ extern "C" {
     void core_patches_hide_mouse_pointer();
     void core_patches_set_fullscreen(void*, int);
     void core_patches_install(void* handle);
+    void core_patches_set_game_window(void* window);
+    void core_patches_set_game_window_callbacks(void* callbacks);
+    void mc_register_game_window_symbols();
     void mc_relocate_glesv2_symbols(void* (*resolver)(const char*));
 }
 
@@ -160,7 +162,7 @@ extern "C" void mc_setup_android_hooks() {
         rust_load_stub("libaaudio.so.2", audio_syms);
     }
 
-    CorePatches::loadGameWindowLibrary();
+    mc_register_game_window_symbols();
 }
 
 // C++ FFI helpers for Rust prepare / pollAll / addFd / attachInputQueue
@@ -200,8 +202,8 @@ extern "C" void fake_looper_create_window_callbacks() {
 
 extern "C" void fake_looper_register_core_patches() {
     auto* l = FakeLooper::getCurrent();
-    CorePatches::setGameWindow(l->getWindowShared());
-    CorePatches::setGameWindowCallbacks(l->getWindowCallbacksShared());
+    core_patches_set_game_window(l->getWindowShared().get());
+    core_patches_set_game_window_callbacks(l->getWindowCallbacksShared().get());
 }
 
 extern "C" void fake_looper_show_window() {

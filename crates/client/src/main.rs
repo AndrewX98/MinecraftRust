@@ -1,6 +1,7 @@
 #![feature(c_variadic)]
 
 mod capi;
+mod core_patches;
 mod rust_bridge;
 mod jni_support;
 mod file_picker;
