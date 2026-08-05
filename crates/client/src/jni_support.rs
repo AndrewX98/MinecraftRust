@@ -307,19 +307,19 @@ pub unsafe extern "C" fn jni_support_register_natives(
             (b"onClose\0", b"(I)V\0"),
             (b"onFailure\0", b"()V\0"),
         ]),
-        (b"com/mojang/minecraftpe/WebView\0", &[
+        (b"com/microsoft/xal/browser/WebView\0", &[
             (b"urlOperationSucceeded\0", b"(JLjava/lang/String;ZLjava/lang/String;)V\0"),
         ]),
-        (b"com/mojang/minecraftpe/BrowserLaunchActivity\0", &[
+        (b"com/microsoft/xal/browser/BrowserLaunchActivity\0", &[
             (b"urlOperationSucceeded\0", b"(JLjava/lang/String;ZLjava/lang/String;)V\0"),
         ]),
-        (b"com/mojang/minecraftpe/NativeInputStream\0", &[
+        (b"com/xbox/httpclient/HttpClientRequestBody$NativeInputStream\0", &[
             (b"nativeRead\0", b"(JJ[BJJ)I\0"),
         ]),
-        (b"com/mojang/minecraftpe/NativeOutputStream\0", &[
+        (b"com/xbox/httpclient/HttpClientResponse$NativeOutputStream\0", &[
             (b"nativeWrite\0", b"(J[BII)V\0"),
         ]),
-        (b"com/mojang/minecraftpe/NetworkObserver\0", &[
+        (b"com/xbox/httpclient/NetworkObserver\0", &[
             (b"Log\0", b"(Ljava/lang/String;)V\0"),
         ]),
         (b"com/mojang/minecraftpe/PlayIntegrity\0", &[
@@ -337,7 +337,7 @@ pub unsafe extern "C" fn jni_support_register_natives(
 
         // Build the C++ class name for symbol resolution (replace / with _)
         let class_str = std::str::from_utf8(class_name).unwrap_or("").trim_end_matches('\0');
-        let cpp_class = class_str.replace('/', "_");
+        let cpp_class = class_str.replace('/', "_").replace('$', "_00024");
 
         let mut jni_methods: Vec<JNINativeMethod> = Vec::new();
         for &(name, sig) in entries {
