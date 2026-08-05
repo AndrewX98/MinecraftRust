@@ -53,12 +53,11 @@ main()  [main.rs:15]
 │         Rust: patches AppPlatform_android23 vtable
 │
 ├─ 8. capi::create_window_and_setup_graphics()
-│     → mc_create_window_and_setup_graphics() [jni_bridge_stub.cpp]
-│     C++:
+│     → crate::game_window::mc_create_window_and_setup_graphics() [game_window.rs, Phase 5]
+│     Rust:
 │     ├── XInitThreads() (needed by Mesa EGL)
-│     ├── Create actual X11 window (EGLUTWindow), keep in process-lifetime
-│     │   shared_ptr<GameWindow> g_window (read via mc_get_window_token())
-│     ├── MinecraftUtils::setupGLES2Symbols() — resolve real GLES2 funcs
+│     ├── Create actual X11 window via eglut (eglutCreateWindow), token =
+│     │   eglutGetWindowHandle() as ANativeWindow*/GameWindow* (mc_get_window_token())
 │     ├── mc_relocate_glesv2_symbols() — replace stub GL symbols with real
 │     ├── FakeEGL::saveCurrentWindowHandle() — capture real EGL handles
 │     └── FakeEGL::releaseContext() — release from this thread

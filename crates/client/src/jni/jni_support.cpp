@@ -598,7 +598,7 @@ void JniSupport::onWindowCreated(ANativeWindow* window, AInputQueue* inputQueue)
     this->inputQueue = inputQueue;
     fprintf(stderr, "=== JniSupport::onWindowCreated: setting activity->window ===\n");
     if (activity) {
-        activity->window = (GameWindow*)window;
+        activity->window = (void*)window;
     } else {
         fprintf(stderr, "=== JniSupport::onWindowCreated: WARNING activity is NULL! ===\n");
     }

@@ -932,10 +932,7 @@ pub extern "C" fn fake_egl_destroy_context(_display: *mut c_void, _context: *mut
 pub unsafe extern "C" fn fake_egl_make_current(
     display: *mut c_void, draw: *mut c_void, _read: *mut c_void, _context: *mut c_void,
 ) -> i32 {
-    // Match upstream FakeEGL: surface handle is GameWindow*; bind via GameWindow.
-    extern "C" {
-        fn game_window_make_current(w: *mut c_void, active: i32);
-    }
+    // Match upstream FakeEGL: surface handle is window token; bind via Rust eglut.
     static MAKE_CURRENT_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = MAKE_CURRENT_LOG.fetch_add(1, Ordering::Relaxed);
     if n < 8 {
@@ -949,7 +946,7 @@ pub unsafe extern "C" fn fake_egl_make_current(
     }
 
     if !draw.is_null() {
-        game_window_make_current(draw, 1);
+        crate::game_window::game_window_make_current(draw, 1);
         CURRENT_DRAW_SURFACE.store(draw, Ordering::SeqCst);
         // Track eglut's real surface for diagnostics / host path.
         let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
@@ -969,7 +966,7 @@ pub unsafe extern "C" fn fake_egl_make_current(
     } else {
         let prev = CURRENT_DRAW_SURFACE.load(Ordering::SeqCst);
         if !prev.is_null() {
-            game_window_make_current(prev, 0);
+            crate::game_window::game_window_make_current(prev, 0);
         } else {
             // Unbind via real EGL if we have no cached GameWindow.
             if let Some(f) = REAL_EGL_MAKE_CURRENT.load(Ordering::SeqCst).as_ref() {
@@ -998,11 +995,7 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
         }
     }
 
-    // Upstream FakeEGL: ((GameWindow*)surface)->swapBuffers()
-    extern "C" {
-        fn game_window_swap_buffers(w: *mut c_void);
-    }
-
+    // Upstream FakeEGL: ((GameWindow*)surface)->swapBuffers() -> Rust eglut.
     static SWAP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SWAP_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -1043,7 +1036,7 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
     }
 
     if !win.is_null() {
-        game_window_swap_buffers(win);
+        crate::game_window::game_window_swap_buffers(win);
         if n < 5 || n % 300 == 0 {
             log::warn!(
                 "[FakeEGL] eglSwapBuffers ok n={} win={:p} tid={:?}",
@@ -1074,10 +1067,7 @@ pub extern "C" fn fake_egl_query_surface(
     _display: *mut c_void, surface: *mut c_void, attribute: i32, value: *mut i32,
 ) -> i32 {
     if attribute == EGL_WIDTH || attribute == EGL_HEIGHT {
-        // Upstream: ((GameWindow*)surface)->getWindowSize
-        extern "C" {
-            fn game_window_get_size(w: *mut c_void, out_w: *mut i32, out_h: *mut i32);
-        }
+        // Upstream: ((GameWindow*)surface)->getWindowSize -> Rust eglut.
         let win = if !surface.is_null() {
             surface
         } else {
@@ -1086,26 +1076,21 @@ pub extern "C" fn fake_egl_query_surface(
         if !win.is_null() {
             let mut w = 0i32;
             let mut h = 0i32;
-            unsafe { game_window_get_size(win, &mut w, &mut h) };
+            unsafe { crate::game_window::game_window_get_size(win, &mut w, &mut h) };
             unsafe {
                 *value = if attribute == EGL_WIDTH { w } else { h };
             }
             return EGL_TRUE;
         }
-        // Fallback: eglut window size
+        // Fallback: eglut window size (also keeps mc_get_window_size alive for
+        // the C++ MainActivity::getScreenWidth/Height accessors).
         unsafe {
-            let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
-            if let Some(eglut_win) = win_ref.as_ref() {
-                *value = if attribute == EGL_WIDTH {
-                    eglut_win.width
-                } else {
-                    eglut_win.height
-                };
-                return EGL_TRUE;
-            }
-            *value = 32;
+            let mut w = 0i32;
+            let mut h = 0i32;
+            crate::game_window::mc_get_window_size(&mut w, &mut h);
+            *value = if attribute == EGL_WIDTH { w } else { h };
+            return EGL_TRUE;
         }
-        return EGL_TRUE;
     }
     log::warn!("[FakeEGL] eglQuerySurface {:x}", attribute);
     EGL_TRUE

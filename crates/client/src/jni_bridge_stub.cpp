@@ -12,7 +12,6 @@
 #include "fake_audio.h"
 #include "xbox_live_helper.h"
 #include <game_window.h>
-#include <game_window_manager.h>
 #include <log.h>
 #include <minecraft/imported/android_symbols.h>
 #include "splitscreen_patch.h"
@@ -29,8 +28,6 @@ extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
 
 #include <dlfcn.h>
 
-extern "C" int eglutScreenWidth();
-extern "C" int eglutScreenHeight();
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -103,10 +100,7 @@ extern "C" {
     void core_patches_install(void* handle);
     void window_callbacks_load_gamepad_mappings();
     void mc_register_game_window_symbols();
-    void mc_relocate_glesv2_symbols(void* (*resolver)(const char*));
 }
-
-extern "C" unsigned long eglutGetWindowHandle();
 
 // ============================================================
 // Android hooks setup (uses C++ unordered_map + hybris hooks)
@@ -166,31 +160,15 @@ extern "C" void mc_setup_android_hooks() {
 // ============================================================
 // Process-lifetime state (replaces FakeLooper statics, Phase 4)
 // ============================================================
-// The GameWindow created by mc_create_window_and_setup_graphics lives for the
-// process; Rust holds the raw token via mc_get_window_token. JniSupport
-// pointers are set once during startup (fake_looper_set_*_jni_support).
+// The window token lives in Rust (`crate::game_window`, Phase 5); the C++ side
+// keeps only the JniSupport pointers set once during startup
+// (fake_looper_set_*_jni_support).
 static JniSupport* g_jni_support = nullptr;
 static void* g_rust_jni_support = nullptr;
-static std::shared_ptr<GameWindow> g_window;
 
 // ============================================================
 // C++ FFI helpers for Rust prepare / pollAll / addFd / attachInputQueue
 // ============================================================
-
-extern "C" void* mc_get_window_token() {
-    return g_window.get();
-}
-
-extern "C" void* mc_create_default_window() {
-    // Fallback path: prepare ran without mc_create_window_and_setup_graphics.
-    Log::info("Launcher", "Loading gamepad mappings");
-    window_callbacks_load_gamepad_mappings();
-    Log::info("Launcher", "Creating window");
-    g_window = GameWindowManager::getManager()->createWindow("Minecraft",
-                                                             options.windowWidth, options.windowHeight, options.graphicsApi);
-    FakeEGL::setupGLOverrides();
-    return g_window.get();
-}
 
 extern "C" void mc_set_looper_running_cpp(bool running) {
     if (g_jni_support) g_jni_support->setLooperRunning(running);
@@ -208,10 +186,6 @@ extern "C" void* mc_get_rust_jni_support() {
     return g_rust_jni_support;
 }
 
-extern "C" void mc_window_show(void* w) {
-    if (w) ((GameWindow*)w)->show();
-}
-
 extern "C" void fake_looper_splitscreen_patch_gl_created() {
     SplitscreenPatch::onGLContextCreated();
 }
@@ -220,34 +194,7 @@ extern "C" void fake_looper_shader_error_patch_gl_created() {
     ShaderErrorPatch::onGLContextCreated();
 }
 
-// C++ FFI helpers for Rust pollAll / addFd / attachInputQueue (token-parameter based)
-extern "C" void fake_looper_window_poll_events(void* w) {
-    if (w) ((GameWindow*)w)->pollEvents();
-}
-extern "C" void fake_looper_window_start_text_input(void* w) {
-    if (w) ((GameWindow*)w)->startTextInput();
-}
-extern "C" void fake_looper_window_stop_text_input(void* w) {
-    if (w) ((GameWindow*)w)->stopTextInput();
-}
-// Upstream FakeEGL path: surface handle IS the GameWindow* (eglCreateWindowSurface
-// returns the native_window pointer). makeCurrent/swapBuffers go through GameWindow.
-extern "C" void game_window_make_current(void* w, int active) {
-    if (!w) return;
-    ((GameWindow*)w)->makeCurrent(active != 0);
-}
-extern "C" void game_window_swap_buffers(void* w) {
-    if (!w) return;
-    ((GameWindow*)w)->swapBuffers();
-}
-extern "C" void game_window_get_size(void* w, int* out_w, int* out_h) {
-    if (!w) return;
-    int ww = 0, hh = 0;
-    ((GameWindow*)w)->getWindowSize(ww, hh);
-    if (out_w) *out_w = ww;
-    if (out_h) *out_h = hh;
-}
-
+// (window helpers ported to Rust — see crate::game_window, Phase 5)
 extern "C" void fake_looper_finish(void* native) {
     ANativeActivity* an = (ANativeActivity*)native;
     FakeJni::JniEnvContext ctx(*(FakeJni::Jvm *)an->vm);
@@ -265,41 +212,9 @@ extern "C" void fake_looper_on_game_activity_close(void* native) {
 }
 
 // ============================================================
-// Window creation + GL setup (uses GameWindowManager)
+// Window creation + GL setup (ported to Rust — crate::game_window, Phase 5)
 // ============================================================
-
-extern "C" void mc_create_window_and_setup_graphics() {
-    typedef int (*XInitThreadsFn)(void);
-    XInitThreadsFn xinit = (XInitThreadsFn)dlsym(RTLD_DEFAULT, "XInitThreads");
-    if (xinit) {
-        xinit();
-        Log::info("LAUNCHER", "XInitThreads() called successfully");
-    } else {
-        Log::warn("LAUNCHER", "XInitThreads not available");
-    }
-
-    Log::info("LAUNCHER", "Creating window via GameWindowManager...");
-    auto windowManager = GameWindowManager::getManager();
-    Log::info("LAUNCHER", "GameWindowManager created, creating window...");
-    int win_w = eglutScreenWidth();
-    int win_h = eglutScreenHeight();
-    Log::info("LAUNCHER", "Using screen size: %dx%d", win_w, win_h);
-    auto window = windowManager->createWindow("Minecraft", win_w, win_h, GraphicsApi::OPENGL_ES2);
-    Log::info("LAUNCHER", "Window created successfully");
-    g_window = window;
-
-    auto procAddr = windowManager->getProcAddrFunc();
-    FakeEGL::setProcAddrFunction(reinterpret_cast<void* (*)(const char*)>(procAddr));
-    FakeEGL::installLibrary();
-    FakeEGL::setupGLOverrides();
-    FakeEGL::saveCurrentWindowHandle();
-    FakeEGL::saveNativeWindow(eglutGetWindowHandle());
-    FakeEGL::releaseContext();
-    Log::info("LAUNCHER", "FakeEGL installed");
-
-    mc_relocate_glesv2_symbols(fake_egl::eglGetProcAddress);
-    Log::info("LAUNCHER", "Graphics setup complete");
-}
+// mc_create_window_and_setup_graphics now lives in Rust and uses Rust eglut.
 
 // ============================================================
 // C++ JniSupport factory (needed by looper/window internals)

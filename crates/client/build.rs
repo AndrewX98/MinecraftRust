@@ -21,8 +21,9 @@ fn main() {
     // (android_log_varargs.cpp, jnivm_mod_api.cpp) were ported to Rust.
     // mcpelauncher-cll-telemetry was removed when cll-telemetry was ported
     // to the Rust crate crates/cll-telemetry (client/src/cll_telemetry.rs).
+    // Phase 5 removed `mcpelauncher-gamewindow` (window owned by Rust eglut,
+    // see crate::game_window.rs).
     static STATIC_LIBS: &[&str] = &[
-        "mcpelauncher-gamewindow",
         "mcpelauncher-client-jni",
     ];
     println!("cargo:rustc-link-arg-bins=-Wl,-Bstatic");

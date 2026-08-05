@@ -1,6 +1,6 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **2 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **1 `cc::Build` instance** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
 
 The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils**) has been **ported to Rust** (`crates/simple-ipc/`, `crates/msa-daemon-client/`, `crates/daemon-utils/`) and removed from the C++ build — see `docs/PORT_SIMPLEIPC.md`, `docs/PORT_MSA_DAEMON_CLIENT.md`, `docs/PORT_DAEMON_UTILS.md`.
 
@@ -10,7 +10,7 @@ The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils*
 |---------|------|---------|-----------|
 | ~~`mcpelauncher-core`~~ | ~~Game loading, hooks, patching, mod loader~~ → **DELETED** (last 2 files ported to Rust) | – | – |
 | ~~`cll-telemetry`~~ | ~~Telemetry collection + upload~~ → **DELETED** (ported to Rust `crates/cll-telemetry/`) | – | – |
-| `game-window` | X11/EGL window, input handling | 7 objects | **MEDIUM** |
+| ~~`game-window`~~ | ~~X11/EGL window, input handling~~ → **DELETED Phase 5** (window owned by Rust `crate::game_window.rs` + eglut) | – | – |
 | ~~`mcpelauncher-client-bridge`~~ | ~~Rust ↔ C++ bridge (capi.cpp)~~ → **Phase 10: deleted** (ported to Rust `capi.rs`) | – | – |
 | `mcpelauncher-client-jni` | JNI stubs, class wrappers, libjnivm C++ | ~35+ objects | **LARGE** |
 
@@ -28,7 +28,7 @@ The final two files (`android_log_varargs.cpp`, `jnivm_mod_api.cpp`) were the la
 - `android_log_varargs.cpp` → `client/android_log_hook.rs` (`__android_log_print/vprint/assert`); the liblog stub symbols in `capi.rs` now point at the Rust fns.
 - `jnivm_mod_api.cpp` → `client/mod_api.rs`: `mc_mod_log`/`mc_mod_vlog` (C varargs), `mc_mod_request_google_credentials` (fork/exec, caller ret-address via a `#[naked]` trampoline), and `mc_mod_jnivm_register_method` **stubbed to return false** (the C++ impl bound `jnivm::Method` handles on the FakeJni VM — deferred to the `libjnivm-sys` JNI port; mods are not loaded anyway).
 
-The `mcpelauncher-core` entry was removed from both `build.rs` `core_sources` and `client/build.rs` `STATIC_LIBS` (now 2 static libs).
+The `mcpelauncher-core` entry was removed from both `build.rs` `core_sources` and `client/build.rs` `STATIC_LIBS` (now 1 static lib).
 
 **Used at runtime?** YES — every code path. The entire game loading pipeline calls into this library.
 
@@ -44,9 +44,11 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 - Loads stub libs (libEGL.so, libGLESv2.so, libfmod.so, libaaudio.so, libHttpClient.Android.so, etc.)
 - Exports the full `mcpelauncher_dispatch_*` surface (`dlopen`/`dlsym`/`dlclose`/`dladdr`/`relocate`/`unload_library`/`get_library_base`/`get_library_code_region`) and `mcpelauncher_linker_{resolve,get}_rust_handle` natively
 
-### `game-window` (916 KB) — MEDIUM
+### `game-window` — DELETED Phase 5 ✅
 
-**6 files compiled** (from 24 available, eglut path):
+**Deleted entirely (2026-08-05):** the 6 compiled files, the `manifest_libs/gamewindow/` sources, `include/game-window/{game_window_manager.h,game_window_error_handler.h}`, and `include/eglut/`. The window token now lives in Rust `crate::game_window.rs` (`create_window` → eglut → `eglutGetWindowHandle` as `ANativeWindow*`/`GameWindow*`; `game_window_make_current`/`swap_buffers`/`get_size`, `mc_get_window_size`, `mc_set_clipboard_text`, `mc_get_key_from_key_code`, `mc_create_window_and_setup_graphics`). Gamepad C++ (`LinuxGamepadJoystickManager`) was ported to `crate::gamepad` (`joystick.rs`, `window.rs`) — the remaining C++ `joystick_manager_linux_gamepad.cpp` glue died with the lib. The `-lmcpelauncher-gamewindow` link directive was removed from `client/build.rs`; the gamewindow `cc::Build` block was removed from `cpp-bridge-sys/build.rs`. See `docs/PORT_GAMEWINDOW.md`.
+
+**Historical (pre-deletion):** 6 files compiled (from 24 available, eglut path):
 
 | File | Lines | Role |
 |------|-------|------|
@@ -85,7 +87,7 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 
 **Ported to Rust:** `crates/cll-telemetry/` (1,135 lines: `event.rs`, `batch.rs`, `uploader.rs`, `config.rs`, `manager.rs`, `serializer.rs`, `compressor.rs`, `task.rs`; HTTP via `reqwest` (blocking), gzip via `flate2`, JSON via `serde_json`). Wired into the client by `crates/client/src/cll_telemetry.rs` (`EventManager` singleton + Rust `CllUploadAuthStep` + periodic flush thread), driven by the JNI natives `Interop.initCLL`/`Interop.logCLL` in `crates/client/src/jni/xbox_live.rs`. See `docs/PORT_CLL_TELEMETRY.md`.
 
-**Status:** The `mcpelauncher-cll-telemetry` cc::Build target, its 15 sources, the `include/cll-telemetry/` headers, the `cll_upload_auth_step_stub.cpp` + `manifest_headers/cll_upload_auth_step.h` stubs, and `include/build/single_include/nlohmann/json.hpp` were all **deleted**; removed from `client/build.rs` `STATIC_LIBS` (now 2 static libs). The Rust stack is wired but idle — the game never calls `initCLL`/`logCLL` while running as an offline PlayFab guest, and real uploads would need MSA tokens.
+**Status:** The `mcpelauncher-cll-telemetry` cc::Build target, its 15 sources, the `include/cll-telemetry/` headers, the `cll_upload_auth_step_stub.cpp` + `manifest_headers/cll_upload_auth_step.h` stubs, and `include/build/single_include/nlohmann/json.hpp` were all **deleted**; removed from `client/build.rs` `STATIC_LIBS` (now 1 static lib). The Rust stack is wired but idle — the game never calls `initCLL`/`logCLL` while running as an offline PlayFab guest, and real uploads would need MSA tokens.
 
 ### `mcpelauncher-common` (148 KB) — SMALL
 
@@ -107,13 +109,10 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 ```
 mcpelauncher-common  (no deps)
 
-linux-gamepad  (no deps, used by game-window)
-game-window  →  linux-gamepad
-
 mcpelauncher-core  →  mcpelauncher-common
 ```
 
-**Ported to Rust and removed from the C++ graph:** `simpleipc` → `crates/simple-ipc/`, `daemon-client-utils` → `crates/daemon-utils/`, `msa-daemon-client` → `crates/msa-daemon-client/`, `cll-telemetry` → `crates/cll-telemetry/`. Their C++ dependency chain (`simpleipc` ← `daemon-client-utils` ← `msa-daemon-client`) is now `crates/simple-ipc/` ← `crates/daemon-utils/` ← `crates/msa-daemon-client/` ← `client`.
+**Ported to Rust and removed from the C++ graph:** `game-window` (→ `crate::game_window.rs` + eglut, Phase 5), `linux-gamepad` (→ `crate::gamepad`), `simpleipc` → `crates/simple-ipc/`, `daemon-client-utils` → `crates/daemon-utils/`, `msa-daemon-client` → `crates/msa-daemon-client/`, `cll-telemetry` → `crates/cll-telemetry/`. Their C++ dependency chain (`simpleipc` ← `daemon-client-utils` ← `msa-daemon-client`) is now `crates/simple-ipc/` ← `crates/daemon-utils/` ← `crates/msa-daemon-client/` ← `client`.
 
 `logger` and `file-util` are no longer C++ static libs — both are ported to Rust (`crates/util/src/logger.rs`, `crates/util/src/file_util.rs`). The C++ bridge reaches them through FFI shims (`logger_stub.cpp` for `Log::vlog`, `env_path_util_*`/`file_util_*` for file-util).
 

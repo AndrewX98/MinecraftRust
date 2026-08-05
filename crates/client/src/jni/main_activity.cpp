@@ -13,7 +13,6 @@
 #include <sys/sysinfo.h>
 #endif
 #include <file_picker_factory.h>
-#include <game_window_manager.h>
 #include "uuid.h"
 #include <climits>
 #include <sstream>
@@ -25,6 +24,10 @@
 extern "C" void core_patches_show_mouse_pointer();
 extern "C" void core_patches_hide_mouse_pointer();
 extern "C" void core_patches_set_pending_delayed_paste();
+// Phase 5: window is an opaque token; these extern "C" helpers replace the
+// former C++ `GameWindow` method calls.
+extern "C" void mc_set_clipboard_text(const char* text);
+extern "C" unsigned int mc_get_key_from_key_code(int code, int meta_state);
 
 #include <log.h>
 
@@ -162,7 +165,7 @@ void MainActivity::pickImage(FakeJni::JLong callback) {
             method->invoke(frame.getJniEnv(), this, callback);
         }
     } catch(const std::exception& e) {
-        GameWindowManager::getManager()->getErrorHandler()->onError("FilePickerFactory", std::string("Failed to open the file-picker details: ") + e.what());
+        Log::warn("FilePickerFactory", "Failed to open the file-picker details: %s", e.what());
         auto method = getClass().getMethod("(J)V", "nativeOnPickImageCanceled");
         FakeJni::LocalFrame frame;
         method->invoke(frame.getJniEnv(), this, callback);
@@ -195,7 +198,7 @@ void MainActivity::launchUri(std::shared_ptr<FakeJni::JString> url) {
 }
 
 void MainActivity::setClipboard(std::shared_ptr<FakeJni::JString> tocopy) {
-    window->setClipboardText(tocopy->asStdString());
+    mc_set_clipboard_text(tocopy->asStdString().c_str());
 }
 
 void MainActivity::share(std::shared_ptr<FakeJni::JString> title, std::shared_ptr<FakeJni::JString> string, std::shared_ptr<FakeJni::JString> url) {
@@ -319,7 +322,7 @@ void MainActivity::openFile() {
             method->invoke(frame.getJniEnv(), this);
         }
     } catch(const std::exception& e) {
-        GameWindowManager::getManager()->getErrorHandler()->onError("FilePickerFactory", std::string("Failed to open the file-picker details: ") + e.what());
+        Log::warn("FilePickerFactory", "Failed to open the file-picker details: %s", e.what());
         auto method = getClass().getMethod("()V", "nativeOnPickFileCanceled");
         FakeJni::LocalFrame frame;
         method->invoke(frame.getJniEnv(), this);
@@ -341,7 +344,7 @@ void MainActivity::saveFile(std::shared_ptr<FakeJni::JString> fileName) {
             method->invoke(frame.getJniEnv(), this);
         }
     } catch(const std::exception& e) {
-        GameWindowManager::getManager()->getErrorHandler()->onError("FilePickerFactory", std::string("Failed to open the file-picker details: ") + e.what());
+        Log::warn("FilePickerFactory", "Failed to open the file-picker details: %s", e.what());
         auto method = getClass().getMethod("()V", "nativeOnPickFileCanceled");
         FakeJni::LocalFrame frame;
         method->invoke(frame.getJniEnv(), this);
@@ -523,7 +526,7 @@ FakeJni::JInt MainActivity::getKeyFromKeyCode(FakeJni::JInt keyCode, FakeJni::JI
         return 0;
     }
 
-    uint32_t gameWindowKeycode = window->getKeyFromKeyCode(mapAndroidToMinecraftKey(keyCode), mapAndroidMeta(metaState));
+    uint32_t gameWindowKeycode = mc_get_key_from_key_code((int)mapAndroidToMinecraftKey(keyCode), mapAndroidMeta(metaState));
     if(gameWindowKeycode != 0) {
         return gameWindowKeycode;
     }

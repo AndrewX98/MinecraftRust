@@ -2,8 +2,8 @@
 //!
 //! The C++ `window_callbacks_stub.cpp` is deleted; this module owns the full
 //! input dispatch. `window_callbacks_register` sets the eglut event callbacks
-//! directly (bypassing the C++ `EGLUTWindow` trampolines, which remain for the
-//! redraw path only — idle/display are not touched). Statically-unreachable
+//! directly (Phase 5 removed the C++ `EGLUTWindow` trampolines — idle/display
+//! are not set because the game drives rendering via FakeEGL). Statistically-unreachable
 //! branches from the C++ original were dropped: `inputQueue.addEvent` paths
 //! (game is always a game activity), `emulateTouch`, and the direct
 //! mouse/keyboard `SymbolsHelper` feeds.
@@ -1292,8 +1292,10 @@ pub unsafe extern "C" fn window_callbacks_register(w: *mut c_void) {
     if w.is_null() {
         return;
     }
-    // Idle/display are intentionally NOT set: the C++ EGLUTWindow keeps the
-    // redraw path (eglutIdleFunc/_eglutDisplayFunc registered in its ctor).
+    // Idle/display are intentionally NOT set: the game drives rendering itself
+    // through FakeEGL (`fake_egl_swap_buffers` → `game_window_swap_buffers` →
+    // `eglutSwapBuffers`), so no redraw callback is needed (Phase 5 removed the
+    // C++ EGLUTWindow that used to register `eglutIdleFunc`/`eglutDisplayFunc`).
     eglutReshapeFunc(Some(eglut_cb_reshape));
     eglutMouseFunc(Some(eglut_cb_mouse));
     eglutMouseRawFunc(Some(eglut_cb_mouse_raw));

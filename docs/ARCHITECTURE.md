@@ -21,7 +21,7 @@ Full Rust launcher for Minecraft Bedrock on Linux. C++ bridge is temporary scaff
 | **linker** | Pure Rust ELF linker (loads .so, resolves symbols, relocates) | None |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 function vtable for JNIEnv) | None |
 | **eglut** | Pure Rust X11/EGL windowing + event loop | `libEGL.so` via dlopen, `libX11` via `x11` crate |
-| **game-window** | winit/glutin abstraction | Not active — eglut path used instead |
+| **game_window** (in `client/`) | Thin facade over eglut: window token, window creation, FakeEGL seeding (replaces the **deleted** `game-window` winit/glutin abstraction, Phase 5) | eglut |
 | **util** | Base64, arg parser, file utils, logging, properties | None |
 | **apkinfo** | APK/AndroidManifest.xml parsing | None |
 | **simple-ipc** | Pure Rust IPC client/server over Unix sockets | None |

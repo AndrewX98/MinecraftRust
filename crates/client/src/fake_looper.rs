@@ -3,7 +3,8 @@
 //! Rust owns all looper state (per-thread `LooperState`), the `libandroid.so`
 //! looper hooks, and the `prepare` orchestration that was split across
 //! `fake_looper_stub.cpp` + the 17 `fake_looper_*` extern "C" helpers. The
-//! `GameWindow` token stays a C++-owned raw pointer (`mc_get_window_token`).
+//! window token (the game's `ANativeWindow`/`GameWindow*`) is the Rust eglut
+//! X11 window id, owned by `crate::game_window` (Phase 5).
 //!
 //! The `FakeInputQueue` is a Rust-owned `Box` stored in `LooperState`; the
 //! game-visible `AInputQueue*` handed to `JniSupport::onWindowCreated` IS that
@@ -84,22 +85,14 @@ extern "C" {
     fn mc_register_android_hook(map: *mut c_void, name: *const i8, fn_ptr: *mut c_void);
     fn fake_looper_finish(native: *mut c_void);
 
-    // C++ FFI helpers for prepare
-    fn mc_get_window_token() -> *mut c_void;
-    fn mc_create_default_window() -> *mut c_void;
+    // C++ FFI helpers for prepare (JniSupport side only; window helpers are
+    // now Rust — `crate::game_window`)
     fn mc_set_looper_running_cpp(running: bool);
     fn mc_jni_support_on_window_created_cpp(window: *mut c_void, queue: *mut c_void);
     fn mc_get_jni_support() -> *mut c_void;
     fn mc_get_rust_jni_support() -> *mut c_void;
-    fn mc_window_show(window: *mut c_void);
     fn fake_looper_splitscreen_patch_gl_created();
     fn fake_looper_shader_error_patch_gl_created();
-    fn game_window_make_current(window: *mut c_void, active: i32);
-
-    // C++ FFI helpers for pollAll (token-parameter based)
-    fn fake_looper_window_poll_events(window: *mut c_void);
-    fn fake_looper_window_start_text_input(window: *mut c_void);
-    fn fake_looper_window_stop_text_input(window: *mut c_void);
 }
 
 /// Active WindowCallbacks token for the current thread, resolved from looper
@@ -211,25 +204,25 @@ unsafe fn prepare_impl() -> *mut c_void {
     crate::core_patches::core_patches_set_game_window(window);
     crate::core_patches::core_patches_set_game_window_callbacks(callbacks);
 
-    mc_window_show(window);
+    crate::game_window::mc_window_show(window);
     fake_looper_splitscreen_patch_gl_created();
     fake_looper_shader_error_patch_gl_created();
-    game_window_make_current(window, 0);
+    crate::game_window::game_window_make_current(window, 0);
 
     &LOOPER_SENTINEL as *const u8 as *mut c_void
 }
 
 /// Mirrors `FakeLooper::initializeWindow`:
-/// - the process-lifetime GameWindow from `mc_create_window_and_setup_graphics`
+/// - the process-lifetime window token from `mc_create_window_and_setup_graphics`
 ///   (via `mc_get_window_token`), or
-/// - the fallback window created by the C++ `mc_create_default_window`
+/// - the fallback window created by `mc_create_default_window`
 ///   (loads gamepad mappings first, like the C++ path did).
 unsafe fn initialize_window() -> *mut c_void {
-    let token = mc_get_window_token();
+    let token = crate::game_window::mc_get_window_token();
     if !token.is_null() {
         return token;
     }
-    mc_create_default_window()
+    crate::game_window::mc_create_default_window()
 }
 
 // --- Rust implementations of addFd, attachInputQueue, pollAll ---
@@ -316,9 +309,9 @@ unsafe fn poll_all_impl(_timeout: i32, out_fd: *mut i32, out_events: *mut i32, o
     if let Some(enabled) = action {
         if !window.is_null() {
             if enabled {
-                fake_looper_window_start_text_input(window);
+                crate::game_window::fake_looper_window_start_text_input(window);
             } else {
-                fake_looper_window_stop_text_input(window);
+                crate::game_window::fake_looper_window_stop_text_input(window);
             }
         }
     }
@@ -365,7 +358,7 @@ unsafe fn poll_all_impl(_timeout: i32, out_fd: *mut i32, out_events: *mut i32, o
 
     // 3. Drain X11 events into the input queue
     if !window.is_null() {
-        fake_looper_window_poll_events(window);
+        crate::game_window::fake_looper_window_poll_events(window);
     }
     if !callbacks.is_null() {
         crate::window_callbacks::window_callbacks_mark_requeue_gamepad(callbacks);

@@ -55,7 +55,7 @@ All 11 former cmake-built static libs are now compiled locally by `cc::Build` in
 |---------|------|--------|
 | `bionic linker` | ~~Full ELF dynamic linker~~ | **DELETED Phase 6** — Rust `crates/linker/` is the only loader |
 | `mcpelauncher-core` | Game loading, hooks, patching, mod loader | **100% PORTED / DELETED** (2026-08-05) — last 2 files (`android_log_varargs.cpp`, `jnivm_mod_api.cpp`) ported to Rust via nightly `c_variadic`; `jnivm_register_method` stubbed → false |
-| `game-window` | X11/EGL window, input handling | Local `.a` via `cc::Build` |
+| `game-window` | X11/EGL window, input handling | **DELETED Phase 5** (2026-08-05) — window owned by Rust `crate::game_window.rs` + eglut; gamepad C++ ported to `gamepad/joystick.rs` |
 | `linux-gamepad` | evdev joystick + SDL mappings | Local `.a` via `cc::Build` |
 | `msa-daemon-client` | Microsoft Account auth | Local `.a` via `cc::Build` |
 | `simpleipc` | Unix IPC + RPC framework | Local `.a` via `cc::Build` |
@@ -75,8 +75,9 @@ The FakeLooper implementation has been incrementally ported to Rust across 4 pha
 | 2 | `addFd`, `attachInputQueue`, `pollAll` → `fake_looper.rs` | ✅ |
 | 3 | `prepare()` → `fake_looper.rs:120` | ✅ |
 | 4 | full `FakeLooper` class deleted → Rust `fake_looper.rs` owns all state (thread_local `CURRENT`, prepared/text-input latches, window token, queue); `fake_looper_stub.cpp`, `fake_looper.h`, `fake_inputqueue_stub.cpp`, `manifest_headers/fake_inputqueue.h` deleted | ✅ |
+| 5 | `mcpelauncher-gamewindow` C++ lib deleted → `crate::game_window.rs` creates the eglut window and owns the window token + `game_window_*`/`mc_*`/`fake_looper_window_*` helpers; `manifest_libs/gamewindow/`, `include/game-window/{game_window_manager.h,game_window_error_handler.h}`, `include/eglut/` deleted; build.rs link directives removed | ✅ |
 
-The top-level Android native function hooks (`ALooper_prepare`, `ALooper_addFd`, `ALooper_pollAll`, `AInputQueue_attachLooper`, `ANativeActivity_finish`) are all Rust functions registered via hybris. `jni_bridge_stub.cpp` keeps process globals for the C++/Rust JniSupport and window token, exposed via `mc_get_jni_support`, `mc_get_rust_jni_support`, `mc_get_window_token`, `mc_create_default_window`, `mc_window_show`, and the token-parameter window helpers (`fake_looper_window_poll_events`, `fake_looper_window_start/stop_text_input`, `game_window_make_current/swap_buffers/get_size`). Rust `FakeInputQueue*` identity-casts to `AInputQueue*`.
+The top-level Android native function hooks (`ALooper_prepare`, `ALooper_addFd`, `ALooper_pollAll`, `AInputQueue_attachLooper`, `ANativeActivity_finish`) are all Rust functions registered via hybris. `jni_bridge_stub.cpp` keeps process globals for the C++/Rust JniSupport, exposed via `mc_get_jni_support`/`mc_get_rust_jni_support`. The window token and its helpers live entirely in Rust `crate::game_window.rs` (`mc_get_window_token`, `mc_create_default_window`, `mc_window_show`, `fake_looper_window_poll_events`, `fake_looper_window_start/stop_text_input`, `game_window_make_current/swap_buffers/get_size`, `mc_get_window_size`, `mc_set_clipboard_text`, `mc_get_key_from_key_code`). Rust `FakeInputQueue*` identity-casts to `AInputQueue*`.
 
 ## Critical Path to Pure Rust
 
@@ -156,11 +157,11 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | JNI VM | 100% | 100% (bridge only remaining) |
 | EGL | 100% | 100% |
 | ELF linker (bionic) | ~30% | 100% (Rust linker crate exists, needs full relocation) |
-| Game window | ~30% | 100% (eglut done, gamepad remaining) |
+| Game window | 100% | 100% (eglut + `game_window.rs`, gamepad ported — Phase 5) |
 | JNI classes | ~85% | 100% (57/57 MainActivity methods done, store/audio/http/websocket/xbox ported; http/websocket callback wiring remaining) |
 | mcpelauncher-core | 100% | 100% (deleted — ported via nightly c_variadic; jnivm_register_method stubbed) |
 | Startup orchestration | ~60% | 100% |
-| FakeLooper | ~70% | 100% |
+| FakeLooper | 100% | 100% (5 phases done — Phases 1–5) |
 | Build system | 100% | 100% (no cmake) |
 | IPC/Telemetry | ~0% | 100% (Rust crates exist, C++ bridge still active) |
 

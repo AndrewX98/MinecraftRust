@@ -14,7 +14,7 @@ Rust declares these extern "C" functions and calls them through FFI. They are im
 | `mc_load_core_libraries` | `linker::init` + `loadLibM` + `setupHybris` | capi.cpp | Init linker, load core libs |
 | `mc_load_minecraft` | `MinecraftUtils::loadMinecraftLib` | capi.cpp | Load libminecraftpe.so |
 | `mc_setup_android_hooks` | FakeAssetManager/... + FakeEGL::installLibrary + looper/input hooks (Rust `fake_looper.rs`/`fake_inputqueue.rs`) | jni_bridge_stub.cpp | Register android hooks |
-| `mc_create_window_and_setup_graphics` | EGLUT window + GLES2 symbol setup | jni_bridge_stub.cpp | Create window, resolve GL |
+| `mc_create_window_and_setup_graphics` | `crate::game_window::mc_create_window_and_setup_graphics` (Rust, Phase 5) | game_window.rs | Create window (Rust eglut), seed FakeEGL, resolve GL |
 | `mc_egl_swap_buffers` | `fake_egl::eglSwapBuffers` | jni_bridge_stub.cpp | EGL swap (→ Rust) |
 | `mc_dlsym` | `linker::dlsym` | capi.cpp | Resolve game symbol |
 | `jni_support_create_cpp` | `jni_support_create_cpp()` (Rust → `jni_support_new_cpp()`) | jni_support.rs | Create C++ JniSupport |
@@ -108,7 +108,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | File | Lines | Role |
 |------|-------|------|
 | `capi.cpp` | 213 | Low-level bridge: path setup, linker init, GLES2 symbol registration |
-| `jni_bridge_stub.cpp` | 439 | Android hooks, window creation, game lib loading, C++ JniSupport FFI wrappers + process globals (window token, JniSupport getters), FakeJni/Baron LocalFrame wrappers |
+| `jni_bridge_stub.cpp` | 439 | Android hooks, game lib loading, C++ JniSupport FFI wrappers + process globals (JniSupport getters), FakeJni/Baron LocalFrame wrappers |
 | `jnivm_class_wrappers.cpp` | 647 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs` — C++ kept for `registerClass<>()` linker deps from `jni_support.cpp`) |
 | `fake_egl_stub.cpp` | 161 | Delegates all EGL functions to Rust eglut module |
 | `store_stub.cpp` | 96 | Store JNI stubs (Store, StoreFactory, NativeStoreListener, etc.) |
@@ -141,4 +141,6 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | Audio JNI (AudioDevice) | `pulseaudio.cpp` + `sdl3audio.cpp` | `jni/audio.rs` (cpal-based output) | Done |
 | HTTP Client JNI | `lib_http_client.cpp` | `jni/http_client.rs` (reqwest-based) | Partial (response callbacks not wired) |
 | WebSocket JNI | `lib_http_client_websocket.cpp` | `jni/websocket.rs` (tungstenite-based) | Partial (callbacks not wired) |
+| Game window | `mcpelauncher-gamewindow` lib + `window_eglut.cpp`/`window_manager_eglut.cpp`/`game_window_manager.cpp` | `crate::game_window.rs` (eglut window token + window creation + FakeEGL seeding) | Done (Phase 5) |
+| MainActivity screen size / clipboard / keys | `main_activity.h` `window->getWindowSize`, `main_activity.cpp` `setClipboard`/`getKeyFromKeyCode` | `extern "C" mc_get_window_size`/`mc_set_clipboard_text`/`mc_get_key_from_key_code` (`crate::game_window`) | Done (Phase 5) |
 | UUID JNI | `uuid.cpp` → `jni/uuid_stub.cpp` | `jni/uuid_stub.cpp` (C++ stub) + Rust registration in `jni_support.rs` | Done |

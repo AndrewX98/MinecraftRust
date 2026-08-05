@@ -17,7 +17,6 @@ use minecraft_imported_symbols::GLESV2_SYMBOLS;
 
 extern "C" {
     fn mc_setup_android_hooks();
-    fn mc_create_window_and_setup_graphics();
     pub fn mc_egl_swap_buffers(display: *mut c_void, surface: *mut c_void) -> i32;
     fn mc_dlsym(handle: *mut c_void, symbol: *const i8) -> *mut c_void;
     fn jni_support_register_minecraft_natives_cpp(s: *mut c_void,
@@ -144,8 +143,11 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
     Ok(())
 }
 
+/// Phase 5 Rust port of `jni_bridge_stub.cpp mc_create_window_and_setup_graphics`.
+/// Creates the eglut window and seeds FakeEGL — the C++ `GameWindowManager` /
+/// `EGLUTWindow` path was deleted (see `game_window.rs`).
 pub fn create_window_and_setup_graphics() {
-    unsafe { mc_create_window_and_setup_graphics() }
+    unsafe { crate::game_window::mc_create_window_and_setup_graphics() }
 }
 
 pub fn load_minecraft() -> Result<*mut c_void, ()> {

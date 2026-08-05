@@ -242,24 +242,12 @@ fn main() {
     // --- simpleipc (14 files): ported to Rust crate simple-ipc (see docs/PORT_SIMPLEIPC.md) ---
     // --- daemon-client-utils: ported to Rust crate daemon-utils ---
     // --- msa-daemon-client: ported to Rust crate msa-daemon-client ---
-    let gwin = client_dir.join("src/manifest_libs/gamewindow");
-    let gwin_sources: Vec<PathBuf> = [
-        "game_window_manager.cpp",
-        "game_window_error_handler.cpp",
-        "joystick_manager.cpp",
-        "window_eglut.cpp",
-        "window_manager_eglut.cpp",
-        "window_with_linux_gamepad.cpp",
-    ]
-    .iter()
-    .map(|f| gwin.join(f))
-    .collect();
-    incr_compile("mcpelauncher-gamewindow", &gwin_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("game-window"));
-        b.include(local_inc.join("eglut"));
-        b.include(&gwin);
-    });
+    // --- mcpelauncher-gamewindow: Phase 5 DELETED. Rust eglut creates the
+    //     window directly (crate::game_window.rs); the C++ EGLUTWindow /
+    //     GameWindowManager / WindowWithLinuxJoystick / joystick_manager chain
+    //     and the include/game-window + include/eglut headers are gone. The
+    //     window token (the game's ANativeWindow/GameWindow*) is the eglut X11
+    //     window id; FakeEGL make-current/swap/get-size forward to Rust eglut. ---
 
     // --- mcpelauncher-client-jni (JNI bridge + stubs + libjnivm) ---
     let mut client_sources: Vec<PathBuf> = Vec::new();
@@ -382,7 +370,8 @@ fn main() {
         b.include(local_inc.join("mcpelauncher-common"));
         b.include(local_inc.join("epoll-shim"));
         b.include(local_inc.join("properties-parser"));
-        b.include(local_inc.join("mcpelauncher-errorwindow"));
+        // mcpelauncher-errorwindow include dir deleted (Phase 5) — its only header
+        // `errorwindow.h` depended on the deleted `game_window_error_handler.h`.
         b.include(local_inc.join("linux-gamepad"));
         b.include(local_inc.join("file-picker"));
         b.include(local_inc.join("libc-shim"));

@@ -93,6 +93,9 @@ public:
     }
 };
 #include <fstream>
+
+extern "C" void mc_get_window_size(int* out_w, int* out_h);
+
 class MainActivity : public NativeActivity {
 private:
     bool ignoreNextHideKeyboard = false;
@@ -107,7 +110,7 @@ public:
     std::string storageDirectory;
     TextInputHandler *textInput = nullptr;
     std::function<void()> quitCallback;
-    GameWindow *window;
+    void* window;
 
     int getAndroidVersion() {
         return BuildVersion::SDK_INT;
@@ -115,25 +118,25 @@ public:
 
     int getScreenWidth() {
         int width, height;
-        window->getWindowSize(width, height);
+        mc_get_window_size(&width, &height);
         return width;
     }
 
     int getScreenHeight() {
         int width, height;
-        window->getWindowSize(width, height);
+        mc_get_window_size(&width, &height);
         return height;
     }
 
     int getDisplayWidth() {
         int width, height;
-        window->getWindowSize(width, height);
+        mc_get_window_size(&width, &height);
         return width;
     }
 
     int getDisplayHeight() {
         int width, height;
-        window->getWindowSize(width, height);
+        mc_get_window_size(&width, &height);
         return height;
     }
 

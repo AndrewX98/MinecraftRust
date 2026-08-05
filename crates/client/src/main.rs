@@ -3,6 +3,7 @@
 mod capi;
 mod core_patches;
 mod window_callbacks;
+mod game_window;
 mod rust_bridge;
 mod jni_support;
 mod file_picker;
@@ -137,7 +138,8 @@ fn main() {
     capi::setup_android_hooks();
     log::info!("mcpelauncher-client: android hooks registered successfully");
 
-    // Create window via GameWindowManager and register GLES2 symbols from real GL driver.
+    // Create the Rust eglut window and register GLES2 symbols from real GL driver
+    // (Phase 5: replaces the deleted C++ GameWindowManager path).
     capi::create_window_and_setup_graphics();
     log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
 

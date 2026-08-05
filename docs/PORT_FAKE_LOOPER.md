@@ -1,6 +1,6 @@
 # Port: FakeLooper + WindowCallbacks + FakeInputQueue + CorePatches
 
-**Status: Phases 1–4 DONE** — `FakeInputQueue`, `CorePatches`, `WindowCallbacks`, and `FakeLooper` are fully ported to Rust; their C++ files are deleted and `nm -C` shows zero remaining `FakeLooper`/`WindowCallbacks`/`FakeInputQueue`/`CorePatches` C++ symbols. The C++ `GameWindow` (gamewindow lib) stays as the window token through Phase 4; deleting it entirely is a separate follow-up (Phase 5).
+**Status: Phases 1–5 DONE** — `FakeInputQueue`, `CorePatches`, `WindowCallbacks`, `FakeLooper`, and the `mcpelauncher-gamewindow` C++ lib are fully ported to Rust; their C++ files are deleted and `nm -C` shows zero remaining `FakeLooper`/`WindowCallbacks`/`FakeInputQueue`/`CorePatches`/`EGLUTWindow`/`GameWindowManager` C++ symbols. The window token lives in Rust `crate::game_window.rs` (Phase 5).
 
 ## Role
 
@@ -78,15 +78,19 @@ Headers `manifest_headers/fake_inputqueue.h`, `manifest_headers/window_callbacks
 - **Tests**: `EventEntry` fill/is_valid, poll ordering, text-input latch transitions (7 new → 26 total).
 - **Verify (passing)**: boot + `RUST_LOG=linker=info`; `nm -C` shows no remaining `FakeLooper`/`WindowCallbacks`/`FakeInputQueue`/`CorePatches` C++ symbols.
 
-### Phase 5 (follow-up, separate milestone) — delete the `mcpelauncher-gamewindow` C++ lib
-- Rust eglut creates the window directly (no `GameWindowManager`); EGL surface token switches from `GameWindow*` to the Rust eglut window; `game_window_make_current`/`swap_buffers`/`get_size` move to Rust; delete the 6 gamewindow .cpp files + `include/game-window` + `include/eglut` + gamepad C++.
+### Phase 5 — delete the `mcpelauncher-gamewindow` C++ lib ✅ DONE
+- Rust eglut creates the window directly (no `GameWindowManager`); EGL surface token switches from `GameWindow*` to the Rust eglut window token; `game_window_make_current`/`swap_buffers`/`get_size` move to Rust; delete the 6 gamewindow .cpp files + `include/game-window` (trimmed `game_window.h` keeps only enums) + `include/eglut` + gamepad C++.
+- New `game_window.rs` (~120 lines): `create_window` (`eglutInitX11ClassInstanceName` → `eglutInit` → `eglutInitWindowSize` → `eglutInitAPIMask(EGLUT_OPENGL_ES2_BIT)` → `eglutCreateWindow("Minecraft")`); the token is `eglutGetWindowHandle()` as `*mut c_void` (doubles as `ANativeWindow*`/`GameWindow*`/FakeEGL surface). Exports `mc_get_window_token`, `mc_create_default_window`, `mc_window_show`, `fake_looper_window_poll_events`, `fake_looper_window_start/stop_text_input`, `game_window_make_current`/`swap_buffers`/`get_size`, `mc_get_window_size`, `mc_set_clipboard_text`, `mc_get_key_from_key_code`, and `mc_create_window_and_setup_graphics` (`XInitThreads` → `create_window` → seed FakeEGL → relocate GLESv2). `real_egl_get_proc_address()` `dlopen`s `libEGL.so` for the FakeEGL proc-address resolver (the FakeEGL wrapper self-deadlocks).
+- C++ stripped: `jni_bridge_stub.cpp` (GameWindowManager + window helpers removed, only `g_jni_support`/`g_rust_jni_support` remain); `main_activity.h` `window` member is now `void*`, `getScreenWidth/Height` call `extern "C" mc_get_window_size`; `main_activity.cpp` `setClipboard`/`getKeyFromKeyCode` via `mc_set_clipboard_text`/`mc_get_key_from_key_code`, FilePickerFactory errors via `Log::warn`.
+- Deleted: `src/manifest_libs/gamewindow/` (18 files), `include/game-window/{game_window_manager.h,game_window_error_handler.h}`, `include/eglut/` (eglut.h, eglut_x11.h). `cpp-bridge-sys/build.rs` gamewindow `cc::Build` block + `client/build.rs` `-lmcpelauncher-gamewindow` link removed. `fake_egl_query_surface` EGL_WIDTH/HEIGHT falls back through `mc_get_window_size` to keep it referenced.
+- **Verify (passing)**: `cargo build -p client`; `cargo test -p client` (26/26); `nm -C` zero gamewindow symbols; boots to main menu with rendering (`eglSwapBuffers ok`). **Header-edit gotcha:** hash-based incremental does NOT track `.h` includes — after editing `main_activity.h` etc., force `cargo clean -p cpp-bridge-sys` or the C++ still runs the old inline code.
 
 ## Done when
 
 - `nm -C target/debug/client` shows no `FakeLooper`, `WindowCallbacks`, `FakeInputQueue`, or `CorePatches` C++ symbols. ✅ (Phase 4 complete)
 - `cargo test -p client` passes (per-phase unit tests). ✅ (26/26)
 - Game boots to main menu with keyboard/mouse/gamepad working after each phase. ✅
-- `mcpelauncher-gamewindow` and `mcpelauncher-client-jni` static libs reduced to the JNI/VM core — **remaining**: Phase 5 removes `mcpelauncher-gamewindow` entirely.
+- `mcpelauncher-client-jni` static lib reduced to the JNI/VM core — `mcpelauncher-gamewindow` removed entirely in Phase 5.
 
 ## Depends on / used by
 
