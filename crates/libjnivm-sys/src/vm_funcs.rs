@@ -16,8 +16,13 @@ pub fn build_vm_interface() -> JavaVMInterface {
 
 pub unsafe extern "C" fn jni_DestroyJavaVM(_vm: *mut JavaVM) -> jint { 0 }
 pub unsafe extern "C" fn jni_AttachCurrentThread(
-    _vm: *mut JavaVM, _penv: *mut *mut std::ffi::c_void, _args: *mut std::ffi::c_void,
+    _vm: *mut JavaVM, penv: *mut *mut std::ffi::c_void, _args: *mut std::ffi::c_void,
 ) -> jint {
+    if !penv.is_null() {
+        let state = crate::state::jvm_state();
+        let guard = state.lock().unwrap();
+        *penv = guard.env_handle as *mut std::ffi::c_void;
+    }
     0
 }
 pub unsafe extern "C" fn jni_DetachCurrentThread(_vm: *mut JavaVM) -> jint { 0 }
@@ -30,7 +35,12 @@ pub unsafe extern "C" fn jni_GetEnv(
     0
 }
 pub unsafe extern "C" fn jni_AttachCurrentThreadAsDaemon(
-    _vm: *mut JavaVM, _penv: *mut *mut std::ffi::c_void, _args: *mut std::ffi::c_void,
+    _vm: *mut JavaVM, penv: *mut *mut std::ffi::c_void, _args: *mut std::ffi::c_void,
 ) -> jint {
+    if !penv.is_null() {
+        let state = crate::state::jvm_state();
+        let guard = state.lock().unwrap();
+        *penv = guard.env_handle as *mut std::ffi::c_void;
+    }
     0
 }

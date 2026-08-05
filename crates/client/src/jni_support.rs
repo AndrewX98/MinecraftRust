@@ -79,7 +79,6 @@ extern "C" {
     fn fake_jni_jvm_attach_library(jvm: *mut c_void, path: *const c_char);
     fn fake_jni_local_frame_create(jvm: *mut c_void) -> *mut c_void;
     fn fake_jni_local_frame_destroy(frame: *mut c_void);
-    fn fake_jni_local_frame_get_env(frame: *mut c_void) -> *mut c_void;
     fn xbox_live_helper_set_jvm(jvm: *mut c_void);
     fn jni_support_get_game_activity_callbacks_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
@@ -98,14 +97,6 @@ extern "C" {
 
 struct JvmState {
     env: SendPtr<JNIEnv>,
-}
-
-static BARON_ENV: OnceLock<Mutex<Option<SendPtr<c_void>>>> = OnceLock::new();
-
-pub fn set_baron_env(env: *mut JNIEnv) {
-    if let Ok(mut guard) = BARON_ENV.get_or_init(|| Mutex::new(None)).lock() {
-        *guard = Some(SendPtr(env as *mut c_void));
-    }
 }
 
 fn jvm_state() -> &'static Mutex<JvmState> {
@@ -386,16 +377,20 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     let ga = game_activity_ptr as *mut GameActivity;
     let cpp_callbacks = callbacks_ptr as *mut GameActivityCallbacks;
 
-    // Get Baron JVM from C++ JniSupport
+    // Get Baron JVM from C++ JniSupport (still needed by XboxLiveHelper until Phase 5)
     let jvm = jni_support_get_jvm(s);
 
-    // Baron LocalFrame — MUST be created BEFORE library attachment.
-    // XSAPI's JNI_OnLoad spawns background threads that access the JNI env;
-    // without an active frame, concurrent env access causes SIGSEGV.
-    // This matches the C++ JniSupport::startGame ordering.
+    // Rust env for ga->env (Phase 3 partial switch). ga->vm must STAY the Baron VM:
+    // the game acquires per-thread envs via ga->vm->AttachCurrentThread, and that
+    // FakeJni per-thread state is load-bearing — pointing ga->vm at the Rust VM
+    // crashes (nativeSetIntegrityTokenErrorMessage null-deref on the game thread).
+    let rust_env = get_env();
+
+    // Keep a FakeJni LocalFrame alive around attachLibrary/gameOnCreate: the game's
+    // JNI_OnLoad (invoked via attachLibrary below) and the FakeJni runtime path
+    // need an active frame env. This frame only keeps the dormant Baron chain from
+    // faulting (removed in Phase 5).
     let frame = fake_jni_local_frame_create(jvm);
-    let baron_env = fake_jni_local_frame_get_env(frame) as *mut JNIEnv;
-    set_baron_env(baron_env);
 
     // Call DT_INIT and DT_INIT_ARRAY constructors for libminecraftpe.so.
     // The Rust linker explicitly skips constructors at load time because
@@ -414,9 +409,10 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     log::info!("jni_support: linker_rust_call_init_functions returned {}", inits_ok);
 
     // Set up MainActivity fields matching C++ startGame.
-    // Critical: Baron FakeJni MainActivity::storageDirectory must be set — the game
-    // calls getExternalStoragePath via the Baron VM (ga->vm), not only Rust JNI.
-    // Without this, AppPlatform logs CurrentFileStoragePath is now '' and paths break.
+    // Critical: the game calls getExternalStoragePath via the cached ga->env (now
+    // the Rust env), so jnivm_set_storage_dir must be set or AppPlatform logs
+    // CurrentFileStoragePath is now '' and paths break. The C++ setter below also
+    // feeds the Baron MainActivity until Phase 5 removes it.
     let dir = crate::path_helper::path_helper_get_primary_data_directory();
     if !dir.is_null() {
         jnivm_set_storage_dir(dir);
@@ -435,19 +431,19 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     jnivm_set_stbi_image_free(stbi_image_free);
     xbox_live_helper_set_jvm(jvm);
 
-    // Attach game libraries to Baron JVM — matches C++ JniSupport::startGame (jni_support.cpp:357-359).
-    // Without this, the Baron JVM can't resolve native methods in these libraries (uses system dlsym
-    // but libraries were loaded by the bionic linker). Missing this causes SIGSEGV when the game's
-    // lifecycle callbacks (onStart, onNativeWindowCreated) try JNI calls through the Baron env.
+    // Attach game libraries to Baron JVM (the game's runtime still uses the Baron VM
+    // for per-thread envs; the Rust VM handles ga->env calls and launcher dispatch).
     fake_jni_jvm_attach_library(jvm, b"libfmod.so\0" as *const _ as *const c_char);
     fake_jni_jvm_attach_library(jvm, b"libminecraftpe.so\0" as *const _ as *const c_char);
     fake_jni_jvm_attach_library(jvm, b"libPlayFabMultiplayer.so\0" as *const _ as *const c_char);
 
-    // Set up GameActivity with Baron values
+    // Set up GameActivity. ga->env is the Rust env (libjnivm-sys); ga->vm stays the
+    // Baron VM — the game caches it and uses ga->vm->AttachCurrentThread to get
+    // per-thread envs for its whole life (see note above).
     // Use the C++ GameActivityCallbacks — the game will populate these
     (*ga).callbacks = cpp_callbacks;
     (*ga).vm = jni_support_get_java_vm_ptr(s) as *mut JavaVM;
-    (*ga).env = baron_env;
+    (*ga).env = rust_env;
     (*ga).asset_manager = asset_manager;
     (*ga).java_game_activity = jni_support_get_activity_ref(s);
     (*ga).sdk_version = 32;
@@ -459,35 +455,11 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     (*ga).internal_data_path = internal_path as *const c_char;
     (*ga).external_data_path = external_path as *const c_char;
 
-    // Call nativeRegisterThis on MainActivity through Baron env
-    // BEFORE gameOnCreate, matching C++ JniSupport::startGame (jni_support.cpp:410-413).
-    // The game's nativeRegisterThis sets up the MainActivity binding in the game library
-    // so the game thread spawned by GameActivity_onCreate can find its Java activity ref.
-    // Must NOT use jni_call! macro (would return early on null) — call JNI manually.
-    let iface = get_iface(baron_env);
-    if !iface.is_null() {
-        let iface = &*iface;
-        if let Some(find_class) = iface.FindClass {
-            let main_cls = find_class(baron_env,
-                b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char);
-            if !main_cls.is_null() {
-                if let Some(get_mid) = iface.GetMethodID {
-                    let register_mid = get_mid(baron_env, main_cls,
-                        b"nativeRegisterThis\0".as_ptr() as *const c_char,
-                        b"()V\0".as_ptr() as *const c_char);
-                    if !register_mid.is_null() {
-                        if let Some(call_void) = iface.CallVoidMethod {
-                            log::info!("jni_support: calling nativeRegisterThis on Baron MainActivity");
-                            call_void(baron_env, (*ga).java_game_activity, register_mid);
-                            log::info!("jni_support: nativeRegisterThis completed");
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // nativeRegisterThis was invoked here on the Baron VM. It is a no-op on both
+    // VMs (the Java_* symbol exists nowhere, so both Rust and C++ skip it), so the
+    // call is dropped with the Baron chain.
 
-// Call GameActivity_onCreate — game caches Baron vm/env from ga.
+    // Call GameActivity_onCreate — game caches ga->vm/env (Baron VM + Rust env).
     // Also triggers FakeLooper::prepare → JniSupport::onWindowCreated which sets window.
     eprintln!("=== About to call gameOnCreate (GameActivity_onCreate) ===");
     gameOnCreate(ga, std::ptr::null_mut(), 0);
@@ -540,9 +512,8 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
         eprintln!("=== WARNING: onNativeWindowCreated is NULL ===");
     }
     eprintln!("=== Rust callbacks DONE ===");
-
-    // Destroy LocalFrame — env pointer becomes invalid after this (matching C++ behavior)
-    // C++ calls onStart/onNativeWindowCreated INSIDE the LocalFrame, so we do the same
+    // Tear down the Baron LocalFrame (kept only for the dormant Baron chain —
+    // the Rust env the game cached is a process-lifetime singleton).
     fake_jni_local_frame_destroy(frame);
 }
 
@@ -638,10 +609,9 @@ pub unsafe extern "C" fn jni_support_start_game(
     support.asset_manager = SendPtr(am);
     jnivm_set_asset_manager(am);
 
-    // Combined bridge call: sets up Baron VM/env on the GameActivity, calls
-    // GameActivity_onCreate (so the game caches Baron vm/env, not libjnivm-sys),
+    // Combined bridge call: sets up the Rust env (and Baron VM) on the GameActivity,
+    // calls GameActivity_onCreate (the game caches them for its whole life),
     // populates C++ JniSupport callbacks, and dispatches onStart/onNativeWindowCreated.
-    // All happens within a single Baron LocalFrame — matching the C++ startGame order.
     log::info!("jni_support: calling jni_support_start_game_with_baron...");
     jni_support_start_game_with_baron(
         cpp_support,
