@@ -8,11 +8,10 @@
 //! (game is always a game activity), `emulateTouch`, and the direct
 //! mouse/keyboard `SymbolsHelper` feeds.
 //!
-//! The `callbacks` token stays an opaque `*mut c_void` held by the C++
-//! `FakeLooper`; Rust resolves the active token via `fake_looper_get_callbacks`
-//! (the C++ helper that returns the current looper's callback token), matching
-//! how the deleted C++ thunks (`window_callbacks_on_gamepad_*`) used
-//! `FakeLooper::getCurrent()`.
+//! The `callbacks` token stays an opaque `*mut c_void`; since Phase 4 the
+//! Rust `FakeLooper` owns it in per-thread state and exposes it via
+//! `crate::fake_looper::current_callbacks()` (the eglut trampolines and the
+//! gamepad dispatch run on the same game thread that called `prepare`).
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
@@ -863,7 +862,6 @@ extern "C" {
     fn eglutToggleFullscreen();
     fn eglutGet(param: i32) -> i32;
     fn eglutGetWindowSize(w: *mut i32, h: *mut i32);
-    fn fake_looper_get_callbacks() -> *mut c_void;
 }
 
 // ============================================================
@@ -1104,7 +1102,7 @@ fn read_env_int(name: &str, def: i32) -> i32 {
 // ============================================================
 
 unsafe fn current_callbacks() -> *mut WindowCallbacks {
-    fake_looper_get_callbacks() as *mut WindowCallbacks
+    crate::fake_looper::current_callbacks() as *mut WindowCallbacks
 }
 
 // ============================================================

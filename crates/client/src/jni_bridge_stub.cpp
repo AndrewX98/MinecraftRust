@@ -8,8 +8,6 @@
 
 #include "jni/jni_support.h"
 #include "fake_assetmanager.h"
-#include "fake_looper.h"
-#include "fake_inputqueue.h"
 #include "fake_egl.h"
 #include "fake_audio.h"
 #include "xbox_live_helper.h"
@@ -19,7 +17,9 @@
 #include <minecraft/imported/android_symbols.h>
 #include "splitscreen_patch.h"
 #include "shader_error_patch.h"
+#include "main.h"
 #include <cstdio>
+#include <memory>
 
 extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
 extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
@@ -101,10 +101,7 @@ extern "C" {
     void core_patches_hide_mouse_pointer();
     void core_patches_set_fullscreen(void*, int);
     void core_patches_install(void* handle);
-    void core_patches_set_game_window(void* window);
-    void core_patches_set_game_window_callbacks(void* callbacks);
-    void* window_callbacks_create(void* window, void* jni_support, void* rust_jni_support, void* input_queue);
-    void window_callbacks_register(void* callbacks);
+    void window_callbacks_load_gamepad_mappings();
     void mc_register_game_window_symbols();
     void mc_relocate_glesv2_symbols(void* (*resolver)(const char*));
 }
@@ -166,49 +163,53 @@ extern "C" void mc_setup_android_hooks() {
     mc_register_game_window_symbols();
 }
 
+// ============================================================
+// Process-lifetime state (replaces FakeLooper statics, Phase 4)
+// ============================================================
+// The GameWindow created by mc_create_window_and_setup_graphics lives for the
+// process; Rust holds the raw token via mc_get_window_token. JniSupport
+// pointers are set once during startup (fake_looper_set_*_jni_support).
+static JniSupport* g_jni_support = nullptr;
+static void* g_rust_jni_support = nullptr;
+static std::shared_ptr<GameWindow> g_window;
+
+// ============================================================
 // C++ FFI helpers for Rust prepare / pollAll / addFd / attachInputQueue
-extern "C" void* fake_looper_prepare_begin() {
-    if(FakeLooper::hasCurrent() && FakeLooper::isCurrentPrepared())
-        throw std::runtime_error("Looper already prepared");
-    if(!FakeLooper::hasCurrent())
-        FakeLooper::createCurrent();
-    FakeLooper::setCurrentPrepared();
-    FakeLooper::getCurrent()->initializeWindow();
-    FakeLooper::getJniSupport()->setLooperRunning(true);
-    return (void*)FakeLooper::getCurrent();
+// ============================================================
+
+extern "C" void* mc_get_window_token() {
+    return g_window.get();
 }
 
-// Forward declare Rust's window setter (used by fake_looper_notify_window_created)
-extern "C" void jni_support_on_window_created(void *s, void *window, void *input_queue);
-
-extern "C" void fake_looper_notify_window_created() {
-    auto* l = FakeLooper::getCurrent();
-    auto* win = l->getWindow();
-    auto* queue = l->getInputQueue();
-    FakeLooper::getJniSupport()->onWindowCreated(
-        (ANativeWindow*)(void*)win, (AInputQueue*)(void*)queue);
-    auto* rust = FakeLooper::getRustJniSupport();
-    if (rust) {
-        jni_support_on_window_created(rust, (void*)win, (void*)queue);
-    }
+extern "C" void* mc_create_default_window() {
+    // Fallback path: prepare ran without mc_create_window_and_setup_graphics.
+    Log::info("Launcher", "Loading gamepad mappings");
+    window_callbacks_load_gamepad_mappings();
+    Log::info("Launcher", "Creating window");
+    g_window = GameWindowManager::getManager()->createWindow("Minecraft",
+                                                             options.windowWidth, options.windowHeight, options.graphicsApi);
+    FakeEGL::setupGLOverrides();
+    return g_window.get();
 }
 
-extern "C" void fake_looper_create_window_callbacks() {
-    auto* l = FakeLooper::getCurrent();
-    l->setWindowCallbacks(window_callbacks_create(
-        (void*)l->getWindow(), FakeLooper::getJniSupport(), FakeLooper::getRustJniSupport(), (void*)l->getInputQueue()));
-    window_callbacks_register(l->getWindowCallbacks());
+extern "C" void mc_set_looper_running_cpp(bool running) {
+    if (g_jni_support) g_jni_support->setLooperRunning(running);
 }
 
-extern "C" void fake_looper_register_core_patches() {
-    auto* l = FakeLooper::getCurrent();
-    core_patches_set_game_window(l->getWindowShared().get());
-    core_patches_set_game_window_callbacks(l->getWindowCallbacks());
+extern "C" void mc_jni_support_on_window_created_cpp(void* window, void* queue) {
+    if (g_jni_support) g_jni_support->onWindowCreated((ANativeWindow*)window, (AInputQueue*)queue);
 }
 
-extern "C" void fake_looper_show_window() {
-    auto* w = FakeLooper::getCurrent()->getWindow();
-    if (w) w->show();
+extern "C" void* mc_get_jni_support() {
+    return g_jni_support;
+}
+
+extern "C" void* mc_get_rust_jni_support() {
+    return g_rust_jni_support;
+}
+
+extern "C" void mc_window_show(void* w) {
+    if (w) ((GameWindow*)w)->show();
 }
 
 extern "C" void fake_looper_splitscreen_patch_gl_created() {
@@ -219,35 +220,15 @@ extern "C" void fake_looper_shader_error_patch_gl_created() {
     ShaderErrorPatch::onGLContextCreated();
 }
 
-extern "C" void fake_looper_window_make_current(int v) {
-    auto* w = FakeLooper::getCurrent()->getWindow();
-    if (w) w->makeCurrent((bool)v);
-}
-
-// C++ FFI helpers for Rust pollAll / addFd / attachInputQueue
-extern "C" void* fake_looper_get_window() {
-    auto* l = FakeLooper::getCurrent();
-    return l ? l->getWindow() : nullptr;
-}
-extern "C" void* fake_looper_get_callbacks() {
-    auto* l = FakeLooper::getCurrent();
-    return l ? l->getWindowCallbacks() : nullptr;
-}
-extern "C" void* fake_looper_get_input_queue() {
-    auto* l = FakeLooper::getCurrent();
-    return l ? l->getInputQueue() : nullptr;
-}
-extern "C" bool fake_looper_get_text_input_enabled() {
-    return FakeLooper::getJniSupport()->getTextInputHandler().isEnabled();
-}
+// C++ FFI helpers for Rust pollAll / addFd / attachInputQueue (token-parameter based)
 extern "C" void fake_looper_window_poll_events(void* w) {
-    ((GameWindow*)w)->pollEvents();
+    if (w) ((GameWindow*)w)->pollEvents();
 }
 extern "C" void fake_looper_window_start_text_input(void* w) {
-    ((GameWindow*)w)->startTextInput();
+    if (w) ((GameWindow*)w)->startTextInput();
 }
 extern "C" void fake_looper_window_stop_text_input(void* w) {
-    ((GameWindow*)w)->stopTextInput();
+    if (w) ((GameWindow*)w)->stopTextInput();
 }
 // Upstream FakeEGL path: surface handle IS the GameWindow* (eglCreateWindowSurface
 // returns the native_window pointer). makeCurrent/swapBuffers go through GameWindow.
@@ -266,15 +247,21 @@ extern "C" void game_window_get_size(void* w, int* out_w, int* out_h) {
     if (out_w) *out_w = ww;
     if (out_h) *out_h = hh;
 }
-extern "C" bool fake_input_queue_has_events(void* q) {
-    return ((FakeInputQueue*)q)->hasEvents();
-}
 
 extern "C" void fake_looper_finish(void* native) {
     ANativeActivity* an = (ANativeActivity*)native;
     FakeJni::JniEnvContext ctx(*(FakeJni::Jvm *)an->vm);
     auto activity = std::dynamic_pointer_cast<MainActivity>(ctx.getJniEnv().resolveReference(an->clazz));
-    activity->quitCallback();
+    if (activity) activity->quitCallback();
+}
+
+// C-linkage thunk for the GameActivity_finish hook (minecraft_load.rs).
+// Previously FakeLooper::onGameActivityClose; inlined here (Phase 4).
+extern "C" void fake_looper_on_game_activity_close(void* native) {
+    GameActivity* ga = (GameActivity*)native;
+    FakeJni::JniEnvContext ctx(*(FakeJni::Jvm *)ga->vm);
+    auto activity = std::dynamic_pointer_cast<MainActivity>(ctx.getJniEnv().resolveReference(ga->javaGameActivity));
+    if (activity) activity->quitCallback();
 }
 
 // ============================================================
@@ -299,7 +286,7 @@ extern "C" void mc_create_window_and_setup_graphics() {
     Log::info("LAUNCHER", "Using screen size: %dx%d", win_w, win_h);
     auto window = windowManager->createWindow("Minecraft", win_w, win_h, GraphicsApi::OPENGL_ES2);
     Log::info("LAUNCHER", "Window created successfully");
-    FakeLooper::setWindow(window);
+    g_window = window;
 
     auto procAddr = windowManager->getProcAddrFunc();
     FakeEGL::setProcAddrFunction(reinterpret_cast<void* (*)(const char*)>(procAddr));
@@ -315,7 +302,7 @@ extern "C" void mc_create_window_and_setup_graphics() {
 }
 
 // ============================================================
-// C++ JniSupport factory (needed by FakeLooper internals)
+// C++ JniSupport factory (needed by looper/window internals)
 // ============================================================
 
 // (create/destroy ported to Rust — see jni_support.rs)
@@ -339,11 +326,11 @@ extern "C" void jni_support_register_minecraft_natives_cpp(void* s, void* game_h
 }
 
 extern "C" void fake_looper_set_jni_support(void* support) {
-    FakeLooper::setJniSupport((JniSupport*)support);
+    g_jni_support = (JniSupport*)support;
 }
 
 extern "C" void fake_looper_set_rust_jni_support(void* support) {
-    FakeLooper::setRustJniSupport(support);
+    g_rust_jni_support = support;
 }
 
 // ============================================================

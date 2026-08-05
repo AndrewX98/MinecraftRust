@@ -21,8 +21,8 @@
 
 ## Steps
 
-1. Replace `jni_bridge_stub.cpp:287 mc_create_window_and_setup_graphics()` with a Rust equivalent in `capi.rs` that: calls `XInitThreads`, creates the window via `eglut`, seeds `FakeEGL` state (`eglutGetWindowHandle`, surface/context) — currently the only C++ entrypoint that constructs `GameWindowManager` + `EGLUTWindow`.
-2. Replace `window_callbacks_stub.cpp:699` (`GameWindowManager::getManager()`) and `fake_looper_stub.cpp:62` (`FakeLooper::setWindow`) with Rust-side window handle passing through the existing FakeLooper bridge.
+1. Replace `jni_bridge_stub.cpp:287 mc_create_window_and_setup_graphics()` with a Rust equivalent in `capi.rs` that: calls `XInitThreads`, creates the window via `eglut`, seeds `FakeEGL` state (`eglutGetWindowHandle`, surface/context) — currently the only C++ entrypoint that constructs `GameWindowManager` + `EGLUTWindow`. *(Note: Phase 4 of `PORT_FAKE_LOOPER.md` keeps the window in a process-lifetime `shared_ptr<GameWindow> g_window` here, exposed to Rust via `mc_get_window_token()`/`mc_window_show`.)*
+2. ~~Replace `window_callbacks_stub.cpp:699` (`GameWindowManager::getManager()`) and `fake_looper_stub.cpp:62` (`FakeLooper::setWindow`) with Rust-side window handle passing~~ ✅ done in Phase 4 — window token passing is Rust `fake_looper.rs` (`prepare_impl`), `window_callbacks_stub.cpp`/`fake_looper_stub.cpp` deleted.
 3. Port `GameWindowManager` facade + `EGLUTWindowManager::createWindow` + `EGLUTWindow` methods (`makeCurrent`, `swapBuffers`, `pollEvents`, `setCursorDisabled`, `setFullscreen`, `setClipboardText`, `setSwapInterval`, `setIcon`) directly onto Rust eglut calls. All are 1:1 eglut passthroughs.
 4. Move `JoystickManager::handleMissingGamePadMapping` logic into the Rust gamepad port (see `PORT_LINUX_GAMEPAD.md`).
 5. Delete the C++ `gamewindow` target from `cpp-bridge-sys/build.rs`; remove `-GAMEWINDOW` deps.

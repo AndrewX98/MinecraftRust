@@ -13,15 +13,15 @@ Rust declares these extern "C" functions and calls them through FFI. They are im
 | `mc_get_libc_symbols` | `MinecraftUtils::getLibCSymbols` | capi.cpp | Get merged libc symbols |
 | `mc_load_core_libraries` | `linker::init` + `loadLibM` + `setupHybris` | capi.cpp | Init linker, load core libs |
 | `mc_load_minecraft` | `MinecraftUtils::loadMinecraftLib` | capi.cpp | Load libminecraftpe.so |
-| `mc_setup_android_hooks` | FakeLooper/FakeAssetManager/... + FakeEGL::installLibrary | jni_bridge_stub.cpp | Register android hooks |
+| `mc_setup_android_hooks` | FakeAssetManager/... + FakeEGL::installLibrary + looper/input hooks (Rust `fake_looper.rs`/`fake_inputqueue.rs`) | jni_bridge_stub.cpp | Register android hooks |
 | `mc_create_window_and_setup_graphics` | EGLUT window + GLES2 symbol setup | jni_bridge_stub.cpp | Create window, resolve GL |
 | `mc_egl_swap_buffers` | `fake_egl::eglSwapBuffers` | jni_bridge_stub.cpp | EGL swap (→ Rust) |
 | `mc_dlsym` | `linker::dlsym` | capi.cpp | Resolve game symbol |
 | `jni_support_create_cpp` | `jni_support_create_cpp()` (Rust → `jni_support_new_cpp()`) | jni_support.rs | Create C++ JniSupport |
 | `jni_support_destroy_cpp` | `jni_support_destroy_cpp()` (Rust → `jni_support_delete()`) | jni_support.rs | Destroy C++ JniSupport |
 | `jni_support_register_minecraft_natives_cpp` | `JniSupport::registerMinecraftNatives()` | jni_bridge_stub.cpp | Register game native methods |
-| `fake_looper_set_jni_support` | Set C++ JniSupport on FakeLooper | jni_bridge_stub.cpp | Connect FakeLooper to C++ JVM |
-| `fake_looper_set_rust_jni_support` | Set Rust JniSupport on FakeLooper | jni_bridge_stub.cpp | Connect FakeLooper to Rust JVM |
+| `fake_looper_set_jni_support` | Store C++ JniSupport process global (read back via `mc_get_jni_support`) | jni_bridge_stub.cpp | JniSupport factory wiring for FakeLooper |
+| `fake_looper_set_rust_jni_support` | Store Rust JniSupport process global (read back via `mc_get_rust_jni_support`) | jni_bridge_stub.cpp | JniSupport factory wiring for FakeLooper |
 | `fake_assetmanager_create_and_set_global` | `FakeAssetManager::setGlobalAssetManager` | jni_bridge_stub.cpp | Create global asset mgr |
 
 ### In `jni_support.rs` (7 functions + dispatch)
@@ -43,7 +43,7 @@ Rust declares these extern "C" functions and calls them through FFI. They are im
 
 All functions in `rust_bridge.rs` are Rust implementations that either:
 - Stub out C++ functionality (FakeWindow, FakeSwappyGL, ThreadMover)
-- Provide `#[no_mangle]` entry points called from C++ (via `core_patches_stub.cpp`, `jni_bridge_stub.cpp`)
+- Provide `#[no_mangle]` entry points called from C++ (via `jni_bridge_stub.cpp`, `fake_egl_stub.cpp`)
 
 Key `#[no_mangle]` functions callable from C++:
 - `fake_window_set_size`, `fake_window_set_menubar_size` (stub window state)
@@ -65,7 +65,7 @@ Rust provides ~189+ `#[no_mangle]` extern "C" functions callable from C++.
 | `rust_bridge.rs` | ~62 | FakeWindow(4), SwappyGL(16), ThreadMover(2), GLCorePatch(7), CorePatches(1), WindowCallbacks(3), FakeEGL(~30), SHA/Base64/File(9), JNI variants |
 | `jni_support.rs` | ~14 | jni_support_new/destroy/register_natives/start_game_with_baron/start_game/set_looper_running/on_window_created/on_window_closed/on_window_resized/send_key_down/send_key_up/send_motion_event/create_cpp/destroy_cpp |
 | `jnivm_globals.rs` | ~12 | jnivm_set/get_main_window, jnivm_set/get_storage_dir, jnivm_set/get_text_input_handler, jnivm_set/get_asset_manager, jnivm_set/get_stbi_load_from_memory, jnivm_set/get_stbi_image_free |
-| `fake_looper.rs` | ~7 | mc_register_fake_looper_hooks, fake_looper_prepare_begin, fake_looper_notify_window_created, fake_looper_create_window_callbacks, fake_looper_register_core_patches, fake_looper_show_window, fake_looper_*patch* |
+| `fake_looper.rs` | ~7 | mc_register_fake_looper_hooks, fake_looper_hook_prepare, fake_looper_hook_add_fd, fake_looper_hook_poll_all, fake_looper_hook_poll_once, fake_looper_hook_attach_input_queue, fake_looper_hook_finish |
 | `eglut/` | ~60 | eglutInit/CreateWindow/PollEvents/MainLoop/WarpMousePointer, window mgmt, callbacks, mouse, compat, egl, event, state, xinput |
 | `file_picker.rs` | ~8 | File picker factory CRUD |
 | `libc-shim` | ~3 | get_shimmed_symbols_fill/len, shim_internal_rewrite_path |
@@ -108,20 +108,16 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | File | Lines | Role |
 |------|-------|------|
 | `capi.cpp` | 213 | Low-level bridge: path setup, linker init, GLES2 symbol registration |
-| `jni_bridge_stub.cpp` | 375 | Android hooks, window creation, game lib loading, C++ JniSupport FFI wrappers, FakeJni/Baron LocalFrame wrappers |
+| `jni_bridge_stub.cpp` | 439 | Android hooks, window creation, game lib loading, C++ JniSupport FFI wrappers + process globals (window token, JniSupport getters), FakeJni/Baron LocalFrame wrappers |
 | `jnivm_class_wrappers.cpp` | 647 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs` — C++ kept for `registerClass<>()` linker deps from `jni_support.cpp`) |
-| `window_callbacks_stub.cpp` | 710 | Window callback registration, key mapping, delegates to Rust event dispatch |
-| `core_patches_stub.cpp` | 141 | CorePatches vtable patching, cursor lock, fullscreen |
 | `fake_egl_stub.cpp` | 161 | Delegates all EGL functions to Rust eglut module |
-| `fake_looper_stub.cpp` | 152 | C++ helpers for Rust FakeLooper (prepare_begin, notify_window_created, create_window_callbacks, register_core_patches, show_window, poll helpers) |
 | `store_stub.cpp` | 96 | Store JNI stubs (Store, StoreFactory, NativeStoreListener, etc.) |
 | `jni/uuid_stub.cpp` | 34 | UUID stub — UUID::randomUUID for main_activity dependency |
 | `jni/pulseaudio_stub.cpp` | 25 | PulseAudio stub (delegates to Rust audio.rs) |
 | `jni/sdl3audio_stub.cpp` | 28 | SDL3 Audio stub (delegates to Rust audio.rs) |
-| `fake_inputqueue_stub.cpp` | 112 | Full FakeInputQueue implementation |
 | `fake_assetmanager_stub.cpp` | 214 | Full FakeAssetManager implementation |
 | `text_input_handler_stub.cpp` | 233 | C++ TextInputHandler class |
-| `main_stubs.cpp` | 28 | Stub data for Keyboard/Mouse/SplitscreenPatch globals |
+| `main_stubs.cpp` | 8 | `LauncherOptions options` + Splitscreen/Shader patch no-op stubs |
 | 15+ other stub files | ~500 | Minimal stubs for excluded JNI files (`_stub.cpp` for ecdsa, signature, cert_manager, http_stub, jbase64, arrays, asset_manager, package_source, securerandom, accounts, locale, playfab, fmod, webview, shahasher, file_picker, settings, xal_webview_factory, xbox_live_helper) |
 
 ### Notable Ports to Rust

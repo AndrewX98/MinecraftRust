@@ -67,15 +67,16 @@ All 11 former cmake-built static libs are now compiled locally by `cc::Build` in
 
 ## FakeLooper Porting
 
-The FakeLooper implementation has been incrementally ported to Rust across 3 phases:
+The FakeLooper implementation has been incrementally ported to Rust across 4 phases:
 
 | Phase | C++ → Rust | Status |
 |-------|-----------|--------|
 | 1 | 6 hybris hook lambdas (`mc_register_android_hook` calls → Rust `mc_register_fake_looper_hooks`) | ✅ |
 | 2 | `addFd`, `attachInputQueue`, `pollAll` → `fake_looper.rs` | ✅ |
 | 3 | `prepare()` → `fake_looper.rs:120` | ✅ |
+| 4 | full `FakeLooper` class deleted → Rust `fake_looper.rs` owns all state (thread_local `CURRENT`, prepared/text-input latches, window token, queue); `fake_looper_stub.cpp`, `fake_looper.h`, `fake_inputqueue_stub.cpp`, `manifest_headers/fake_inputqueue.h` deleted | ✅ |
 
-The C++ `fake_looper_stub.cpp` retains FakeLooper class state (`jniSupport`, `rustJniSupport`, `pendingWindow`), `initializeWindow()`, and FFI helpers called by the Rust hooks. The top-level Android native function hooks (`ALooper_prepare`, `ALooper_addFd`, `ALooper_pollAll`, `AInputQueue_attachLooper`, `ANativeActivity_finish`) are all Rust functions registered via hybris.
+The top-level Android native function hooks (`ALooper_prepare`, `ALooper_addFd`, `ALooper_pollAll`, `AInputQueue_attachLooper`, `ANativeActivity_finish`) are all Rust functions registered via hybris. `jni_bridge_stub.cpp` keeps process globals for the C++/Rust JniSupport and window token, exposed via `mc_get_jni_support`, `mc_get_rust_jni_support`, `mc_get_window_token`, `mc_create_default_window`, `mc_window_show`, and the token-parameter window helpers (`fake_looper_window_poll_events`, `fake_looper_window_start/stop_text_input`, `game_window_make_current/swap_buffers/get_size`). Rust `FakeInputQueue*` identity-casts to `AInputQueue*`.
 
 ## Critical Path to Pure Rust
 
@@ -106,7 +107,7 @@ A Rust version exists in `jni_support.rs` (1122 lines). Key functions ported:
 `(*ga).env` now points to `get_env()` (libjnivm-sys) instead of `baron_env` (FakeJni). This means:
 - All game JNI dispatch (`CallVoidMethod`, `CallStaticVoidMethod`, `FindClass`, etc.) goes through the Rust libjnivm-sys vtable
 - `main_activity.rs` (57 methods) and `jnivm_class_wrappers.rs` (21 methods across 9 classes) are handling real game calls
-- FakeJni is still linked and used for `FakeLooper::onGameActivityClose` (exit callback) and any C++ JNI stubs that remain
+- FakeJni is still linked and used for the `GameActivity_onCreate` bridge and any C++ JNI stubs that remain; the exit callback is `fake_looper_on_game_activity_close` (C++ helper in `jni_bridge_stub.cpp`, called from Rust `fake_looper_hook_finish`).
 
 ### C++ Global Getters/Setters (Phase 5 clean-up)
 
@@ -125,15 +126,14 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 
 | File | Lines | Bridges To |
 |------|-------|------------|
-| `window_callbacks_stub.cpp` | 713 | Key mapping, gamepad, pointer lock → Rust `rust_bridge.rs` |
+| `window_callbacks_stub.cpp` | 713 | ❌ deleted (Phase 3) — full Rust `window_callbacks.rs` |
 | `jnivm_class_wrappers.cpp` | 648 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs`) |
 | `http_client_stubs.cpp` | 441 | Stub HTTP client for XAL |
-| `jni_bridge_stub.cpp` | 375 | Android hooks, window creation, game loading, C++ wrappers for Rust `jni_support_start_game_with_baron` (FakeJni, PathHelper, XboxLiveHelper FFI) |
+| `jni_bridge_stub.cpp` | 439 | Android hooks, window creation, game loading, C++ wrappers for Rust `jni_support_start_game_with_baron` (FakeJni, PathHelper, XboxLiveHelper FFI) + process globals (window token, JniSupport getters) |
 | `text_input_handler_stub.cpp` | 233 | Text input state management |
 | `fake_assetmanager_stub.cpp` | 214 | Asset manager for game resource loading |
-| `fake_looper_stub.cpp` | 152 | FakeLooper class state + FFI helpers (hooks are Rust `fake_looper.rs`) |
 | `fake_egl_stub.cpp` | 161 | Delegates to Rust eglut |
-| `core_patches_stub.cpp` | 141 | Vtable patching, cursor lock |
+| `core_patches_stub.cpp` | 141 | ❌ deleted (Phase 2) — full Rust `core_patches.rs` |
 
 ## New Rust Files
 

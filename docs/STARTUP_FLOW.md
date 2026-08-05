@@ -56,8 +56,8 @@ main()  [main.rs:15]
 │     → mc_create_window_and_setup_graphics() [jni_bridge_stub.cpp]
 │     C++:
 │     ├── XInitThreads() (needed by Mesa EGL)
-│     ├── Create actual X11 window (EGLUTWindow)
-│     ├── FakeLooper::setWindow()
+│     ├── Create actual X11 window (EGLUTWindow), keep in process-lifetime
+│     │   shared_ptr<GameWindow> g_window (read via mc_get_window_token())
 │     ├── MinecraftUtils::setupGLES2Symbols() — resolve real GLES2 funcs
 │     ├── mc_relocate_glesv2_symbols() — replace stub GL symbols with real
 │     ├── FakeEGL::saveCurrentWindowHandle() — capture real EGL handles

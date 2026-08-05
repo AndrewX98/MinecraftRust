@@ -1,10 +1,9 @@
 //! Port of the C++ `FakeInputQueue` (Phase 1 of PORT_FAKE_LOOPER.md).
 //!
-//! Rust owns the event storage and the `libandroid.so` input hooks. The C++
-//! `FakeInputQueue` class (member of `FakeLooper`) remains as a thin forwarding
-//! wrapper so C++ `WindowCallbacks`/`FakeLooper` keep constructing events with
-//! the C++ struct types; those get copied byte-for-byte into the Rust queues
-//! here (the struct layouts are pinned by the unit tests in this module).
+//! Rust owns the event storage and the `libandroid.so` input hooks. Since
+//! Phase 4 the C++ `FakeInputQueue` forwarding wrapper is gone: `FakeLooper`
+//! (Rust) owns a `Box<FakeInputQueue>` directly and hands its pointer to the
+//! game as the `AInputQueue*`; the hooks here resolve it by identity cast.
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -200,12 +199,10 @@ impl FakeInputQueue {
     }
 }
 
-// C++ FFI accessors (defined in fake_inputqueue_stub.cpp) plus the android-hook
-// registration helper shared with fake_looper.rs.
+// The `libandroid.so` input hooks share `mc_register_android_hook` with the
+// looper hooks; the Rust `FakeInputQueue*` IS the `AInputQueue*` the game sees.
 extern "C" {
     fn mc_register_android_hook(map: *mut c_void, name: *const i8, fn_ptr: *mut c_void);
-    /// Returns the Rust `FakeInputQueue*` held by the C++ wrapper.
-    fn fake_input_queue_get_rust(queue: *mut c_void) -> *mut c_void;
 }
 
 // ============================================================
@@ -282,11 +279,13 @@ pub unsafe extern "C" fn mc_fake_input_queue_add_motion_event(
 // libandroid.so hooks (registered by mc_register_fake_input_queue_hooks)
 // ============================================================
 
+/// Phase 4: the game-visible `AInputQueue*` IS the Rust `FakeInputQueue*`
+/// (no C++ forwarding wrapper anymore), so this is an identity cast.
 fn rust_queue_of(queue: *mut c_void) -> *mut FakeInputQueue {
     if queue.is_null() {
         return std::ptr::null_mut();
     }
-    unsafe { fake_input_queue_get_rust(queue) as *mut FakeInputQueue }
+    queue as *mut FakeInputQueue
 }
 
 unsafe extern "C" fn hook_input_queue_get_event(
