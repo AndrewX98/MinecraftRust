@@ -92,12 +92,13 @@ All in `docs/`:
 - `JNI_VM.md` — libjnivm-sys vs FakeJni/Baron details
 - `PORTING_PROGRESS.md` — per-file status for JNI + static libs
 - `STATIC_LIBS.md` — 2 `cc::Build` targets, line counts, dep graph
+- `PORT_FAKE_LOOPER.md` — phased plan (FakeLooper + WindowCallbacks + FakeInputQueue + CorePatches → Rust)
 
 ## Porting (if adding Rust code)
 
 | To port | Where | Depends on |
 |---------|-------|------------|
 | JNI classes (7 files) | `crates/client/src/jni/` | `main_activity.cpp` → `store.cpp` → rest; all 57 MainActivity methods ported to Rust (`main_activity.rs`); 9 wrapper classes ported (`jnivm_class_wrappers.rs`); C++ files still linked due to FakeJni registration deps in `jni_support.cpp` |
-| FakeLooper remaining | `fake_looper.rs` vs `fake_looper_stub.cpp` | window callbacks |
+| FakeLooper remaining | `fake_looper.rs` vs `fake_looper_stub.cpp` | window callbacks; see `PORT_FAKE_LOOPER.md` (5-phase plan) |
 | Game window | eglut (pure Rust X11/EGL) | winit/glutin crate removed |
 | IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | simple-ipc/daemon-utils/msa-daemon-client **wired** (C++ chain removed — see PORT docs); cll-telemetry **wired** (`client/cll_telemetry.rs`, C++ lib deleted — see PORT_CLL_TELEMETRY.md) |
