@@ -122,7 +122,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | `fake_assetmanager_stub.cpp` | 214 | Full FakeAssetManager implementation |
 | `text_input_handler_stub.cpp` | 233 | C++ TextInputHandler class |
 | `main_stubs.cpp` | 28 | Stub data for Keyboard/Mouse/SplitscreenPatch globals |
-| 15+ other stub files | ~500 | Minimal stubs for excluded JNI files (`_stub.cpp` for ecdsa, signature, cert_manager, http_stub, jbase64, arrays, asset_manager, package_source, securerandom, accounts, locale, playfab, fmod, webview, shahasher, file_picker, settings, cll_upload_auth_step, xal_webview_factory, xbox_live_helper) |
+| 15+ other stub files | ~500 | Minimal stubs for excluded JNI files (`_stub.cpp` for ecdsa, signature, cert_manager, http_stub, jbase64, arrays, asset_manager, package_source, securerandom, accounts, locale, playfab, fmod, webview, shahasher, file_picker, settings, xal_webview_factory, xbox_live_helper) |
 
 ### Notable Ports to Rust
 

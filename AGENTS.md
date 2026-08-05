@@ -16,7 +16,7 @@ RUST_LOG=linker=info ./target/debug/client -dg /home/andrew/.local/MinecraftLaun
 
 System deps: `libstdc++-dev`, `libpulse-dev`, `libx11-dev`, `libegl1-mesa-dev`, `libcurl4-openssl-dev`, `libssl-dev`, `libsdl2-dev`, `libudev-dev`, `libpng-dev`, `libevdev-dev`.
 
-No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 4 static libs built there (`mcpelauncher-core`, `mcpelauncher-cll-telemetry`, `mcpelauncher-gamewindow`, `mcpelauncher-client-jni`; the `mcpelauncher-client-bridge` lib was **deleted in Phase 10** — `capi.cpp` ported to Rust `client/capi.rs`); `client/build.rs` only emits link directives. The IPC/auth chain (`simpleipc`, `daemon-client-utils`, `msa-daemon-client`) is **ported to Rust** (`crates/simple-ipc/`, `crates/daemon-utils/`, `crates/msa-daemon-client/`) — see `docs/PORT_SIMPLEIPC.md`. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
+No `cmake`, no `make` — C++ bridge compiled via `cc::Build` in `cpp-bridge-sys`. All 2 static libs built there (`mcpelauncher-gamewindow`, `mcpelauncher-client-jni`; `mcpelauncher-client-bridge` was **deleted in Phase 10** — `capi.cpp` ported to Rust `client/capi.rs`; `mcpelauncher-core` was **fully ported to Rust** (Phases 6–10 + nightly `c_variadic`) — its last two files (`android_log_varargs.cpp` → `client/android_log_hook.rs`, `jnivm_mod_api.cpp` → `client/mod_api.rs`) are gone; `mcpelauncher-cll-telemetry` was **fully ported to Rust** — `crates/cll-telemetry/` wired via `client/cll_telemetry.rs`); `client/build.rs` only emits link directives. The IPC/auth chain (`simpleipc`, `daemon-client-utils`, `msa-daemon-client`) is **ported to Rust** (`crates/simple-ipc/`, `crates/daemon-utils/`, `crates/msa-daemon-client/`) — see `docs/PORT_SIMPLEIPC.md`. `build.rs` now performs **hash-based incremental compilation**: editing a single `.cpp` file rebuilds only that file in ~2s.
 
 - **Initial build:** ~3 min (all C++ files compiled)
 - **Single C++ file change:** ~2s (hash-based incremental)
@@ -34,7 +34,7 @@ cargo build -p client
 | Crate | Role |
 |-------|------|
 | **client** | Sole binary — eglut, FakeEGL, CorePatches, JNI, event dispatch |
-| **cpp-bridge-sys** | C++ cc::Build compilation (4 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
+| **cpp-bridge-sys** | C++ cc::Build compilation (2 static libs) — extracted from client/build.rs so linker-only changes don't re-archive C++ |
 | **libc-shim** | 602 pure Rust libc replacements (FILE*, pthreads, sockets, mmap) |
 | **linker** | Pure Rust ELF linker — the **only** loader (C++ bionic linker deleted in Phase 6) |
 | **libjnivm-sys** | Pure Rust JNI VM (~250 fn JNIEnv vtable) |
@@ -91,7 +91,7 @@ All in `docs/`:
 - `CXX_BRIDGE.md` — all ~154 extern "C" FFI symbols
 - `JNI_VM.md` — libjnivm-sys vs FakeJni/Baron details
 - `PORTING_PROGRESS.md` — per-file status for JNI + static libs
-- `STATIC_LIBS.md` — 12 `cc::Build` targets, line counts, dep graph
+- `STATIC_LIBS.md` — 2 `cc::Build` targets, line counts, dep graph
 
 ## Porting (if adding Rust code)
 
@@ -100,4 +100,4 @@ All in `docs/`:
 | JNI classes (7 files) | `crates/client/src/jni/` | `main_activity.cpp` → `store.cpp` → rest; all 57 MainActivity methods ported to Rust (`main_activity.rs`); 9 wrapper classes ported (`jnivm_class_wrappers.rs`); C++ files still linked due to FakeJni registration deps in `jni_support.cpp` |
 | FakeLooper remaining | `fake_looper.rs` vs `fake_looper_stub.cpp` | window callbacks |
 | Game window | eglut (pure Rust X11/EGL) | winit/glutin crate removed |
-| IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | simple-ipc/daemon-utils/msa-daemon-client **wired** (C++ chain removed — see PORT docs); cll-telemetry C++ still active |
+| IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | simple-ipc/daemon-utils/msa-daemon-client **wired** (C++ chain removed — see PORT docs); cll-telemetry **wired** (`client/cll_telemetry.rs`, C++ lib deleted — see PORT_CLL_TELEMETRY.md) |

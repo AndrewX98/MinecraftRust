@@ -248,18 +248,39 @@ pub unsafe extern "C" fn mc_glcorepatch_gl_bind_buffer(target: c_int, buffer: u3
 
 // === CorePatches: vtable patching ===
 // Most functions are in core_patches_stub.cpp (C++). Only the vtable
-// patching logic is in Rust because it uses linker::dlsym and
-// PatchUtils::VtableReplaceHelper via extern "C" helpers.
+// patching logic is in Rust (port of PatchUtils::VtableReplaceHelper,
+// Phase 10: patch_utils.cpp deleted).
 
 /// C++ helper functions (defined in core_patches_stub.cpp)
 extern "C" {
     fn core_linker_dlsym(handle: *mut c_void, sym: *const c_char) -> *mut c_void;
-    fn core_vtable_replace(
-        lib: *mut c_void,
-        vta: *mut *mut c_void,
-        name: *const c_char,
-        replacement: *mut c_void,
-    );
+}
+
+/// Rust port of `PatchUtils::VtableReplaceHelper::replace` (`patch_utils.cpp:80-93`,
+/// called via the former C++ `core_vtable_replace` in core_patches_stub.cpp).
+/// With `vta` as both the reference and target vtable, this resolves `name` via the
+/// linker, scans the null-terminated vtable for the matching entry, and swaps it
+/// to `replacement`.
+#[no_mangle]
+pub unsafe extern "C" fn core_vtable_replace(
+    lib: *mut c_void,
+    vta: *mut *mut c_void,
+    name: *const c_char,
+    replacement: *mut c_void,
+) {
+    let sym = linker::mcpelauncher_dispatch_dlsym(lib, name);
+    let mut i = 0usize;
+    loop {
+        let cur = unsafe { *vta.add(i) };
+        if cur.is_null() {
+            break;
+        }
+        if cur == sym {
+            unsafe { *vta.add(i) = replacement };
+            return;
+        }
+        i += 1;
+    }
 }
 
 /// These extern "C" thunks are defined in core_patches_stub.cpp.

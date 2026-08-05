@@ -7,7 +7,6 @@
 #include "fake_egl.h"
 #include <game_window.h>
 #include <mcpelauncher/linker.h>
-#include <mcpelauncher/patch_utils.h>
 #include <log.h>
 #include <memory>
 #include <vector>
@@ -30,11 +29,7 @@ extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
 extern "C" void* core_linker_dlsym(void* handle, const char* sym) {
     return mcpelauncher_dispatch_dlsym(handle, sym);
 }
-
-extern "C" void core_vtable_replace(void* lib, void** vta, const char* name, void* replacement) {
-    PatchUtils::VtableReplaceHelper vtr(lib, vta, vta);
-    vtr.replace(name, replacement);
-}
+// core_vtable_replace was ported to Rust (rust_bridge.rs, Phase 10).
 
 // --- CorePatches member functions (have private access) ---
 

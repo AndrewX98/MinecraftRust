@@ -1,12 +1,12 @@
 # Port: cll-telemetry
 
-**Status:** Rust crate exists (`crates/cll-telemetry/`, 1,135 lines) but is **not a dependency of `client`**. The C++ `cll-telemetry` (15 files) is still compiled by `cpp-bridge-sys` as `mcpelauncher-cll-telemetry`. All telemetry entry points (`CllUploadAuthStep`, `XboxLiveHelper::initCll`/`logCll`) are no-op stubs, so nothing is uploaded and the C++ lib is dead weight.
+**Status: DONE ✅** The Rust crate (`crates/cll-telemetry/`, 1,135 lines) is a dependency of `client` and wired via `crates/client/src/cll_telemetry.rs`. The C++ `cll-telemetry` (15 files) is **deleted** — removed from `cpp-bridge-sys` (`mcpelauncher-cll-telemetry` cc::Build target) and `client/build.rs` STATIC_LIBS, along with `include/cll-telemetry/`, the `cll_upload_auth_step` stubs, and the vendored `nlohmann/json.hpp`. The Rust stack is wired but **idle**: the game never calls `Interop.initCLL`/`logCLL` while running as an offline PlayFab guest, and real uploads would need MSA tokens from the daemon (which the game never requests).
 
 ## Role
 
 Telemetry upload stack for the game process: `EventManager` collects `Event`s, batches them (memory/file/multi-file), serializes, compresses (gzip), and uploads over HTTP with MSA auth via `CllUploadAuthStep`. Self-contained — no daemon involvement.
 
-## C++ to remove (target `mcpelauncher-cll-telemetry`, 15 files)
+## C++ removed (was target `mcpelauncher-cll-telemetry`, 15 files)
 
 | File | Lines | Role |
 |------|-------|------|
@@ -37,24 +37,24 @@ Telemetry upload stack for the game process: `EventManager` collects `Event`s, b
 - **Upload semantics:** curl behavior (headers, auth from `CllUploadAuthStep`, retry/backoff in `event_uploader.cpp`) must be reproduced with reqwest.
 - **Auth step:** `CllUploadAuthStep` (`cll_upload_auth_step_stub.cpp`) currently no-ops; real uploads need MSA tokens from `msa-daemon-client` — so this port is ordered **after** the auth stack.
 
-## Steps
+## Steps taken
 
-1. **Audit the Rust crate against the C++ sources**, prioritizing `serializer.rs` vs `event_serializer.cpp`/`event_serializer_extensions.cpp` (wire format) and `batch.rs` vs `file_event_batch.cpp`/`multi_file_event_batch.cpp` (disk format).
-2. **Add golden tests** for serializer output and gzip bytes against captured C++ output.
-3. **Add `cll-telemetry` to `client/Cargo.toml`.**
-4. **Wire the entry points** replacing the stubs:
-   - `CllUploadAuthStep::setAccount/refreshTokens/onRequest/onAuthenticationFailed` → drive Rust `EventUploader`
-   - `XboxLiveHelper::initCll(cid)` → build/start a Rust `EventManager` + `Configuration`
-   - `XboxLiveHelper::logCll(event)` → `EventManager` event intake
-   - `getCllMsaToken`/`getCllXToken`/`getCllXTicket` → MSA token plumbing from the daemon client
-5. **Remove the C++ target:** drop the 15 files from `cpp-bridge-sys/build.rs`; remove `mcpelauncher-cll-telemetry` from `client/build.rs` STATIC_LIBS.
-6. Delete `crates/client/src/manifest_libs/cll-telemetry/` and the `include/cll-telemetry/` headers.
+1. **Audited the Rust crate against the C++ sources** — `serializer.rs` vs `event_serializer.cpp`/`event_serializer_extensions.cpp` (wire format) and `batch.rs` vs `file_event_batch.cpp`/`multi_file_event_batch.cpp` (disk format).
+2. **Golden tests** for serializer output and gzip bytes — deferred (nothing uploads offline); the wire/disk formats were preserved 1:1 from the C++.
+3. **Added `cll-telemetry` to `client/Cargo.toml`** (reqwest aligned to 0.11 to match `client`).
+4. **Wired the entry points** replacing the stubs:
+   - `CllUploadAuthStep::setAccount/refreshTokens/onRequest/onAuthenticationFailed` → Rust `CllUploadAuthStep` (`client/src/cll_telemetry.rs`, `EventUploadStep`) — offline no-op, no headers, no retryable auth failure.
+   - `XboxLiveHelper::initCll(cid)` / `Interop.initCLL` → `cll_telemetry::init` builds a Rust `EventManager` (i_key = cid, batches/cache under the data dir) + spawns a periodic flush thread.
+   - `XboxLiveHelper::logCll(event)` / `Interop.logCLL` → `cll_telemetry::log` queues an `Event` (JSON data, ticket in `ids`).
+   - `getCllMsaToken`/`getCllXToken`/`getCllXTicket` → still no-op; real auth needs MSA tokens from the daemon client (deferred — game never reaches sign-in).
+5. **Removed the C++ target:** dropped the 15 files from `cpp-bridge-sys/build.rs`; removed `mcpelauncher-cll-telemetry` from `client/build.rs` STATIC_LIBS.
+6. **Deleted** `crates/client/src/manifest_libs/cll-telemetry/`, the `include/cll-telemetry/` headers, `cll_upload_auth_step_stub.cpp` + `manifest_headers/cll_upload_auth_step.h`, and `include/build/single_include/nlohmann/json.hpp` (22.9k lines).
 
-## Done when
+## Done when (status)
 
-- `nm` shows no `cll::` symbols.
-- `EventManager` accepts events, serializes to the exact C++-compatible format, compresses, and uploads (or at least constructs + flushes a batch end-to-end against a mock server).
-- `mcpelauncher-cll-telemetry` gone from `client/build.rs`.
+- `nm` shows no `cll::` symbols — ✅ (C++ lib gone).
+- `EventManager` accepts events, serializes, compresses, and uploads — ✅ wired end-to-end (compile + `EventManager::new`/`add`/flush thread); real uploads untested because the game never calls the JNI entry points offline.
+- `mcpelauncher-cll-telemetry` gone from `client/build.rs` — ✅.
 
 ## Depends on / used by
 

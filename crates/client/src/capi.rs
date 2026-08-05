@@ -6,7 +6,9 @@
 //! C-facing `mc_relocate_glesv2_symbols` (still called from `jni_bridge_stub.cpp`).
 //!
 //! The externs below are still defined in C++ (`jni_bridge_stub.cpp`,
-//! `android_log_varargs.cpp`, `fake_assetmanager_stub.cpp`, …).
+//! `fake_assetmanager_stub.cpp`, …). The liblog varargs entry points were
+//! ported to Rust (`android_log_hook.rs`, `mod_api.rs`) once the crate moved
+//! to nightly `c_variadic`.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CString};
@@ -23,12 +25,6 @@ extern "C" {
     fn fake_looper_set_jni_support(support: *mut c_void);
     fn fake_looper_set_rust_jni_support(support: *mut c_void);
     fn fake_assetmanager_create_and_set_global(root_dir: *const i8);
-
-    // Varargs liblog entry points kept in C++ (`android_log_varargs.cpp`); their
-    // addresses are registered as the `liblog.so` stub symbols below.
-    fn __android_log_print();
-    fn __android_log_vprint();
-    fn __android_log_assert();
 }
 
 /// Stub GLESv2 function (was the C++ lambda `+[](void)->int{return 0;}` in capi.cpp).
@@ -120,10 +116,10 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
         // mc_setup_android_hooks() — call it from Rust AFTER mc_load_core_libraries
         // but BEFORE mc_load_minecraft.
         let log_syms: HashMap<String, *mut c_void> = [
-            ("__android_log_print", __android_log_print as usize as *mut c_void),
-            ("__android_log_vprint", __android_log_vprint as usize as *mut c_void),
+            ("__android_log_print", crate::android_log_hook::__android_log_print as usize as *mut c_void),
+            ("__android_log_vprint", crate::android_log_hook::__android_log_vprint as usize as *mut c_void),
             ("__android_log_write", crate::android_log_hook::__android_log_write as usize as *mut c_void),
-            ("__android_log_assert", __android_log_assert as usize as *mut c_void),
+            ("__android_log_assert", crate::android_log_hook::__android_log_assert as usize as *mut c_void),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

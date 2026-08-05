@@ -1,10 +1,11 @@
 //! Port of `mcpelauncher-core/src/minecraft_utils.cpp` (Phase 6).
 //!
 //! The mod-facing `getApi`/`setupApi` funnel and the boot-adjacent helpers move
-//! here. The `jnivm`-typed intrinsic (`jnivm_register_method`) and the two
-//! C++-only funnels (`mcpelauncher_log/vlog` varargs, Google-credentials helper
-//! needing `__builtin_return_address`) stay in the surviving C++ shim
-//! `jnivm_mod_api.cpp`, referenced here by extern "C" address.
+//! here. `mcpelauncher_log/vlog` (C varargs) and the Google-credentials helper
+//! moved to Rust once the client crate enabled nightly `c_variadic`
+//! (`client/src/mod_api.rs`); `jnivm_register_method` cannot be expressed in
+//! Rust (it binds `jnivm::Method` native handles on the C++ FakeJni VM) so it
+//! is stubbed in `mod_api.rs`. All are referenced here by extern "C" address.
 //!
 //! Clean-named `#[no_mangle]` twins are what `capi.cpp` now calls; the C++
 //! `_ZN14MinecraftUtils*` mangled methods are gone (deleted with
@@ -63,7 +64,7 @@ extern "C" {
     fn mcpelauncher_dispatch_unload_library(handle: *mut c_void) -> i32;
     // client path_helper (Rust)
     fn path_helper_find_data_file(path: *const c_char) -> *const c_char;
-    // surviving C++ shim (jnivm_mod_api.cpp)
+    // client mod_api.rs (Rust)
     fn mc_mod_log(level: i32, tag: *const c_char, fmt: *const c_char);
     fn mc_mod_vlog(level: i32, tag: *const c_char, fmt: *const c_char);
     fn mc_mod_request_google_credentials(

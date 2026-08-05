@@ -6,7 +6,6 @@
 #include "fake_looper.h"
 #include "symbols.h"
 
-#include <mcpelauncher/minecraft_version.h>
 #include <game_window_manager.h>
 #include <log.h>
 #include <cstdlib>

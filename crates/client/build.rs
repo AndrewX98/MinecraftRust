@@ -17,9 +17,11 @@ fn main() {
     // cc::Build emits `rustc-link-lib=static=...` which reaches the lib
     // target but not the binary — same-package lib+bin skips the rlib.
     // Phase 10 removed `mcpelauncher-client-bridge` (capi.cpp deleted).
+    // mcpelauncher-core was removed when its last two files
+    // (android_log_varargs.cpp, jnivm_mod_api.cpp) were ported to Rust.
+    // mcpelauncher-cll-telemetry was removed when cll-telemetry was ported
+    // to the Rust crate crates/cll-telemetry (client/src/cll_telemetry.rs).
     static STATIC_LIBS: &[&str] = &[
-        "mcpelauncher-core",
-        "mcpelauncher-cll-telemetry",
         "mcpelauncher-gamewindow",
         "mcpelauncher-client-jni",
     ];

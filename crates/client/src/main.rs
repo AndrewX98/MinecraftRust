@@ -1,3 +1,5 @@
+#![feature(c_variadic)]
+
 mod capi;
 mod rust_bridge;
 mod jni_support;
@@ -12,6 +14,8 @@ mod jni;
 mod text_input_handler;
 mod fmod_utils;
 mod android_log_hook;
+mod mod_api;
+mod cll_telemetry;
 mod minecraft_load;
 mod path_helper;
 mod xbox_auth;

@@ -54,7 +54,7 @@ All 11 former cmake-built static libs are now compiled locally by `cc::Build` in
 | Library | Role | Status |
 |---------|------|--------|
 | `bionic linker` | ~~Full ELF dynamic linker~~ | **DELETED Phase 6** — Rust `crates/linker/` is the only loader |
-| `mcpelauncher-core` | Game loading, hooks, patching, mod loader | Local `.a` via `cc::Build` |
+| `mcpelauncher-core` | Game loading, hooks, patching, mod loader | **100% PORTED / DELETED** (2026-08-05) — last 2 files (`android_log_varargs.cpp`, `jnivm_mod_api.cpp`) ported to Rust via nightly `c_variadic`; `jnivm_register_method` stubbed → false |
 | `game-window` | X11/EGL window, input handling | Local `.a` via `cc::Build` |
 | `linux-gamepad` | evdev joystick + SDL mappings | Local `.a` via `cc::Build` |
 | `msa-daemon-client` | Microsoft Account auth | Local `.a` via `cc::Build` |
@@ -158,7 +158,7 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | ELF linker (bionic) | ~30% | 100% (Rust linker crate exists, needs full relocation) |
 | Game window | ~30% | 100% (eglut done, gamepad remaining) |
 | JNI classes | ~85% | 100% (57/57 MainActivity methods done, store/audio/http/websocket/xbox ported; http/websocket callback wiring remaining) |
-| mcpelauncher-core | ~0% | 100% (game loading, hooks, patching, mod loading) |
+| mcpelauncher-core | 100% | 100% (deleted — ported via nightly c_variadic; jnivm_register_method stubbed) |
 | Startup orchestration | ~60% | 100% |
 | FakeLooper | ~70% | 100% |
 | Build system | 100% | 100% (no cmake) |

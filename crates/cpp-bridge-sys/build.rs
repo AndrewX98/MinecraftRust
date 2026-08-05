@@ -227,78 +227,21 @@ fn main() {
     let client_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../client");
     let local_inc = client_dir.join("include");
-    let core_src = client_dir.join("src/mcpelauncher-core");
 
     // --- mcpelauncher-client-bridge: Phase 10 DELETED (capi.cpp ported to
     //     Rust capi.rs; linker::register_stub replaces rust_load_stub) ---
 
-    // --- mcpelauncher-core (4 files; Phase 6 deleted minecraft_utils.cpp,
-    //     minecraft_version.cpp, mod_loader.cpp, hook.cpp; added jnivm_mod_api.cpp;
-    //     Phase 7 removed hybris_android_log_hook.cpp → android_log_varargs.cpp;
-    //     Phase 8 removed fmod_utils.cpp; Phase 9 deleted crash_handler.cpp) ---
-    let core_sources: Vec<PathBuf> = [
-        "src/hybris_utils.cpp",
-        "src/android_log_varargs.cpp",
-        "src/patch_utils.cpp",
-        "src/jnivm_mod_api.cpp",
-    ]
-    .iter()
-    .map(|f| core_src.join(f))
-    .collect();
-    incr_compile("mcpelauncher-core", &core_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(core_src.join("include"));
-        b.include(&local_inc);
-        b.include(local_inc.join("android-support-headers"));
-        b.include(local_inc.join("logger"));
-        b.include(local_inc.join("mcpelauncher-common"));
-        b.include(local_inc.join("minecraft-imported-symbols"));
-        b.include(local_inc.join("libjnivm"));
-        b.include(local_inc.join("game-window"));
-        b.include(local_inc.join("libc-shim"));
-        b.define("PATH_MAX", "256");
-        b.define("_GNU_SOURCE", None);
-    });
-
-    let nlohmann_json_include =
-        local_inc.join("build/_deps/nlohmann_json_ext-src/single_include");
-
+    // --- mcpelauncher-core: DELETED. The last two files
+    //     (android_log_varargs.cpp, jnivm_mod_api.cpp) were ported to Rust
+    //     (client android_log_hook.rs + mod_api.rs) once the client crate
+    //     enabled nightly c_variadic. mcpelauncher-core is now fully Rust. ---
+    // --- cll-telemetry (15 files): ported to Rust crate cll-telemetry
+    //     (crates/cll-telemetry/), wired via client/src/cll_telemetry.rs
+    //     (docs/PORT_CLL_TELEMETRY.md). C++ lib + nlohmann vendored header
+    //     deleted. ---
     // --- simpleipc (14 files): ported to Rust crate simple-ipc (see docs/PORT_SIMPLEIPC.md) ---
     // --- daemon-client-utils: ported to Rust crate daemon-utils ---
     // --- msa-daemon-client: ported to Rust crate msa-daemon-client ---
-
-    // --- cll-telemetry (15 files) ---
-    let cll = client_dir.join("src/manifest_libs/cll-telemetry");
-    let cll_sources: Vec<PathBuf> = [
-        "src/event_manager.cpp",
-        "src/configuration.cpp",
-        "src/file_configuration_cache.cpp",
-        "src/file_event_batch.cpp",
-        "src/event_serializer.cpp",
-        "src/event_serializer_extensions.cpp",
-        "src/memory_event_batch.cpp",
-        "src/multi_file_event_batch.cpp",
-        "src/buffered_event_batch.cpp",
-        "src/task_with_delay_thread.cpp",
-        "src/event_uploader.cpp",
-        "src/event_compressor.cpp",
-        "src/http/curl_request.cpp",
-        "src/http/curl_client.cpp",
-        "src/http/mock_http_client.cpp",
-    ]
-    .iter()
-    .map(|f| cll.join(f))
-    .collect();
-    incr_compile("mcpelauncher-cll-telemetry", &cll_sources, |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("cll-telemetry"));
-        b.include(local_inc.join("logger"));
-        if nlohmann_json_include.exists() {
-            b.include(&nlohmann_json_include);
-        }
-    });
-
-    // --- gamewindow (6 files) ---
     let gwin = client_dir.join("src/manifest_libs/gamewindow");
     let gwin_sources: Vec<PathBuf> = [
         "game_window_manager.cpp",
@@ -362,7 +305,6 @@ fn main() {
     let stub_files = [
         "settings_stub.cpp",
         "core_patches_stub.cpp",
-        "cll_upload_auth_step_stub.cpp",
         "xal_webview_factory_stub.cpp",
         "window_callbacks_stub.cpp",
         "fake_egl_stub.cpp",
@@ -442,17 +384,12 @@ fn main() {
         b.include(local_inc.join("game-window"));
         b.include(local_inc.join("logger"));
         b.include(local_inc.join("mcpelauncher-common"));
-        b.include(local_inc.join("cll-telemetry"));
-        b.include(local_inc.join("mcpelauncher-core"));
         b.include(local_inc.join("epoll-shim"));
         b.include(local_inc.join("properties-parser"));
         b.include(local_inc.join("mcpelauncher-errorwindow"));
         b.include(local_inc.join("linux-gamepad"));
         b.include(local_inc.join("file-picker"));
         b.include(local_inc.join("libc-shim"));
-        if nlohmann_json_include.exists() {
-            b.include(&nlohmann_json_include);
-        }
         b.include(client_dir.join("include"));
         b.include(local_inc.join("minecraft-imported-symbols"));
         b.include(local_inc.join("libjnivm/src"));

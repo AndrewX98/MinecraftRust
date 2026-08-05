@@ -1,9 +1,9 @@
 //! Rust port of `hybris_android_log_hook.cpp`.
-//! The Android-priority → LogLevel map is single-sourced here; the varargs
-//! `__android_log_{print,vprint,assert}` entry points remain in a tiny C++
-//! shim (`android_log_varargs.cpp`) because stable Rust cannot define `...`
-//! extern "C" functions. The non-varargs `__android_log_write` lives in the
-//! client crate and reuses this map.
+//! The Android-priority → LogLevel map is single-sourced here. The varargs
+//! `__android_log_{print,vprint,assert}` entry points were ported to Rust in
+//! `client/android_log_hook.rs` (nightly `c_variadic`); this map is the single
+//! level source. The non-varargs `__android_log_write` lives in the client
+//! crate and reuses this map.
 
 /// Android log priorities (android/log.h) — values fixed by the ABI.
 pub const ANDROID_LOG_UNKNOWN: i32 = 0;

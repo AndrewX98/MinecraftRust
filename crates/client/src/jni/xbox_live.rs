@@ -23,6 +23,19 @@ fn new_jstring(env: *mut JNIEnv, s: &str) -> jstring {
     unsafe { new_string(env, c_str.as_ptr()) as jstring }
 }
 
+fn jstring_to_string(env: *mut JNIEnv, s: jstring) -> String {
+    if env.is_null() || s.is_null() { return String::new(); }
+    let iface = get_iface(env);
+    if iface.is_null() { return String::new(); }
+    let get_chars = match unsafe { (*iface).GetStringUTFChars } { Some(f) => f, None => return String::new() };
+    let release = unsafe { (*iface).ReleaseStringUTFChars };
+    let c_str = unsafe { get_chars(env, s, std::ptr::null_mut()) };
+    if c_str.is_null() { return String::new(); }
+    let result = unsafe { CStr::from_ptr(c_str).to_string_lossy().into_owned() };
+    if let Some(f) = release { unsafe { f(env, s, c_str); } }
+    result
+}
+
 fn call_static_void_method(env: *mut JNIEnv, cls: jclass, name: &str, sig: &str, args: &mut [jvalue]) {
     let iface = get_iface(env);
     if iface.is_null() { return; }
@@ -100,17 +113,7 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_invokeMSA(
     _is_prod: jboolean,
     cid: jstring,
 ) {
-    let cid_str = {
-        let iface = get_iface(env);
-        if iface.is_null() { return; }
-        let get_chars = match (*iface).GetStringUTFChars { Some(f) => f, None => return };
-        let release = (*iface).ReleaseStringUTFChars;
-        let c_str = get_chars(env, cid, std::ptr::null_mut());
-        if c_str.is_null() { return; }
-        let result = CStr::from_ptr(c_str).to_string_lossy().into_owned();
-        if let Some(f) = release { f(env, cid, c_str); }
-        result
-    };
+    let cid_str = jstring_to_string(env, cid);
 
     log::info!("XboxInterop: invokeMSA requestCode={} cid={}", request_code, cid_str);
 
@@ -167,23 +170,29 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_invokeAuthF
 
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_initCLL(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     _self: jobject,
     _arg0: jobject,
-    _arg1: jstring,
+    arg1: jstring,
 ) {
-    log::info!("XboxInterop: initCLL (stub)");
+    let cid = jstring_to_string(env, arg1);
+    log::info!("XboxInterop: initCLL cid={}", cid);
+    crate::cll_telemetry::init(&cid);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_logCLL(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     _self: jobject,
-    _ticket: jstring,
-    _name: jstring,
-    _data: jstring,
+    ticket: jstring,
+    name: jstring,
+    data: jstring,
 ) {
-    log::info!("XboxInterop: logCLL (stub — event dropped)");
+    let ticket = jstring_to_string(env, ticket);
+    let name = jstring_to_string(env, name);
+    let data = jstring_to_string(env, data);
+    log::info!("XboxInterop: logCLL name={}", name);
+    crate::cll_telemetry::log(&ticket, &name, &data);
 }
 
 // ======== Private callback helpers (call Java static methods) ========

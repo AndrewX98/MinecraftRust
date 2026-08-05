@@ -255,6 +255,10 @@ presence assertion (Rust test listing required `mcpelauncher_*` keys).
 >   shim (option A) so it can build `jnivm::MethodHandle` objects against the real C++
 >   `libjnivm` headers. It also carries `mc_mod_log`/`mc_mod_vlog`
 >   (`va_list` → `Log::vlog`) and `mc_mod_request_google_credentials` (fork/exec helper).
+>   → **`jnivm_mod_api.cpp` deleted 2026-08-05** after the nightly `c_variadic` port
+>   (`client/mod_api.rs`): the varargs funnels and google-credentials helper are Rust;
+>   `jnivm_register_method` is stubbed to return false (its C++ impl bound
+>   `jnivm::MethodHandle`s on the FakeJni VM — deferred to `libjnivm-sys`; mods don't load).
 > - `mc_find_data_file`/`mc_get_preinit_hooks`/`mc_finalize_load` moved to Rust
 >   (`PreinitTable` wrapper around the loaded `preinit_hooks` function list).
 > - `capi.cpp` re-pointed: `mc_get_libc_symbols` → `core_minecraft_utils_get_libc_symbols`;
@@ -287,6 +291,14 @@ presence assertion (Rust test listing required `mcpelauncher_*` keys).
 > `client/android_log_hook.rs` via `util::Log`. `capi.cpp` unchanged — the four
 > `__android_log_*` externs still resolve at final link (Rust + shim). Final print path was
 > already Rust (`Log::vlog` → `mcpelauncher_log_vlog` in `rust_bridge.rs`). 45 corelib tests.
+>
+> **Follow-up (2026-08-05, nightly `c_variadic`):** `android_log_varargs.cpp` **deleted**.
+> The client crate moved to nightly and enabled `#![feature(c_variadic)]`, so the three
+> varargs entry points are now Rust in `client/android_log_hook.rs` (`__android_log_print`/
+> `__android_log_vprint`/`__android_log_assert`; `...` params forwarded to
+> `libc_shim::stdio::vsnprintf` via the `VaList` pointer). `capi.rs` now registers the
+> `liblog.so` stub symbols directly from the Rust fns. `__android_log_vprint` keeps its
+> `va_list`-typed arg (a `*mut c_void` on x86_64), so it is portable even on stable.
 
 ---
 
@@ -360,6 +372,26 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 >   used `is_stub=true`, so `register_stub` avoids accidentally ELF-loading a system
 >   `libGLESv2.so`). Verified: build green, zero capi.cpp symbols, `relocated 166 GLESv2`
 >   in boot log, main menu exit 0.
+>
+> **Follow-up (Phase 10, same day):** deleted the rest of `mcpelauncher-core` that had a Rust
+> alt — `patch_utils.cpp` (`VtableReplaceHelper` → Rust `rust_bridge.rs::core_vtable_replace`,
+> same `#[no_mangle] extern "C"` ABI, called from `core_patches_stub.cpp`'s
+> `CorePatches::install` path) and `hybris_utils.cpp` (zero callers; Rust twins in
+> `corelib/hybris_utils.rs`). Dropped the whole `src/mcpelauncher-core/include/` dir (all 6
+> headers were stale) and 4 of 6 headers in `client/include/mcpelauncher-core/`; only
+> `minecraft_version.h` survives (for `window_callbacks_stub.cpp`; that dead include was
+> dropped too, so `client/include/mcpelauncher-core/` is fully gone). `mcpelauncher-core` is now
+> **2 files** — `android_log_varargs.cpp` + `jnivm_mod_api.cpp`, both inherently non-portable
+> (varargs/va_list, C++-VM binding).
+>
+> **Follow-up (2026-08-05, nightly `c_variadic`):** `mcpelauncher-core` is now **fully Rust** —
+> the last two files were ported to `client/android_log_hook.rs` (varargs `__android_log_*`)
+> and `client/mod_api.rs` (`mc_mod_log`/`mc_mod_vlog` varargs,
+> `mc_mod_request_google_credentials` fork/exec with the caller ret-address captured by a
+> `#[naked]` trampoline, `mc_mod_jnivm_register_method` **stubbed → false**). The
+> `mcpelauncher-core` `cc::Build` target was removed from `cpp-bridge-sys/build.rs` and from
+> `client/build.rs` `STATIC_LIBS` (now 3 static libs). Verified: build green, nm shows all 7
+> Rust symbols with zero C++ core symbols, boot exit 0 at main menu, 45 corelib tests.
 
 ---
 

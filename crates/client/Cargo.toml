@@ -28,6 +28,8 @@ url = "2"
 simple-ipc = { path = "../simple-ipc" }
 daemon-utils = { path = "../daemon-utils" }
 msa-daemon-client = { path = "../msa-daemon-client" }
+cll-telemetry = { path = "../cll-telemetry" }
+serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "process", "fs", "sync", "io-util", "net"] }
 
 [lints]

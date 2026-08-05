@@ -1,6 +1,6 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **4 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **2 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
 
 The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils**) has been **ported to Rust** (`crates/simple-ipc/`, `crates/msa-daemon-client/`, `crates/daemon-utils/`) and removed from the C++ build — see `docs/PORT_SIMPLEIPC.md`, `docs/PORT_MSA_DAEMON_CLIENT.md`, `docs/PORT_DAEMON_UTILS.md`.
 
@@ -8,8 +8,8 @@ The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils*
 
 | Library | Role | Objects | Complexity |
 |---------|------|---------|-----------|
-| `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 4 objects | **LARGE** |
-| `cll-telemetry` | Telemetry collection + upload | 15 objects | LARGE (skippable) |
+| ~~`mcpelauncher-core`~~ | ~~Game loading, hooks, patching, mod loader~~ → **DELETED** (last 2 files ported to Rust) | – | – |
+| ~~`cll-telemetry`~~ | ~~Telemetry collection + upload~~ → **DELETED** (ported to Rust `crates/cll-telemetry/`) | – | – |
 | `game-window` | X11/EGL window, input handling | 7 objects | **MEDIUM** |
 | ~~`mcpelauncher-client-bridge`~~ | ~~Rust ↔ C++ bridge (capi.cpp)~~ → **Phase 10: deleted** (ported to Rust `capi.rs`) | – | – |
 | `mcpelauncher-client-jni` | JNI stubs, class wrappers, libjnivm C++ | ~35+ objects | **LARGE** |
@@ -18,18 +18,17 @@ The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils*
 
 ## Detailed Analysis
 
-### `mcpelauncher-core` — CRITICAL
+### `mcpelauncher-core` — DELETED ✅
 
-Central orchestration hub. **4 source files** (Phases 6–9 deleted the other 5):
+Central orchestration hub, **fully ported to Rust** (Phases 6–10 + the `c_variadic` follow-up):
 
-| File | Lines | Role |
-|------|-------|------|
-| `hybris_utils.cpp` | 55 | Load OS-native libraries via dlopen, register with bionic linker |
-| `patch_utils.cpp` | 97 | Pattern-based memory scanning, x86/ARM instruction patching |
-| `android_log_varargs.cpp` | 29 | varargs `__android_log_{print,vprint,assert}` shim; level map is Rust (`corelib/android_log_hook.rs`), `__android_log_write` is Rust (client) — all registered as `liblog.so` symbols |
-| `jnivm_mod_api.cpp` | ~80 | Surviving C++ shim (Phase 6): `jnivm_register_method`, `mc_mod_log`/`mc_mod_vlog` (va_list), `mc_mod_request_google_credentials` |
+**Ported/deleted:** `minecraft_utils.cpp` (654), `minecraft_version.cpp` (33), `mod_loader.cpp` (204), `hook.cpp` (302) → **Phase 6** (`corelib/minecraft_utils.rs`, `minecraft_version.rs`); `hybris_android_log_hook.cpp` → **Phase 7**; `fmod_utils.cpp` (39) → **Phase 8** (`client/fmod_utils.rs` + `mc_fmod_set_sample_rate`); `crash_handler.cpp` (129) → **Phase 9** (dormant, deleted); `capi.cpp` bridge (259) → **Phase 10** (Rust `client/capi.rs`); `hybris_utils.cpp` (65, no callers) and `patch_utils.cpp` (97, `VtableReplaceHelper` ported to Rust `rust_bridge.rs::core_vtable_replace`) → **Phase 10** (also dropped the whole `src/` + `include/` dirs — the last header copy `client/include/mcpelauncher-core/mcpelauncher/minecraft_version.h` was removed too, since `window_callbacks_stub.cpp`'s include of it was dead).
 
-**Ported/deleted:** `minecraft_utils.cpp` (654), `minecraft_version.cpp` (33), `mod_loader.cpp` (204), `hook.cpp` (302) → **Phase 6** (`corelib/minecraft_utils.rs`, `minecraft_version.rs`); `hybris_android_log_hook.cpp` → **Phase 7**; `fmod_utils.cpp` (39) → **Phase 8** (`client/fmod_utils.rs` + `mc_fmod_set_sample_rate`); `crash_handler.cpp` (129) → **Phase 9** (dormant, deleted). The `capi.cpp` bridge (259) → **Phase 10** (Rust `client/capi.rs`).
+The final two files (`android_log_varargs.cpp`, `jnivm_mod_api.cpp`) were the last C++ in the crate. They were **ported to Rust** once the client crate moved to nightly `c_variadic`:
+- `android_log_varargs.cpp` → `client/android_log_hook.rs` (`__android_log_print/vprint/assert`); the liblog stub symbols in `capi.rs` now point at the Rust fns.
+- `jnivm_mod_api.cpp` → `client/mod_api.rs`: `mc_mod_log`/`mc_mod_vlog` (C varargs), `mc_mod_request_google_credentials` (fork/exec, caller ret-address via a `#[naked]` trampoline), and `mc_mod_jnivm_register_method` **stubbed to return false** (the C++ impl bound `jnivm::Method` handles on the FakeJni VM — deferred to the `libjnivm-sys` JNI port; mods are not loaded anyway).
+
+The `mcpelauncher-core` entry was removed from both `build.rs` `core_sources` and `client/build.rs` `STATIC_LIBS` (now 2 static libs).
 
 **Used at runtime?** YES — every code path. The entire game loading pipeline calls into this library.
 
@@ -80,13 +79,13 @@ The C++ bionic linker (previously ~37 C++ files + 2 C files, 3.8 MB) is **gone**
 
 **Rust replacement:** `crates/simple-ipc/` — wire-compatible port (`varint.rs`, `message.rs`, `encoding.rs`, `client.rs`, `server.rs`), locked with 23 golden-bytes/E2E tests in `tests/wire.rs`. See `docs/PORT_SIMPLEIPC.md`.
 
-### `cll-telemetry` (7.1 MB) — LARGE (skippable)
+### `cll-telemetry` — DELETED ✅
 
-**15 files:** Event manager, HTTP client (libcurl), file/memory event batching, serialization, compression (zlib), scheduled upload.
+**15 files** (event manager, HTTP client (libcurl), file/memory event batching, serialization, compression (zlib), scheduled upload) plus the vendored `nlohmann/json.hpp` header (22.9k lines) and the `cll_upload_auth_step` stub.
 
-**Role:** Telemetry collection and upload for Microsoft/CLL.
+**Ported to Rust:** `crates/cll-telemetry/` (1,135 lines: `event.rs`, `batch.rs`, `uploader.rs`, `config.rs`, `manager.rs`, `serializer.rs`, `compressor.rs`, `task.rs`; HTTP via `reqwest` (blocking), gzip via `flate2`, JSON via `serde_json`). Wired into the client by `crates/client/src/cll_telemetry.rs` (`EventManager` singleton + Rust `CllUploadAuthStep` + periodic flush thread), driven by the JNI natives `Interop.initCLL`/`Interop.logCLL` in `crates/client/src/jni/xbox_live.rs`. See `docs/PORT_CLL_TELEMETRY.md`.
 
-**Note:** Can be stubbed via `MCPELAUNCHER_DISABLE_TELEMETRY=true` or the existing stub path. The game runs fine without it.
+**Status:** The `mcpelauncher-cll-telemetry` cc::Build target, its 15 sources, the `include/cll-telemetry/` headers, the `cll_upload_auth_step_stub.cpp` + `manifest_headers/cll_upload_auth_step.h` stubs, and `include/build/single_include/nlohmann/json.hpp` were all **deleted**; removed from `client/build.rs` `STATIC_LIBS` (now 2 static libs). The Rust stack is wired but idle — the game never calls `initCLL`/`logCLL` while running as an offline PlayFab guest, and real uploads would need MSA tokens.
 
 ### `mcpelauncher-common` (148 KB) — SMALL
 
@@ -112,11 +111,9 @@ linux-gamepad  (no deps, used by game-window)
 game-window  →  linux-gamepad
 
 mcpelauncher-core  →  mcpelauncher-common
-
-cll-telemetry  (standalone)
 ```
 
-**Ported to Rust and removed from the C++ graph:** `simpleipc` → `crates/simple-ipc/`, `daemon-client-utils` → `crates/daemon-utils/`, `msa-daemon-client` → `crates/msa-daemon-client/`. Their C++ dependency chain (`simpleipc` ← `daemon-client-utils` ← `msa-daemon-client`) is now `crates/simple-ipc/` ← `crates/daemon-utils/` ← `crates/msa-daemon-client/` ← `client`.
+**Ported to Rust and removed from the C++ graph:** `simpleipc` → `crates/simple-ipc/`, `daemon-client-utils` → `crates/daemon-utils/`, `msa-daemon-client` → `crates/msa-daemon-client/`, `cll-telemetry` → `crates/cll-telemetry/`. Their C++ dependency chain (`simpleipc` ← `daemon-client-utils` ← `msa-daemon-client`) is now `crates/simple-ipc/` ← `crates/daemon-utils/` ← `crates/msa-daemon-client/` ← `client`.
 
 `logger` and `file-util` are no longer C++ static libs — both are ported to Rust (`crates/util/src/logger.rs`, `crates/util/src/file_util.rs`). The C++ bridge reaches them through FFI shims (`logger_stub.cpp` for `Log::vlog`, `env_path_util_*`/`file_util_*` for file-util).
 
