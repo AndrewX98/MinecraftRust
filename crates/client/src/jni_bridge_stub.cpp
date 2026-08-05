@@ -119,6 +119,8 @@ extern "C" void mc_register_android_hook(void* map, const char* name, void* fn) 
 
 // Rust registers FakeLooper hooks via mc_register_fake_looper_hooks
 extern "C" void mc_register_fake_looper_hooks(void* map);
+// Rust registers FakeInputQueue hooks via mc_register_fake_input_queue_hooks
+extern "C" void mc_register_fake_input_queue_hooks(void* map);
 
 extern "C" void mc_setup_android_hooks() {
     std::unordered_map<std::string, void*> android_syms;
@@ -127,7 +129,7 @@ extern "C" void mc_setup_android_hooks() {
     mc_register_fake_looper_hooks(&android_syms);
     android_syms["ANativeWindow_getWidth"] = (void*)fake_anativewindow_getwidth;
     android_syms["ANativeWindow_getHeight"] = (void*)fake_anativewindow_getheight;
-    FakeInputQueue::initHybrisHooks(android_syms);
+    mc_register_fake_input_queue_hooks(&android_syms);
 
     // APerformanceHint stubs (BIND_NOW requires non-null GOT entries)
     android_syms["APerformanceHint_getManager"] = (void*)+[]() -> void* { return nullptr; };

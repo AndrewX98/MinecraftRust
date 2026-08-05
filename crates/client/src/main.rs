@@ -7,6 +7,7 @@ mod file_picker;
 mod gamepad;
 mod eglut;
 mod fake_looper;
+mod fake_inputqueue;
 mod main_activity;
 mod jnivm_class_wrappers;
 mod jnivm_globals;

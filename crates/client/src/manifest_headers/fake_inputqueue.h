@@ -1,7 +1,6 @@
 #pragma once
 
 #include <android/input.h>
-#include <deque>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -37,23 +36,24 @@ struct FakeMotionEvent : FakeInputEvent {
     FakeMotionEvent() : FakeMotionEvent(0, 0, 0, 0, 0) {}
 };
 
+// Thin forwarding wrapper (Phase 1 of PORT_FAKE_LOOPER.md): storage + the
+// libandroid.so input hooks now live in Rust (fake_inputqueue.rs). Each
+// method forwards to the Rust FakeInputQueue via the mc_fake_input_queue_*
+// FFI. The event structs above are kept so C++ WindowCallbacks/FakeLooper can
+// keep constructing events with these types; the Rust hooks read the opaque
+// axisFunction slot and the Rust layout is pinned by unit tests.
 class FakeInputQueue {
 private:
-    std::deque<FakeKeyEvent> keyEvents;
-    std::deque<FakeMotionEvent> motionEvents;
+    void* rustQueue;
 
 public:
-    static void initHybrisHooks(std::unordered_map<std::string, void *> &syms);
+    FakeInputQueue();
+    ~FakeInputQueue();
 
-    FakeInputQueue() {
-        // Should avoid a crash caused by a lot of events from gamepad's analog sticks
-        motionEvents.resize(100);
-        motionEvents.clear();
-        keyEvents.resize(100);
-        keyEvents.clear();
-    }
+    // Returns the Rust FakeInputQueue* this wrapper forwards to.
+    void* rustQueuePtr() const { return rustQueue; }
 
-    bool hasEvents() const { return !keyEvents.empty() || !motionEvents.empty(); }
+    bool hasEvents() const;
 
     int getEvent(FakeInputEvent **event);
 
