@@ -1,5 +1,6 @@
 use libjnivm_sys::*;
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_void, CString};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::OnceLock;
 
 const JNI_TRUE: jboolean = 1;
@@ -13,11 +14,47 @@ fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
 
 extern "C" {
     fn jnivm_get_storage_dir() -> *const c_char;
-    fn jnivm_get_stbi_load_from_memory() -> *mut std::ffi::c_void;
-    fn jnivm_get_stbi_image_free() -> *mut std::ffi::c_void;
+    fn jnivm_get_stbi_load_from_memory() -> *mut c_void;
+    fn jnivm_get_stbi_image_free() -> *mut c_void;
     fn core_patches_hide_mouse_pointer();
     fn core_patches_show_mouse_pointer();
     fn eglutSetClipboardText(text: *const c_char);
+    fn jnivm_get_text_input_handler() -> *mut c_void;
+}
+
+/// Mirrors C++ `MainActivity::ignoreNextHideKeyboard`: `updateTextboxText`
+/// suppresses the next `hideKeyboard` (the game tears the IME down right after
+/// updating the text), and `getCaretPosition`/`showKeyboard` clear it.
+static IGNORE_NEXT_HIDE_KEYBOARD: AtomicBool = AtomicBool::new(false);
+
+/// Mirrors C++ `MainActivity::lastChar` (set via `setLastChar`, read by
+/// `getKeyFromKeyCode` on the launcher→game IME path).
+static LAUNCHER_LAST_CHAR: AtomicI32 = AtomicI32::new(0);
+
+pub fn set_launcher_last_char(sym: i32) {
+    LAUNCHER_LAST_CHAR.store(sym, Ordering::Relaxed);
+}
+
+fn handler_mut() -> Option<&'static mut crate::text_input_handler::TextInputHandler> {
+    let h = unsafe { jnivm_get_text_input_handler() };
+    if h.is_null() {
+        None
+    } else {
+        Some(unsafe { &mut *(h as *mut crate::text_input_handler::TextInputHandler) })
+    }
+}
+
+fn handler_ref() -> Option<&'static crate::text_input_handler::TextInputHandler> {
+    let h = unsafe { jnivm_get_text_input_handler() };
+    if h.is_null() {
+        None
+    } else {
+        Some(unsafe { &*(h as *const crate::text_input_handler::TextInputHandler) })
+    }
+}
+
+fn handler_current_text() -> String {
+    handler_ref().map(|h| h.get_text().to_string()).unwrap_or_default()
 }
 
 fn storage_dir() -> &'static str {
@@ -100,7 +137,11 @@ unsafe extern "C" fn has_hardware_keyboard(_env: *mut JNIEnv, _self: jobject) ->
 }
 
 unsafe extern "C" fn get_cursor_position(_env: *mut JNIEnv, _self: jobject) -> jint {
-    0
+    IGNORE_NEXT_HIDE_KEYBOARD.store(false, Ordering::Relaxed);
+    match handler_ref() {
+        Some(h) => h.get_cursor_position(),
+        None => -1,
+    }
 }
 
 unsafe extern "C" fn get_text_box_backend(env: *mut JNIEnv, _self: jobject) -> jstring {
@@ -112,12 +153,19 @@ unsafe extern "C" fn get_text_box_backend(env: *mut JNIEnv, _self: jobject) -> j
         Some(f) => f,
         None => return std::ptr::null_mut(),
     };
-    new_string(env, b"\0".as_ptr() as *const c_char) as jstring
+    let text = CString::new(handler_current_text()).unwrap_or_default();
+    new_string(env, text.as_ptr()) as jstring
 }
 
-unsafe extern "C" fn set_caret_position(_env: *mut JNIEnv, _self: jobject, _pos: jint) {}
+unsafe extern "C" fn set_caret_position(_env: *mut JNIEnv, _self: jobject, pos: jint) {
+    if let Some(h) = handler_mut() {
+        h.set_cursor_position(pos);
+    }
+}
 
-unsafe extern "C" fn set_last_char(_env: *mut JNIEnv, _self: jobject, _sym: jint) {}
+unsafe extern "C" fn set_last_char(_env: *mut JNIEnv, _self: jobject, sym: jint) {
+    set_launcher_last_char(sym);
+}
 
 unsafe extern "C" fn start_play_integrity_check(_env: *mut JNIEnv, _self: jobject) {}
 
@@ -141,9 +189,23 @@ unsafe extern "C" fn get_broadcast_addresses(env: *mut JNIEnv, _self: jobject) -
     new_array(env, 0, string_cls, std::ptr::null_mut()) as jobject
 }
 
-unsafe extern "C" fn update_textbox_text(_env: *mut JNIEnv, _self: jobject, _text: jstring) {}
+fn update_handler_text(env: *mut JNIEnv, text: jstring) {
+    let Some(s) = get_jstring_content(env, text) else {
+        return;
+    };
+    if let Some(h) = handler_mut() {
+        h.update(s);
+    }
+}
 
-unsafe extern "C" fn set_text_box_backend(_env: *mut JNIEnv, _self: jobject, _text: jstring) {}
+unsafe extern "C" fn update_textbox_text(env: *mut JNIEnv, _self: jobject, text: jstring) {
+    IGNORE_NEXT_HIDE_KEYBOARD.store(true, Ordering::Relaxed);
+    update_handler_text(env, text);
+}
+
+unsafe extern "C" fn set_text_box_backend(env: *mut JNIEnv, _self: jobject, text: jstring) {
+    update_handler_text(env, text);
+}
 
 // ========== Phase 1: OS syscalls + file stubs ==========
 
@@ -303,17 +365,31 @@ unsafe extern "C" fn get_hardware_info(_env: *mut JNIEnv, _self: jobject) -> job
 }
 
 unsafe extern "C" fn show_keyboard(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     _self: jobject,
-    _text: jstring,
+    text: jstring,
     _max_len: jint,
     _ignored1: jboolean,
     _ignored2: jboolean,
-    _multiline: jboolean,
+    multiline: jboolean,
 ) {
+    IGNORE_NEXT_HIDE_KEYBOARD.store(false, Ordering::Relaxed);
+    let Some(s) = get_jstring_content(env, text) else {
+        return;
+    };
+    if let Some(h) = handler_mut() {
+        h.enable(s, multiline != 0);
+    }
 }
 
-unsafe extern "C" fn hide_keyboard(_env: *mut JNIEnv, _self: jobject) {}
+unsafe extern "C" fn hide_keyboard(_env: *mut JNIEnv, _self: jobject) {
+    if IGNORE_NEXT_HIDE_KEYBOARD.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    if let Some(h) = handler_mut() {
+        h.disable();
+    }
+}
 
 unsafe extern "C" fn get_ip_addresses(env: *mut JNIEnv, _self: jobject) -> jobject {
     let iface = get_iface(env);
@@ -332,7 +408,11 @@ unsafe extern "C" fn get_ip_addresses(env: *mut JNIEnv, _self: jobject) -> jobje
 }
 
 unsafe extern "C" fn get_caret_position(_env: *mut JNIEnv, _self: jobject) -> jint {
-    0
+    IGNORE_NEXT_HIDE_KEYBOARD.store(false, Ordering::Relaxed);
+    match handler_ref() {
+        Some(h) => h.get_cursor_position(),
+        None => -1,
+    }
 }
 
 unsafe extern "C" fn set_clipboard(env: *mut JNIEnv, _self: jobject, text: jstring) {

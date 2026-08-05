@@ -650,6 +650,25 @@ pub unsafe extern "C" fn jni_support_start_game(
     let text_handler_ptr = Box::into_raw(Box::new(text_handler)) as *mut c_void;
     jnivm_set_text_input_handler(text_handler_ptr);
 
+    // Route the launcher-side keyboard into the game (Phase 4): when the OS
+    // keyboard produces text/caret changes, push them into the game via
+    // nativeSetTextboxText/nativeCaretPosition on the Rust env (mirrors C++
+    // JniSupport::onSetTextboxText/onCaretPosition).
+    extern "C" {
+        fn text_input_handler_set_callbacks(
+            h: *mut c_void,
+            ctx: *mut c_void,
+            text_cb: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+            caret_cb: Option<unsafe extern "C" fn(*mut c_void, i32)>,
+        );
+    }
+    text_input_handler_set_callbacks(
+        text_handler_ptr,
+        s,
+        Some(jni_support_on_set_textbox_text),
+        Some(jni_support_on_caret_position),
+    );
+
     log::info!("jni_support: startGame completed");
 }
 
@@ -712,9 +731,10 @@ pub unsafe extern "C" fn jni_support_on_window_resized(s: *mut c_void, new_width
             b"nativeResize\0".as_ptr() as *const c_char,
             b"(II)V\0".as_ptr() as *const c_char
         ));
-        if !mid.is_null() {
+        let activity = activity_jobject(support);
+        if !mid.is_null() && !activity.is_null() {
             let resize_args = [jvalue { i: new_width }, jvalue { i: new_height }];
-            jni_call!(env, CallStaticVoidMethodA(cls, mid, resize_args.as_ptr() as *mut jvalue));
+            jni_call!(env, CallVoidMethodA(activity, mid, resize_args.as_ptr() as *mut jvalue));
         }
     }
 }
@@ -918,6 +938,94 @@ pub unsafe extern "C" fn jni_support_import_file(s: *mut c_void, path: *const c_
     import_file(support, path_str);
 }
 
+/// The game's MainActivity jobject (a Baron VM reference, passed opaquely as
+/// `this` to game natives dispatched via the Rust env — mirrors C++ instance
+/// invoke on `activity.get()`).
+unsafe fn activity_jobject(support: &JniSupport) -> jobject {
+    let ga = support.game_activity.0;
+    if ga.is_null() { return std::ptr::null_mut(); }
+    (*ga).java_game_activity
+}
+
+/// Invoke the game's `MainActivity.nativeSetTextboxText(text, copyPos, cursorPos)`
+/// as an instance method on the Rust env (mirrors C++ `onSetTextboxText`).
+unsafe fn invoke_native_set_textbox_text(support: &JniSupport, text: &str, copy_pos: i32, cursor_pos: i32) {
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if cls.is_null() { return; }
+    let mid = jni_call!(env, GetMethodID(
+        cls,
+        b"nativeSetTextboxText\0".as_ptr() as *const c_char,
+        b"(Ljava/lang/String;II)V\0".as_ptr() as *const c_char
+    ));
+    if mid.is_null() { return; }
+    let activity = activity_jobject(support);
+    if activity.is_null() { return; }
+    let text_c = CString::new(text).unwrap_or_default();
+    let text_j = jni_call!(env, NewStringUTF(text_c.as_ptr()));
+    if text_j.is_null() { return; }
+    let args = [jvalue { l: text_j }, jvalue { i: copy_pos }, jvalue { i: cursor_pos }];
+    jni_call!(env, CallVoidMethodA(activity, mid, args.as_ptr() as *mut jvalue));
+}
+
+/// TextInputHandler text callback (launcher keyboard → game). Mirrors C++
+/// `JniSupport::onSetTextboxText`.
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_on_set_textbox_text(s: *mut c_void, text: *const c_char) {
+    if s.is_null() || text.is_null() { return; }
+    let support = &*(s as *mut JniSupport);
+    let text_str = match std::ffi::CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => { log::error!("jni_support_on_set_textbox_text: invalid UTF-8"); return; }
+    };
+    let handler = crate::jnivm_globals::jnivm_get_text_input_handler();
+    let copy_pos = crate::text_input_handler::text_input_handler_get_copy_position(handler);
+    let cursor_pos = crate::text_input_handler::text_input_handler_get_cursor_position(handler);
+
+    invoke_native_set_textbox_text(support, text_str, copy_pos, cursor_pos);
+
+    // Mirror C++: remember the last typed char so MainActivity.getKeyFromKeyCode
+    // can report it back to the game's IME path.
+    let cursor = cursor_pos as usize;
+    if cursor < text_str.len() {
+        crate::main_activity::set_launcher_last_char(text_str.as_bytes()[cursor] as i32);
+    }
+    log::info!("jni_support_on_set_textbox_text: text={:?} copy={} cursor={}", text_str, copy_pos, cursor_pos);
+}
+
+/// TextInputHandler caret callback (launcher caret move → game). Mirrors C++
+/// `JniSupport::onCaretPosition`; falls back to `nativeSetTextboxText` because
+/// the `nativeCaretPosition` symbol is missing from libminecraftpe.so 1.26.20.
+#[no_mangle]
+pub unsafe extern "C" fn jni_support_on_caret_position(s: *mut c_void, pos: i32) {
+    if s.is_null() { return; }
+    let support = &*(s as *mut JniSupport);
+    let env = support.env.0;
+    let cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    if cls.is_null() { return; }
+    let activity = activity_jobject(support);
+    if activity.is_null() { return; }
+    let mid = jni_call!(env, GetMethodID(
+        cls,
+        b"nativeCaretPosition\0".as_ptr() as *const c_char,
+        b"(I)V\0".as_ptr() as *const c_char
+    ));
+    if !mid.is_null() {
+        let args = [jvalue { i: pos }];
+        jni_call!(env, CallVoidMethodA(activity, mid, args.as_ptr() as *mut jvalue));
+        return;
+    }
+    let handler = crate::jnivm_globals::jnivm_get_text_input_handler();
+    let text_str = if handler.is_null() {
+        ""
+    } else {
+        (*(handler as *const crate::text_input_handler::TextInputHandler)).get_text()
+    };
+    let copy_pos = crate::text_input_handler::text_input_handler_get_copy_position(handler);
+    invoke_native_set_textbox_text(support, text_str, copy_pos, pos);
+    log::info!("jni_support_on_caret_position: fallback nativeSetTextboxText pos={}", pos);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn jni_support_on_return_key_pressed(s: *mut c_void) {
     if s.is_null() { return; }
@@ -930,8 +1038,9 @@ pub unsafe extern "C" fn jni_support_on_return_key_pressed(s: *mut c_void) {
         b"nativeReturnKeyPressed\0".as_ptr() as *const c_char,
         b"()V\0".as_ptr() as *const c_char
     ));
-    if !mid.is_null() {
-        jni_call!(env, CallStaticVoidMethod(cls, mid));
+    let activity = activity_jobject(support);
+    if !mid.is_null() && !activity.is_null() {
+        jni_call!(env, CallVoidMethod(activity, mid));
     }
 }
 

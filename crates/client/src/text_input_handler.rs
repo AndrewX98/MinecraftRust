@@ -114,6 +114,7 @@ impl TextInputHandler {
     pub fn is_multiline(&self) -> bool { self.multiline }
     pub fn get_text(&self) -> &str { &self.current_text }
     pub fn get_cursor_position(&self) -> i32 { self.current_text_position_utf as i32 }
+    pub fn get_copy_position(&self) -> i32 { self.current_text_copy_position_utf as i32 }
 
     pub fn enable(&mut self, text: String, multiline: bool) {
         self.enabled = true;
@@ -437,6 +438,13 @@ pub unsafe extern "C" fn text_input_handler_get_cursor_position(h: *mut c_void) 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn text_input_handler_get_copy_position(h: *mut c_void) -> i32 {
+    if h.is_null() { return -1; }
+    let handler = &*(h as *mut TextInputHandler);
+    handler.get_copy_position()
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn text_input_handler_get_text(h: *mut c_void) -> *const c_char {
     if h.is_null() { return std::ptr::null(); }
     let handler = &*(h as *mut TextInputHandler);
@@ -456,4 +464,91 @@ pub unsafe extern "C" fn text_input_handler_get_keep_last_char_once(h: *mut c_vo
     if h.is_null() { return false; }
     let handler = &*(h as *mut TextInputHandler);
     handler.get_keep_last_char_once()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEXT_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static CARET_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LAST_TEXT: Mutex<String> = Mutex::new(String::new());
+
+    unsafe extern "C" fn test_text_cb(_ctx: *mut c_void, text: *const c_char) {
+        let s = CStr::from_ptr(text).to_str().unwrap_or("");
+        *LAST_TEXT.lock().unwrap() = s.to_string();
+        TEXT_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    unsafe extern "C" fn test_caret_cb(_ctx: *mut c_void, _pos: i32) {
+        CARET_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn new_handler() -> TextInputHandler {
+        TEXT_CALLS.store(0, Ordering::SeqCst);
+        CARET_CALLS.store(0, Ordering::SeqCst);
+        let mut h = TextInputHandler::new();
+        h.set_callbacks(std::ptr::null_mut(), test_text_cb, test_caret_cb);
+        h
+    }
+
+    #[test]
+    fn enable_updates_state_and_notifies() {
+        let mut h = new_handler();
+        h.enable("hello".to_string(), false);
+        assert!(h.is_enabled());
+        assert_eq!(h.get_text(), "hello");
+        assert_eq!(h.get_cursor_position(), 5);
+        assert_eq!(h.get_copy_position(), 5);
+        assert_eq!(TEXT_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(CARET_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(*LAST_TEXT.lock().unwrap(), "hello");
+    }
+
+    #[test]
+    fn typed_text_is_pushed_to_callback() {
+        let mut h = new_handler();
+        h.enable(String::new(), false);
+        h.on_text_input("wo");
+        h.on_text_input("rld");
+        assert_eq!(h.get_text(), "world");
+        assert_eq!(h.get_cursor_position(), 5);
+        assert_eq!(TEXT_CALLS.load(Ordering::SeqCst), 3);
+        assert_eq!(*LAST_TEXT.lock().unwrap(), "world");
+    }
+
+    #[test]
+    fn backspace_and_caret_navigation() {
+        let mut h = new_handler();
+        h.enable("abcd".to_string(), false);
+        h.on_text_input("\x08"); // backspace
+        assert_eq!(h.get_text(), "abc");
+        assert_eq!(h.get_cursor_position(), 3);
+        h.on_key_pressed(37, 0, 0); // LEFT arrow
+        assert_eq!(h.get_cursor_position(), 2);
+        h.on_text_input("X"); // insert mid-text
+        assert_eq!(h.get_text(), "abXc");
+    }
+
+    #[test]
+    fn update_from_game_reflects_back() {
+        let mut h = new_handler();
+        h.enable(String::new(), false);
+        h.update("server".to_string());
+        assert_eq!(h.get_text(), "server");
+        assert_eq!(*LAST_TEXT.lock().unwrap(), "server");
+        h.set_cursor_position(3);
+        assert_eq!(h.get_cursor_position(), 3);
+    }
+
+    #[test]
+    fn disable_clears_state() {
+        let mut h = new_handler();
+        h.enable("abc".to_string(), false);
+        h.disable();
+        assert!(!h.is_enabled());
+        assert_eq!(h.get_text(), "");
+    }
 }
