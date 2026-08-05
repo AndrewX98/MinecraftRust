@@ -229,21 +229,16 @@ fn main() {
     let local_inc = client_dir.join("include");
     let core_src = client_dir.join("src/mcpelauncher-core");
 
-    // --- mcpelauncher-client-bridge (1 file) ---
-    incr_compile("mcpelauncher-client-bridge", &[client_dir.join("src/capi.cpp")], |b| {
-        b.cpp(true).std("c++17").flag_if_supported("-w");
-        b.include(local_inc.join("mcpelauncher-common"));
-        b.include(local_inc.join("minecraft-imported-symbols"));
-    });
+    // --- mcpelauncher-client-bridge: Phase 10 DELETED (capi.cpp ported to
+    //     Rust capi.rs; linker::register_stub replaces rust_load_stub) ---
 
-    // --- mcpelauncher-core (5 files; Phase 6 deleted minecraft_utils.cpp,
+    // --- mcpelauncher-core (4 files; Phase 6 deleted minecraft_utils.cpp,
     //     minecraft_version.cpp, mod_loader.cpp, hook.cpp; added jnivm_mod_api.cpp;
     //     Phase 7 removed hybris_android_log_hook.cpp → android_log_varargs.cpp;
-    //     Phase 8 removed fmod_utils.cpp) ---
+    //     Phase 8 removed fmod_utils.cpp; Phase 9 deleted crash_handler.cpp) ---
     let core_sources: Vec<PathBuf> = [
         "src/hybris_utils.cpp",
         "src/android_log_varargs.cpp",
-        "src/crash_handler.cpp",
         "src/patch_utils.cpp",
         "src/jnivm_mod_api.cpp",
     ]

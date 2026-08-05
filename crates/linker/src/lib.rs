@@ -206,6 +206,30 @@ pub fn load_library(name: &str, symbols: &HashMap<String, *mut std::ffi::c_void>
     load_library_internal(name, symbols, false)
 }
 
+/// Register a stub library (never loads a real ELF), matching what the C++
+/// `linker_load_library_rust` twin / `rust_load_stub` used to do. Phase 10
+/// replacement for the `capi.cpp` bridge's stub registrations.
+pub fn register_stub(name: &str, symbols: &HashMap<String, *mut std::ffi::c_void>) -> Handle {
+    load_library_internal(name, symbols, true)
+}
+
+/// Look up a previously loaded/stubbed library handle by name.
+pub fn find_library(name: &str) -> Option<Handle> {
+    let state = STATE.read().unwrap();
+    state.libraries_by_name.get(name).copied()
+}
+
+/// Add a directory to the library search path (phase-10 Rust twin of
+/// `linker_rust_add_search_path`).
+pub fn add_search_path(path: &str) {
+    log::info!("linker: adding search path: '{}'", path);
+    let mut state = STATE.write().unwrap();
+    if !state.search_paths.contains(&path.to_string()) {
+        state.search_paths.push(path.to_string());
+        log::info!("linker: search paths now: {:?}", state.search_paths);
+    }
+}
+
 fn load_library_internal(
     name_: &str,
     external_symbols: &HashMap<String, *mut std::ffi::c_void>,

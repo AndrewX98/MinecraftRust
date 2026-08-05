@@ -1,6 +1,6 @@
 # Static Libraries Analysis
 
-All former cmake-built static libraries are now compiled locally by **5 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
+All former cmake-built static libraries are now compiled locally by **4 `cc::Build` instances** in `build.rs`. No prebuilt cmake archives are linked. The C++ infrastructure is still compiled from source and linked as `.a` files, but the compilation is fully within `MinecraftRust/`.
 
 The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils**) has been **ported to Rust** (`crates/simple-ipc/`, `crates/msa-daemon-client/`, `crates/daemon-utils/`) and removed from the C++ build — see `docs/PORT_SIMPLEIPC.md`, `docs/PORT_MSA_DAEMON_CLIENT.md`, `docs/PORT_DAEMON_UTILS.md`.
 
@@ -8,35 +8,32 @@ The IPC/auth chain (**simpleipc**, **msa-daemon-client**, **daemon-client-utils*
 
 | Library | Role | Objects | Complexity |
 |---------|------|---------|-----------|
-| `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 9 objects | **LARGE** |
+| `mcpelauncher-core` | Game loading, hooks, patching, mod loader | 4 objects | **LARGE** |
 | `cll-telemetry` | Telemetry collection + upload | 15 objects | LARGE (skippable) |
 | `game-window` | X11/EGL window, input handling | 7 objects | **MEDIUM** |
-| `mcpelauncher-client-bridge` | Rust ↔ C++ bridge (capi.cpp) | 1 object | SMALL |
+| ~~`mcpelauncher-client-bridge`~~ | ~~Rust ↔ C++ bridge (capi.cpp)~~ → **Phase 10: deleted** (ported to Rust `capi.rs`) | – | – |
 | `mcpelauncher-client-jni` | JNI stubs, class wrappers, libjnivm C++ | ~35+ objects | **LARGE** |
 
 **Ported to Rust (removed):** `simpleipc` → `crates/simple-ipc/`, `msa-daemon-client` → `crates/msa-daemon-client/`, `daemon-client-utils` → `crates/daemon-utils/`. `linux-gamepad` and `logger` were already handled previously (Rust `gamepad` module / `util::logger`).
 
 ## Detailed Analysis
 
-### `mcpelauncher-core` (4.2 MB) — CRITICAL
+### `mcpelauncher-core` — CRITICAL
 
-Central orchestration hub. **9 source files:**
+Central orchestration hub. **4 source files** (Phases 6–9 deleted the other 5):
 
 | File | Lines | Role |
 |------|-------|------|
-| `minecraft_utils.cpp` | 1007 | **The most important file.** `getLibCSymbols()`, `loadLibM()`, `loadFMod()`, `setupHybris()`, `setupApi()`, `loadMinecraftLib()` (master game loader), `setupGLES2Symbols()` |
-| `hook.cpp` | 265 | `HookManager`. ELF relocation table manipulation for function hooking |
-| `mod_loader.cpp` | 184 | `ModLoader`. Loads .so mods, resolves ELF deps, calls `mod_preinit`/`mod_init` |
-| `crash_handler.cpp` | 129 | Signal handlers for SIGSEGV/SIGABRT/SIGFPE/SIGBUS/SIGILL |
-| `patch_utils.cpp` | 97 | Pattern-based memory scanning, x86/ARM instruction patching |
 | `hybris_utils.cpp` | 55 | Load OS-native libraries via dlopen, register with bionic linker |
+| `patch_utils.cpp` | 97 | Pattern-based memory scanning, x86/ARM instruction patching |
 | `android_log_varargs.cpp` | 29 | varargs `__android_log_{print,vprint,assert}` shim; level map is Rust (`corelib/android_log_hook.rs`), `__android_log_write` is Rust (client) — all registered as `liblog.so` symbols |
-| `minecraft_version.cpp` | 34 | Version code parsing (962112004 → 1.21.120.4) |
-| ~~`fmod_utils.cpp`~~ | 36 | ~~Hook FMOD::System::init for custom sample rate~~ → **Phase 8: deleted**; Rust `client/fmod_utils.rs` owns the settable `SAMPLE_RATE` atomic + `mc_fmod_set_sample_rate`; `fake_audio.cpp` calls the Rust extern |
+| `jnivm_mod_api.cpp` | ~80 | Surviving C++ shim (Phase 6): `jnivm_register_method`, `mc_mod_log`/`mc_mod_vlog` (va_list), `mc_mod_request_google_credentials` |
+
+**Ported/deleted:** `minecraft_utils.cpp` (654), `minecraft_version.cpp` (33), `mod_loader.cpp` (204), `hook.cpp` (302) → **Phase 6** (`corelib/minecraft_utils.rs`, `minecraft_version.rs`); `hybris_android_log_hook.cpp` → **Phase 7**; `fmod_utils.cpp` (39) → **Phase 8** (`client/fmod_utils.rs` + `mc_fmod_set_sample_rate`); `crash_handler.cpp` (129) → **Phase 9** (dormant, deleted). The `capi.cpp` bridge (259) → **Phase 10** (Rust `client/capi.rs`).
 
 **Used at runtime?** YES — every code path. The entire game loading pipeline calls into this library.
 
-**Port complexity: LARGE.** Deeply coupled with bionic linker soinfo internals. The `minecraft_utils.cpp` monolith is 1007 lines of gnarly C++.
+**Port complexity: LARGE.** Deeply coupled with bionic linker soinfo internals. The `minecraft_utils.cpp` monolith was 1007 lines of gnarly C++.
 
 ### `linker` — DELETED in Phase 6 ✅
 

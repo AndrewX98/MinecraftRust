@@ -16,8 +16,8 @@ fn main() {
     // Static C++ libs from cc::Build (compiled by cpp-bridge-sys).
     // cc::Build emits `rustc-link-lib=static=...` which reaches the lib
     // target but not the binary — same-package lib+bin skips the rlib.
+    // Phase 10 removed `mcpelauncher-client-bridge` (capi.cpp deleted).
     static STATIC_LIBS: &[&str] = &[
-        "mcpelauncher-client-bridge",
         "mcpelauncher-core",
         "mcpelauncher-cll-telemetry",
         "mcpelauncher-gamewindow",

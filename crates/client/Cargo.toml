@@ -13,6 +13,7 @@ cpp-bridge-sys = { path = "../cpp-bridge-sys" }
 corelib = { path = "../corelib" }
 linker = { path = "../linker" }
 libc-shim = { path = "../libc-shim" }
+minecraft-imported-symbols = { path = "../minecraft-imported-symbols" }
 util = { path = "../util" }
 apkinfo = { path = "../apkinfo" }
 libjnivm-sys = { path = "../libjnivm-sys" }

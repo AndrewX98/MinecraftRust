@@ -281,6 +281,7 @@ dependencies = [
  "libjnivm-sys",
  "linker",
  "log",
+ "minecraft-imported-symbols",
  "msa-daemon-client",
  "p256",
  "rand_core",

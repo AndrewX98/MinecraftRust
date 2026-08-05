@@ -321,6 +321,11 @@ Has **no active caller** (verified by grep — only its own header/src). Two cho
 
 Do this last; it's independent of everything and non-blocking.
 
+> **Implementation note (2026-08-05):** **deleted** (`crash_handler.cpp` + both header
+> copies). `CrashHandler` had zero callers in the final binary — the only trace left is a
+> comment in `linker/src/lib.rs:1366` (docs-only, left as-is). The Rust linker already
+> provides `dladdr` for symbolization if a host backtracer is ever wanted.
+
 ---
 
 ## Phase 10 — delete the `capi.cpp` bridge
@@ -333,6 +338,28 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
   eglut, rust_bridge); strip remaining `MinecraftUtils::`/`HybrisUtils::` calls.
 - Re-point `capi.rs` extern block to the Rust `corelib` `#[no_mangle]`s, delete `capi.cpp`,
   drop `mcpelauncher-client-bridge` from `cpp-bridge-sys/build.rs:233`.
+
+> **Implementation note (2026-08-05):** **done.** `capi.cpp` deleted and
+> `mcpelauncher-client-bridge` dropped (build.rs now builds 4 static libs). Its four
+> functions moved into Rust `crates/client/src/capi.rs`:
+> - `setup_paths` → calls `path_helper::set_game_dir/data_dir/cache_dir` directly.
+> - `get_libc_symbols_from_cpp` → `corelib::minecraft_utils::get_libc_symbols()` directly
+>   (drops the FFI buffer + `CStr` parsing).
+> - `load_core_libraries` → full Rust orchestration: `linker::init()`,
+>   `core_minecraft_utils_register_libc_stub/load_lib_m/setup_hybris`, then
+>   `linker::register_stub` for libOpenSLES/libGLESv1_CM/libstdc++/libGLESv2/liblog/
+>   libmcpelauncher_gamewindow, then `linker::add_search_path`. The GLESv2 stubs map all
+>   166 `GLESV2_SYMBOLS` to a Rust `glesv2_stub() -> i32 { 0 }`; liblog maps the 4
+>   `__android_log_*` fns (write = Rust, print/vprint/assert = C++ varargs shim).
+>   Carried over the ThreadMover/pthread_create deadlock warning comment.
+> - `mc_relocate_glesv2_symbols` → kept as a `#[no_mangle] pub extern "C" fn` (same ABI as
+>   C `void* (*)(const char*)`) since `jni_bridge_stub.cpp:315` still calls it with
+>   `fake_egl::eglGetProcAddress`; resolves via `linker::find_library` + `linker::add_symbols`.
+>   Added `pub fn register_stub/find_library/add_search_path` to the `linker` crate
+>   (small wrappers over existing internals; stub semantics preserved — the old C++ path
+>   used `is_stub=true`, so `register_stub` avoids accidentally ELF-loading a system
+>   `libGLESv2.so`). Verified: build green, zero capi.cpp symbols, `relocated 166 GLESv2`
+>   in boot log, main menu exit 0.
 
 ---
 
@@ -348,8 +375,8 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 | 5 | hook (HookManager) | 302 | ✅ dynamic-parse/reloc-rewrite (in-mem) | **hi** | done (Phase 6) |
 | 6 | minecraft_utils | 654 | – (symbol-set test) | **hi** | done (Phase 6) |
 | 7 | hybris_android_log_hook | 53 | ✅ convertAndroidLogLevel | lo | done |
-| 8 | fmod_utils (finish) | 39 | – | lo | done || 9 | crash_handler | 131 | – | lo | none (dormant) |
-| 10 | capi.cpp bridge | 275 | – | med | all |
+| 8 | fmod_utils (finish) | 39 | – | lo | done || 9 | crash_handler | 131 | – | lo | done (deleted) |
+| 10 | capi.cpp bridge | 275 | – | med | done (Phase 10) |
 
 **Ordering rule of thumb:** every phase is allowed only by an earlier phase that has already
 moved its dependency to Rust, and every phase leaves `cargo build -p client` green **and**
