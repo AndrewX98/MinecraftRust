@@ -1,5 +1,4 @@
 #include "fake_audio.h"
-#include <mcpelauncher/fmod_utils.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -9,6 +8,7 @@ extern "C" {
 int32_t rust_audio_start(int32_t channels, int32_t sampleRate);
 void rust_audio_push_i16(const int16_t* samples, int32_t count);
 void rust_audio_stop();
+void mc_fmod_set_sample_rate(int32_t sampleRate);
 }
 
 int32_t FakeAudio::defaultSampleRate = 48000;
@@ -215,5 +215,5 @@ void FakeAudio::updateDefaults() {
     defaultNumChannels = ReadEnvInt("AUDIO_CHANNEL_COUNT", 2);
     defaultBufSize = ReadEnvInt("AUDIO_BUFFER_FRAMES", 512);
 
-    FmodUtils::setSampleRate(defaultSampleRate);
+    mc_fmod_set_sample_rate(defaultSampleRate);
 }

@@ -278,6 +278,16 @@ presence assertion (Rust test listing required `mcpelauncher_*` keys).
 **unit-testable**. The `abort()` in `__android_log_assert` is fine as-is.
 - `capi.cpp` takes these addresses for the `liblog.so` stub (`capi.cpp:233-236`) — keep names.
 
+> **Implementation note (2026-08-05):** `hybris_android_log_hook.cpp` **deleted**.
+> The priority→`LogLevel` map is single-sourced in Rust (`corelib/android_log_hook.rs`:
+> `convert_android_log_level`, `#[no_mangle] mc_android_convert_log_level`) with unit tests.
+> Stable Rust cannot define `...`/va_list extern "C" fns, so the three varargs entry points
+> moved to a tiny C++ shim (`mcpelauncher-core/src/android_log_varargs.cpp`) that calls the
+> Rust level converter; `__android_log_write` (non-varargs) is Rust-owned in
+> `client/android_log_hook.rs` via `util::Log`. `capi.cpp` unchanged — the four
+> `__android_log_*` externs still resolve at final link (Rust + shim). Final print path was
+> already Rust (`Log::vlog` → `mcpelauncher_log_vlog` in `rust_bridge.rs`). 45 corelib tests.
+
 ---
 
 ## Phase 8 — `fmod_utils` (finish existing Rust twin)
@@ -289,6 +299,15 @@ presence assertion (Rust test listing required `mcpelauncher_*` keys).
   set_sample_rate`. Drop `setSampleRate` from `fmod_utils.cpp` (or from `fake_audio.cpp`).
 - `initHook` env overrides (`FMOD_DSP_BUFFER_LENGTH` etc.) already covered.
 - Remove `fmod_utils.cpp`.
+
+> **Implementation note (2026-08-05):** `fmod_utils.cpp` + both `fmod_utils.h` copies
+> **deleted**. The Rust twin (`client/fmod_utils.rs`) now owns the settable `SAMPLE_RATE`
+> as an `AtomicI32` (default 48000), read by `init_hook`'s `setSoftwareFormat` call, and
+> exposes `#[no_mangle] mc_fmod_set_sample_rate`. The lone C++ consumer,
+> `fake_audio.cpp:218`, drops the `fmod_utils.h` include and calls
+> `mc_fmod_set_sample_rate(defaultSampleRate)` directly (declared in its own `extern "C"`
+> block). `AUDIO_SAMPLE_RATE` env behavior unchanged. `minecraft_load.rs` hook wiring
+> untouched. 45 corelib tests.
 
 ---
 
@@ -328,8 +347,8 @@ Only after `capi.rs mc_*` functions are all Rust-backed:
 | 4 | mod_loader | 204 | ✅ getModDependencies | med | done (Phase 6) |
 | 5 | hook (HookManager) | 302 | ✅ dynamic-parse/reloc-rewrite (in-mem) | **hi** | done (Phase 6) |
 | 6 | minecraft_utils | 654 | – (symbol-set test) | **hi** | done (Phase 6) |
-| 7 | hybris_android_log_hook | 53 | ✅ convertAndroidLogLevel | lo | capi |
-| 8 | fmod_utils (finish) | 39 | – | lo | fake_audio || 9 | crash_handler | 131 | – | lo | none (dormant) |
+| 7 | hybris_android_log_hook | 53 | ✅ convertAndroidLogLevel | lo | done |
+| 8 | fmod_utils (finish) | 39 | – | lo | done || 9 | crash_handler | 131 | – | lo | none (dormant) |
 | 10 | capi.cpp bridge | 275 | – | med | all |
 
 **Ordering rule of thumb:** every phase is allowed only by an earlier phase that has already

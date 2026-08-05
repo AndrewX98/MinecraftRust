@@ -3,6 +3,7 @@
 //! the game's `FMOD::System::init` is redirected to.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::OnceLock;
 
 type FmodInit = unsafe extern "C" fn(*mut c_void, i32, u32, *mut c_void) -> i32;
@@ -19,7 +20,7 @@ struct FmodPointers {
 
 static FMOD_PTRS: OnceLock<FmodPointers> = OnceLock::new();
 
-const SAMPLE_RATE: i32 = 48000;
+static SAMPLE_RATE: AtomicI32 = AtomicI32::new(48000);
 
 fn read_env_int(name: &str, def: i32) -> i32 {
     std::env::var(name)
@@ -80,7 +81,7 @@ pub extern "C" fn init_hook(
         );
         (f.set_software_format)(
             system,
-            SAMPLE_RATE,
+            SAMPLE_RATE.load(Ordering::Relaxed),
             read_env_int("FMOD_SPEAKER_MODE", 0),
             0,
         );
@@ -90,3 +91,9 @@ pub extern "C" fn init_hook(
 
 /// Hook replacing `FMOD::System::setOutput` — no-op stub to keep the game on aaudio.
 pub extern "C" fn set_output_hook() {}
+
+/// Set the FMOD output sample rate (called from C++ `FakeAudio::updateDefaults`).
+#[no_mangle]
+pub extern "C" fn mc_fmod_set_sample_rate(rate: i32) {
+    SAMPLE_RATE.store(rate, Ordering::Relaxed);
+}

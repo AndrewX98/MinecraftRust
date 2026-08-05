@@ -30,9 +30,9 @@ Central orchestration hub. **9 source files:**
 | `crash_handler.cpp` | 129 | Signal handlers for SIGSEGV/SIGABRT/SIGFPE/SIGBUS/SIGILL |
 | `patch_utils.cpp` | 97 | Pattern-based memory scanning, x86/ARM instruction patching |
 | `hybris_utils.cpp` | 55 | Load OS-native libraries via dlopen, register with bionic linker |
-| `hybris_android_log_hook.cpp` | 61 | `__android_log_print` impl, registered as `liblog.so` symbols |
+| `android_log_varargs.cpp` | 29 | varargs `__android_log_{print,vprint,assert}` shim; level map is Rust (`corelib/android_log_hook.rs`), `__android_log_write` is Rust (client) — all registered as `liblog.so` symbols |
 | `minecraft_version.cpp` | 34 | Version code parsing (962112004 → 1.21.120.4) |
-| `fmod_utils.cpp` | 36 | Hook FMOD::System::init for custom sample rate |
+| ~~`fmod_utils.cpp`~~ | 36 | ~~Hook FMOD::System::init for custom sample rate~~ → **Phase 8: deleted**; Rust `client/fmod_utils.rs` owns the settable `SAMPLE_RATE` atomic + `mc_fmod_set_sample_rate`; `fake_audio.cpp` calls the Rust extern |
 
 **Used at runtime?** YES — every code path. The entire game loading pipeline calls into this library.
 

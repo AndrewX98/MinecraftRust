@@ -11,6 +11,7 @@ mod jnivm_globals;
 mod jni;
 mod text_input_handler;
 mod fmod_utils;
+mod android_log_hook;
 mod minecraft_load;
 mod path_helper;
 mod xbox_auth;
