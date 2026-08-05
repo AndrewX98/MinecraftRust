@@ -75,6 +75,18 @@ Verify/replace the remaining C++ dispatchers with libjnivm-sys calls on MainActi
 - `stopGame`/`waitForGameExit`/`requestExitGame` — already Rust (`set_looper_running` + `game_state` condvar); verify.
 - **Gate:** boot; type in a text box; back/return keys; gamepad connect/disconnect; rendering.
 
+### Phase 4 result (2026-08-05) — dispatchers verified; text-input pipeline wired
+
+Committed `a4188c28`. Audit found every dispatcher except text input already runs on Rust; the C++ versions (`onWindowClosed`, `onWindowResized`, `onSetTextboxText`, `onCaretPosition`, `setLastChar`, `setGameControllerConnected`, `sendUri`, `importFile`, `stopGame`, `waitForGameExit`, `requestExitGame`) have no FFI wrappers — dead code. Real work was the text pipeline:
+
+- **launcher→game push** (`jni_support.rs`): new `jni_support_on_set_textbox_text`/`on_caret_position` (TextInputHandler callbacks, wired via `text_input_handler_set_callbacks` at startup) invoke `nativeSetTextboxText(text, copyPos, cursorPos)` as an **instance** `CallVoidMethodA` on `(*ga).java_game_activity` (opaque `this`, mirrors C++). Caret falls back to `nativeSetTextboxText` because `Java_..._nativeCaretPosition` is missing in 1.26.20; then `setLastChar(text[cursor])`.
+- **game→launcher** (`main_activity.rs`): `showKeyboard`→enable, `hideKeyboard`→disable (with `ignoreNextHideKeyboard` latch), `updateTextboxText`/`setTextBoxBackend`→update, `setCaretPosition`→set_cursor_position, `getCaretPosition`/`getCursorPosition`→handler cursor, `getTextBoxBackend`→handler text, `setLastChar`→stored (feeds `getKeyFromKeyCode`).
+- **instance-call fix**: `onReturnKeyPressed` + `onWindowResized` switched from `CallStaticVoidMethod(A)` to `CallVoidMethod(A)` on the activity object.
+- **TextInputHandler**: added `get_copy_position` + 5 unit tests (handler state transitions + callback firing). libjnivm-sys `GetStringUTFChars`/`NewStringUTF` confirmed working, so game natives invoked via the Rust env can marshal jstrings (same proof as Phase 3 `getExternalStoragePath`).
+- Window-close stays `_exit(0)` (`jni_support_on_window_closed` remains unwired by design — clean exit, revisited later if unsaved-state is an issue). `onWindowCreated` still fed via C++ for `jni_support_get_window_ptr` until Phase 5.
+
+**Gates pass:** build, 31 tests (26+5), boot to main menu — exit 0, storage path non-empty, missing-symbol set == C++ baseline, no FindClass/GetMethodID failures. Text typing is verified at the handler level; full in-game typing needs an interactive run.
+
 ### Phase 5 — Delete the FakeJni/Baron chain
 
 - Replace the C++ `JniSupport` object (`jni_support_new_cpp`/`jni_support_init_activity`/`jni_support_destroy_cpp`, `jni_bridge_stub.cpp:326`) with the Rust `JniSupport` struct (already mirrored in `jni_support.rs`); remove `registerJniClasses()` ctor work.
