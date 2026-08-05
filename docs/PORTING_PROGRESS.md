@@ -81,6 +81,8 @@ The top-level Android native function hooks (`ALooper_prepare`, `ALooper_addFd`,
 
 ## Critical Path to Pure Rust
 
+> Plan: `docs/PORT_JNI_SUPPORT.md` — 5 phases (registration audit → native coverage → env/vm switch → callback dispatch → delete FakeJni/Baron chain). Unlocks ~5,500 lines. Full sequence after that: `docs/ROADMAP_TO_FULL_RUST.md` (M1 jni_support → M2 http → M3 dead stubs → M4 live shims → M5 variadic.c → M6 drop cc).
+
 ```
 jni_support.cpp  ──blocker──>  main_activity.cpp  ──blocker──>  jni_descriptors.cpp
 

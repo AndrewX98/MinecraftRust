@@ -93,12 +93,14 @@ All in `docs/`:
 - `PORTING_PROGRESS.md` — per-file status for JNI + static libs
 - `STATIC_LIBS.md` — 2 `cc::Build` targets, line counts, dep graph
 - `PORT_FAKE_LOOPER.md` — phased plan (FakeLooper + WindowCallbacks + FakeInputQueue + CorePatches → Rust)
+- `PORT_JNI_SUPPORT.md` — 5-phase plan to delete the FakeJni/Baron chain (run game on the Rust `libjnivm-sys` VM, ~5,500 lines)
+- `ROADMAP_TO_FULL_RUST.md` — milestones 1–6 to zero C++ compilation (jni_support → http → dead stubs → live shims → variadic.c → drop cc)
 
 ## Porting (if adding Rust code)
 
 | To port | Where | Depends on |
 |---------|-------|------------|
-| JNI classes (7 files) | `crates/client/src/jni/` | `main_activity.cpp` → `store.cpp` → rest; all 57 MainActivity methods ported to Rust (`main_activity.rs`); 9 wrapper classes ported (`jnivm_class_wrappers.rs`); C++ files still linked due to FakeJni registration deps in `jni_support.cpp` |
+| JNI classes (7 files) | `crates/client/src/jni/` | `main_activity.cpp` → `store.cpp` → rest; all 57 MainActivity methods ported to Rust (`main_activity.rs`); 9 wrapper classes ported (`jnivm_class_wrappers.rs`); C++ files still linked due to FakeJni registration deps in `jni_support.cpp` (see `PORT_JNI_SUPPORT.md`) |
 | FakeLooper/WindowCallbacks/FakeInputQueue/CorePatches | **done** — `fake_looper.rs` (thread_local `CURRENT`, hooks), `window_callbacks.rs`, `fake_inputqueue.rs`, `core_patches.rs`; `fake_looper_stub.cpp`/`window_callbacks_stub.cpp`/`core_patches_stub.cpp`/`fake_inputqueue_stub.cpp` + headers deleted (see `PORT_FAKE_LOOPER.md`, 5-phase plan) |
 | Game window | **done** — `crate::game_window.rs` (Phase 5) creates the X11/EGL window directly via eglut and owns the window token + `game_window_*`/`mc_*`/`fake_looper_window_*` helpers | `mcpelauncher-gamewindow` C++ lib, `include/game-window/{game_window_manager.h,game_window_error_handler.h}`, `include/eglut/`, `manifest_libs/gamewindow/` all deleted; `client/build.rs` no longer links it |
 | IPC/Telemetry client | `crates/simple-ipc`, `daemon-utils`, `msa-daemon-client`, `cll-telemetry` | simple-ipc/daemon-utils/msa-daemon-client **wired** (C++ chain removed — see PORT docs); cll-telemetry **wired** (`client/cll_telemetry.rs`, C++ lib deleted — see PORT_CLL_TELEMETRY.md) |
