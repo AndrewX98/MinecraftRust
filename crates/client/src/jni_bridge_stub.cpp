@@ -7,7 +7,6 @@
 /// in rust_bridge.rs and calls through these extern "C" wrappers.
 
 #include "jni/jni_support.h"
-#include "fake_assetmanager.h"
 #include "fake_egl.h"
 #include "fake_audio.h"
 #include "xbox_live_helper.h"
@@ -115,11 +114,13 @@ extern "C" void mc_register_android_hook(void* map, const char* name, void* fn) 
 extern "C" void mc_register_fake_looper_hooks(void* map);
 // Rust registers FakeInputQueue hooks via mc_register_fake_input_queue_hooks
 extern "C" void mc_register_fake_input_queue_hooks(void* map);
+// Rust registers FakeAssetManager hooks via mc_register_fake_asset_manager_hooks
+extern "C" void mc_register_fake_asset_manager_hooks(void* map);
 
 extern "C" void mc_setup_android_hooks() {
     std::unordered_map<std::string, void*> android_syms;
 
-    FakeAssetManager::initHybrisHooks(android_syms);
+    mc_register_fake_asset_manager_hooks(&android_syms);
     mc_register_fake_looper_hooks(&android_syms);
     android_syms["ANativeWindow_getWidth"] = (void*)fake_anativewindow_getwidth;
     android_syms["ANativeWindow_getHeight"] = (void*)fake_anativewindow_getheight;

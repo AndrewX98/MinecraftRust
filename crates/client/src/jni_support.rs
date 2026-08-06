@@ -602,10 +602,7 @@ pub unsafe extern "C" fn jni_support_start_game(
     let cpp_callbacks = jni_support_get_game_activity_callbacks_ptr(cpp_support) as *mut GameActivityCallbacks;
 
     // Set the asset manager (FakeAssetManager instance)
-    extern "C" {
-        fn fake_assetmanager_get_instance() -> *mut c_void;
-    }
-    let am = fake_assetmanager_get_instance();
+    let am = crate::fake_assetmanager::fake_assetmanager_get_instance();
     support.asset_manager = SendPtr(am);
     jnivm_set_asset_manager(am);
 

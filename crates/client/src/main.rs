@@ -11,6 +11,7 @@ mod gamepad;
 mod eglut;
 mod fake_looper;
 mod fake_inputqueue;
+mod fake_assetmanager;
 mod main_activity;
 mod jnivm_class_wrappers;
 mod jnivm_globals;

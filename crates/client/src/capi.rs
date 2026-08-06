@@ -23,7 +23,6 @@ extern "C" {
                                                   game_handle: *mut c_void);
     fn fake_looper_set_jni_support(support: *mut c_void);
     fn fake_looper_set_rust_jni_support(support: *mut c_void);
-    fn fake_assetmanager_create_and_set_global(root_dir: *const i8);
 }
 
 /// Stub GLESv2 function (was the C++ lambda `+[](void)->int{return 0;}` in capi.cpp).
@@ -175,7 +174,7 @@ pub fn set_fake_looper_rust_jni_support(support: *mut c_void) {
 
 pub fn create_and_set_global_asset_manager(root_dir: &str) {
     let dir = CString::new(root_dir).unwrap();
-    unsafe { fake_assetmanager_create_and_set_global(dir.as_ptr()) }
+    unsafe { crate::fake_assetmanager::fake_assetmanager_create_and_set_global(dir.as_ptr()) }
 }
 
 pub fn dlsym(handle: *mut c_void, symbol: &str) -> *mut c_void {

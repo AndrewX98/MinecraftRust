@@ -6,6 +6,7 @@ extern "C" const char* path_helper_get_primary_data_directory();
 extern "C" const char* path_helper_get_game_dir();
 extern "C" const char* path_helper_get_abi_dir();
 extern "C" const char* path_helper_find_data_file(const char* path);
+extern "C" void* fake_assetmanager_get_instance();
 
 // Handle-type-agnostic dispatch wrappers (defined in mcpelauncher-linker/src/linker.cpp)
 extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
@@ -370,8 +371,7 @@ void JniSupport::startGame(ANativeActivity_createFunc* activityOnCreate, GameAct
     activity->stbi_load_from_memory = (decltype(activity->stbi_load_from_memory))stbiLoadFromMemory;
     activity->stbi_image_free = (decltype(activity->stbi_image_free))stbiImageFree;
 
-    assetManager = std::make_unique<FakeAssetManager>(std::string(path_helper_get_game_dir()) + "assets");
-    FakeAssetManager::setGlobalAssetManager((AAssetManager *)assetManager.get());
+    assetManager = fake_assetmanager_get_instance();
 
     XboxLiveHelper::getInstance().setJvm(&vm);
 
@@ -380,7 +380,7 @@ void JniSupport::startGame(ANativeActivity_createFunc* activityOnCreate, GameAct
     if(activityOnCreate != nullptr) {
         nativeActivity.callbacks = &nativeActivityCallbacks;
         nativeActivity.vm = (JavaVM*)&vm;
-        nativeActivity.assetManager = (AAssetManager*)assetManager.get();
+        nativeActivity.assetManager = (AAssetManager*)assetManager;
         nativeActivity.env = (JNIEnv*)&frame.getJniEnv();
         nativeActivity.internalDataPath = "/internal";
         nativeActivity.externalDataPath = "/external";
@@ -403,7 +403,7 @@ void JniSupport::startGame(ANativeActivity_createFunc* activityOnCreate, GameAct
     } else {
         gameActivity.callbacks = &gameActivityCallbacks;
         gameActivity.vm = (JavaVM*)&vm;
-        gameActivity.assetManager = (AAssetManager*)assetManager.get();
+        gameActivity.assetManager = (AAssetManager*)assetManager;
         gameActivity.env = (JNIEnv*)&frame.getJniEnv();
         gameActivity.internalDataPath = "/internal";
         gameActivity.externalDataPath = "/external";

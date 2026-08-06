@@ -2,7 +2,6 @@
 
 #include "main_activity.h"
 #include "store.h"
-#include "fake_assetmanager.h"
 #include <baron/baron.h>
 #include <android/native_activity.h>
 #include <android/game_activity.h>
@@ -27,7 +26,7 @@ private:
     GameActivity gameActivity;
     std::shared_ptr<MainActivity> activity;
     jobject activityRef;
-    std::unique_ptr<FakeAssetManager> assetManager;
+    void *assetManager;
     ANativeWindow *window;
     AInputQueue *inputQueue;
     std::condition_variable gameExitCond;

@@ -295,7 +295,6 @@ fn main() {
         "xal_webview_factory_stub.cpp",
         "fake_egl_stub.cpp",
         "text_input_handler_stub.cpp",
-        "fake_assetmanager_stub.cpp",
         "xbox_live_helper_stub.cpp",
         "xbox_live_stub.cpp",
         "jni_bridge_stub.cpp",
