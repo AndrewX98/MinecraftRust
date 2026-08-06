@@ -17,7 +17,6 @@ use minecraft_imported_symbols::GLESV2_SYMBOLS;
 
 extern "C" {
     fn mc_setup_android_hooks();
-    pub fn mc_egl_swap_buffers(display: *mut c_void, surface: *mut c_void) -> i32;
     fn mc_dlsym(handle: *mut c_void, symbol: *const i8) -> *mut c_void;
     fn jni_support_register_minecraft_natives_cpp(s: *mut c_void,
                                                   game_handle: *mut c_void);

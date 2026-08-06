@@ -7,7 +7,6 @@
 /// in rust_bridge.rs and calls through these extern "C" wrappers.
 
 #include "jni/jni_support.h"
-#include "fake_egl.h"
 #include "fake_audio.h"
 #include "xbox_live_helper.h"
 #include <game_window.h>
@@ -258,14 +257,6 @@ extern "C" void* mc_dlsym(void* handle, const char* symbol) {
 }
 
 // (bridge function ported to Rust — see minecraft_load.rs)
-
-// ============================================================
-// C-linkage wrapper for eglSwapBuffers (called from Rust)
-// ============================================================
-
-extern "C" int mc_egl_swap_buffers(void* display, void* surface) {
-    return fake_egl::eglSwapBuffers((EGLDisplay)display, (EGLSurface)surface);
-}
 
 // ============================================================
 // C++ wrappers for Rust bridge (FakeJni, PathHelper, XboxLiveHelper)

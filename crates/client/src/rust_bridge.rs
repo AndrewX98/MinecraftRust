@@ -90,7 +90,7 @@ mod stubs {
         display: *mut std::ffi::c_void,
         surface: *mut std::ffi::c_void,
     ) -> bool {
-        unsafe { crate::capi::mc_egl_swap_buffers(display, surface) != 0 }
+        unsafe { super::fake_egl::fake_egl_swap_buffers(display, surface) != 0 }
     }
 }
 
@@ -1169,17 +1169,15 @@ pub unsafe extern "C" fn fake_egl_install_library() {
         fake_egl_get_proc_address as *mut c_void,
         fake_egl_wait_client as *mut c_void,
     ];
-    let count = egl_names.len() as i32;
-
     extern "C" {
-        fn linker_load_library(
+        fn linker_load_library_rust(
             name: *const c_char,
-            names: *const *const c_char,
-            funcs: *const *mut c_void,
-            count: i32,
-        );
+            keys: *const *const c_char,
+            vals: *const *mut c_void,
+            len: usize,
+        ) -> usize;
     }
-    linker_load_library(c"libEGL.so".as_ptr(), egl_names.as_ptr(), egl_funcs.as_ptr(), count);
+    linker_load_library_rust(c"libEGL.so".as_ptr(), egl_names.as_ptr(), egl_funcs.as_ptr(), egl_names.len());
 
     // Load real EGL functions via dlopen/dlsym
     let libegl = libc::dlopen(c"libEGL.so".as_ptr() as *const libc::c_char, libc::RTLD_LAZY | libc::RTLD_LOCAL);

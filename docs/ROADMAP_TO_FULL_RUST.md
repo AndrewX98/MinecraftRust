@@ -34,8 +34,8 @@ The Rust `jni/*.rs` + `jni_support.rs` already provide these natives on the Rust
 
 | File | Lines | Action |
 |------|-------|--------|
-| `fake_assetmanager_stub.cpp` | 214 | Port FakeAssetManager (asset file I/O from game dir) to Rust; `main.rs:185` currently calls the C++ `fake_assetmanager_create_and_set_global` |
-| `fake_egl_stub.cpp` | 161 | Verify libEGL.so stub symbols register purely in Rust (`rust_bridge.rs` FakeEGL), then delete the C++ forwarding shim |
+| ~~`fake_assetmanager_stub.cpp`~~ | ~~214~~ | **DONE** — ported to Rust (`fake_assetmanager.rs`); C++ stub + header deleted |
+| ~~`fake_egl_stub.cpp`~~ | ~~161~~ | **DONE** — libEGL.so stub symbols register purely in Rust; `swappygl_swap` calls `fake_egl_swap_buffers` directly; C++ shim + header deleted |
 | `logger_stub.cpp` | ~40 | `Log::vlog` → Rust `util::logger` |
 | `main_stubs.cpp` | 8 | `LauncherOptions` global → Rust (`main.rs` already parses CLI args) |
 | `jni_bridge_stub.cpp` | ~50 (after M1) | Process globals + hybris hook registration + `JNI_OnLoad`-era glue → Rust module |

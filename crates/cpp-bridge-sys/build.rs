@@ -293,7 +293,6 @@ fn main() {
     let stub_files = [
         "settings_stub.cpp",
         "xal_webview_factory_stub.cpp",
-        "fake_egl_stub.cpp",
         "text_input_handler_stub.cpp",
         "xbox_live_helper_stub.cpp",
         "xbox_live_stub.cpp",
