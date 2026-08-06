@@ -5,10 +5,12 @@
 //! `setup_paths`, `get_libc_symbols_from_cpp`, `load_core_libraries` and the
 //! C-facing `mc_relocate_glesv2_symbols` (still called from `jni_bridge_stub.cpp`).
 //!
-//! The externs below are still defined in C++ (`jni_bridge_stub.cpp`).
-//! The liblog varargs entry points were ported to Rust (`android_log_hook.rs`,
-//! `mod_api.rs`) once the crate moved to nightly `c_variadic`. The android-hook
-//! registration (`mc_setup_android_hooks`) and `mc_dlsym` were ported here.
+//! The externs below are still defined in C++ (`jni_bridge_stub.cpp`), except
+//! `fake_looper_set_rust_jni_support`, which is now defined in Rust
+//! (`fake_looper.rs`). The liblog varargs entry points were ported to Rust
+//! (`android_log_hook.rs`, `mod_api.rs`) once the crate moved to nightly
+//! `c_variadic`. The android-hook registration (`mc_setup_android_hooks`) and
+//! `mc_dlsym` were ported here.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_long, c_void, CString};
@@ -19,7 +21,6 @@ extern "C" {
     fn mc_register_aaudio_stub(name: *const c_char);
     fn jni_support_register_minecraft_natives_cpp(s: *mut c_void,
                                                   game_handle: *mut c_void);
-    fn fake_looper_set_jni_support(support: *mut c_void);
     fn fake_looper_set_rust_jni_support(support: *mut c_void);
 }
 
@@ -216,10 +217,6 @@ pub fn create_cpp_jni_support() -> *mut c_void {
 pub fn register_minecraft_natives_cpp(support: *mut c_void,
                                       game_handle: *mut c_void) {
     unsafe { jni_support_register_minecraft_natives_cpp(support, game_handle) }
-}
-
-pub fn set_fake_looper_jni_support(support: *mut c_void) {
-    unsafe { fake_looper_set_jni_support(support) }
 }
 
 pub fn set_fake_looper_rust_jni_support(support: *mut c_void) {

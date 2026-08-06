@@ -11,7 +11,7 @@
 | `src/jni/jni_descriptors.cpp` | 305 | FakeJni class descriptors | registerClass gone |
 | `src/jnivm_class_wrappers.cpp` | 721 | C++ class registration (redundant — Rust `jnivm_class_wrappers.rs` active) | linker deps from jni_support.cpp gone |
 | `src/jni/pulseaudio_stub.cpp` + `uuid_stub.cpp` | 59 | FakeJni types | VM chain gone |
-| `src/jni_bridge_stub.cpp` | 354 | shrinks to ~50 lines (FakeJni LocalFrame/attachLibrary wrappers, JniSupport globals) | VM chain gone |
+| `src/jni_bridge_stub.cpp` | 354 → 121 | shrinks to ~50 lines (FakeJni LocalFrame/attachLibrary wrappers, JniSupport globals) | VM chain gone |
 | libjnivm C++ (`jnivm/*.cpp` 14, `internal/*` 6, `codegen/*` 5, `fake-jni/*` 3, `baron/*` 1) | 2,990 | C++ JNI VM (fully duplicated by `libjnivm-sys`) | VM chain gone |
 
 **Not in scope (separate task, ~514 lines):** `src/jni/lib_http_client.cpp` (290) + `src/jni/lib_http_client_websocket.cpp` (224) — die only after Rust `jni/http_client.rs`/`websocket.rs` response callbacks are wired.
@@ -91,7 +91,7 @@ Committed `a4188c28`. Audit found every dispatcher except text input already run
 
 - Replace the C++ `JniSupport` object (`jni_support_new_cpp`/`jni_support_init_activity`/`jni_support_destroy_cpp`, `jni_bridge_stub.cpp:326`) with the Rust `JniSupport` struct (already mirrored in `jni_support.rs`); remove `registerJniClasses()` ctor work.
 - Delete `main_activity.cpp`, `jni_descriptors.cpp`, `jnivm_class_wrappers.cpp`, `pulseaudio_stub.cpp`, `uuid_stub.cpp`.
-- Strip `jni_bridge_stub.cpp` to ~50 lines: process globals (`g_jni_support`, `g_rust_jni_support`) + hybris hook registration + `JNI_OnLoad`-era attachment. Remove `fake_jni_local_frame_*`, `fake_jni_jvm_attach_library`, Baron/FakeJni includes.
+- Strip `jni_bridge_stub.cpp` to ~50 lines: `JNI_OnLoad`-era attachment (attachLibrary/LocalFrame) + the C++ JniSupport factory/accessors. Remove `fake_jni_local_frame_*`, `fake_jni_jvm_attach_library`, Baron/FakeJni includes. (Process globals `g_jni_support`/`g_rust_jni_support`, looper routing `mc_set_looper_running_cpp`/`mc_jni_support_on_window_created_cpp`, and the game-close hooks `fake_looper_finish`/`fake_looper_on_game_activity_close` are **already Rust** — `crate::fake_looper` `G_RUST_JNI_SUPPORT`/`game_finish`; `jni_support_start_game_with_baron` reads the window from the Rust support. The file is 121 lines.)
 - Delete libjnivm C++ from `cpp-bridge-sys/build.rs` (lines 337-359: all `jnivm/*.cpp`, `fake-jni/*`, `baron/jvm.cpp`) + drop the `libjnivm` include path + `client/build.rs` link directives. Remove the `client/include/libjnivm/` tree.
 - **Gate:** `cargo build -p client`; `cargo test -p client`; `nm -C target/debug/client` shows zero `FakeJni`/`Baron`/`JniSupport::`/`MainActivity::` C++ symbols; boot to main menu with keyboard/mouse/render.
 

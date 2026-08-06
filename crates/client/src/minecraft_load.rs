@@ -29,8 +29,6 @@ extern "C" {
     fn core_patches_hide_mouse_pointer();
     fn core_patches_set_fullscreen(t: *mut c_void, fs: bool);
     fn core_patches_install(handle: *mut c_void);
-    // fake_looper_stub.cpp thunk
-    fn fake_looper_on_game_activity_close(native: *mut c_void);
 }
 
 fn read_env_flag(name: &str, def: bool) -> bool {
@@ -139,7 +137,7 @@ pub unsafe fn load_minecraft() -> *mut c_void {
     });
     hooks.push(McpelauncherHook {
         name: hook_name("GameActivity_finish"),
-        value: fake_looper_on_game_activity_close as *mut c_void,
+        value: crate::fake_looper::fake_looper_on_game_activity_close as *mut c_void,
     });
 
     // 4. FMOD: load via Rust linker, resolve System functions, hook init/setOutput.

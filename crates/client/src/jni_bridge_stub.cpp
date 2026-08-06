@@ -1,7 +1,6 @@
 /// Stub replacing jni_bridge.cpp for the Rust build.
 /// Provides extern "C" wrappers for C++-dependent operations that are not
-/// yet ported to Rust: window creation/GL setup, JNI support lifecycle, and
-/// MinecraftUtils::loadMinecraftLib.
+/// yet ported to Rust: JNI support lifecycle and the FakeJni/Baron VM bridge.
 ///
 /// Pure orchestration (mc_jni_create, mc_jni_start_game, etc.) lives in Rust
 /// in rust_bridge.rs and calls through these extern "C" wrappers.
@@ -9,67 +8,19 @@
 /// Ported to Rust (portable subset): mc_setup_android_hooks and mc_dlsym now
 /// live in capi.rs; rust_load_stub/rust_add_symbols, mc_register_android_hook,
 /// the unused Rust-bridge extern block, and dead jni_support_start_game_cpp /
-/// jni_support_get_text_input_handler are gone.
+/// jni_support_get_text_input_handler are gone. The process globals
+/// (g_jni_support/g_rust_jni_support), looper routing
+/// (mc_set_looper_running_cpp, mc_jni_support_on_window_created_cpp) and the
+/// game-close hooks (fake_looper_finish, fake_looper_on_game_activity_close)
+/// are now Rust (`crate::fake_looper`); the C++ JniSupport factory and the
+/// FakeJni/Baron accessors remain until the ga->vm switch (PORT_JNI_SUPPORT.md).
 
 #include "jni/jni_support.h"
 #include "xbox_live_helper.h"
-#include <game_window.h>
-#include <memory>
 
 extern "C" void* mcpelauncher_dispatch_dlsym(void* handle, const char* name);
 extern "C" void* mcpelauncher_dispatch_dlopen(const char* name, int flags);
 extern "C" int mcpelauncher_dispatch_dlclose(void* handle);
-
-// ============================================================
-// Process-lifetime state (replaces FakeLooper statics, Phase 4)
-// ============================================================
-// The window token lives in Rust (`crate::game_window`, Phase 5); the C++ side
-// keeps only the JniSupport pointers set once during startup
-// (fake_looper_set_*_jni_support).
-static JniSupport* g_jni_support = nullptr;
-static void* g_rust_jni_support = nullptr;
-
-// ============================================================
-// C++ FFI helpers for Rust prepare / pollAll / addFd / attachInputQueue
-// ============================================================
-
-extern "C" void mc_set_looper_running_cpp(bool running) {
-    if (g_jni_support) g_jni_support->setLooperRunning(running);
-}
-
-extern "C" void mc_jni_support_on_window_created_cpp(void* window, void* queue) {
-    if (g_jni_support) g_jni_support->onWindowCreated((ANativeWindow*)window, (AInputQueue*)queue);
-}
-
-extern "C" void* mc_get_jni_support() {
-    return g_jni_support;
-}
-
-extern "C" void* mc_get_rust_jni_support() {
-    return g_rust_jni_support;
-}
-
-// (window helpers ported to Rust — see crate::game_window, Phase 5)
-extern "C" void fake_looper_finish(void* native) {
-    ANativeActivity* an = (ANativeActivity*)native;
-    FakeJni::JniEnvContext ctx(*(FakeJni::Jvm *)an->vm);
-    auto activity = std::dynamic_pointer_cast<MainActivity>(ctx.getJniEnv().resolveReference(an->clazz));
-    if (activity) activity->quitCallback();
-}
-
-// C-linkage thunk for the GameActivity_finish hook (minecraft_load.rs).
-// Previously FakeLooper::onGameActivityClose; inlined here (Phase 4).
-extern "C" void fake_looper_on_game_activity_close(void* native) {
-    GameActivity* ga = (GameActivity*)native;
-    FakeJni::JniEnvContext ctx(*(FakeJni::Jvm *)ga->vm);
-    auto activity = std::dynamic_pointer_cast<MainActivity>(ctx.getJniEnv().resolveReference(ga->javaGameActivity));
-    if (activity) activity->quitCallback();
-}
-
-// ============================================================
-// Window creation + GL setup (ported to Rust — crate::game_window, Phase 5)
-// ============================================================
-// mc_create_window_and_setup_graphics now lives in Rust and uses Rust eglut.
 
 // ============================================================
 // C++ JniSupport factory (needed by looper/window internals)
@@ -87,14 +38,6 @@ extern "C" void jni_support_register_minecraft_natives_cpp(void* s, void* game_h
     support->registerMinecraftNatives(+[](const char* sym) -> void* {
         return mcpelauncher_dispatch_dlsym(handle, sym);
     });
-}
-
-extern "C" void fake_looper_set_jni_support(void* support) {
-    g_jni_support = (JniSupport*)support;
-}
-
-extern "C" void fake_looper_set_rust_jni_support(void* support) {
-    g_rust_jni_support = support;
 }
 
 // ============================================================
@@ -142,10 +85,6 @@ extern "C" void* jni_support_get_game_activity_callbacks_ptr(void* s) {
 
 extern "C" void* jni_support_get_java_vm_ptr(void* s) {
     return ((JniSupport*)s)->getJavaVM();
-}
-
-extern "C" void* jni_support_get_window_ptr(void* s) {
-    return ((JniSupport*)s)->getWindow();
 }
 
 extern "C" void* jni_support_get_activity_ref(void* s) {

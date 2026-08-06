@@ -265,7 +265,6 @@ impl GamepadData {
 
 pub struct WindowCallbacks {
     window: *mut c_void,
-    jni_support: *mut c_void,
     rust_jni_support: *mut c_void,
 
     keyboard_callbacks: Vec<CallbackEntry<KeyboardCallback>>,
@@ -295,13 +294,12 @@ pub struct WindowCallbacks {
 }
 
 impl WindowCallbacks {
-    fn new(window: *mut c_void, jni_support: *mut c_void, rust_jni_support: *mut c_void) -> Self {
+    fn new(window: *mut c_void, rust_jni_support: *mut c_void) -> Self {
         let mut w = 0;
         let mut h = 0;
         unsafe { eglutGetWindowSize(&mut w, &mut h) };
         WindowCallbacks {
             window,
-            jni_support,
             rust_jni_support,
             keyboard_callbacks: Vec::new(),
             mouse_button_callbacks: Vec::new(),
@@ -1270,11 +1268,10 @@ unsafe extern "C" fn eglut_cb_close() {
 #[no_mangle]
 pub unsafe extern "C" fn window_callbacks_create(
     window: *mut c_void,
-    jni_support: *mut c_void,
     rust_jni_support: *mut c_void,
     _input_queue: *mut c_void,
 ) -> *mut c_void {
-    let mut cb = Box::new(WindowCallbacks::new(window, jni_support, rust_jni_support));
+    let mut cb = Box::new(WindowCallbacks::new(window, rust_jni_support));
     cb.use_raw_input = read_env_flag("MCPELAUNCHER_CLIENT_RAW_INPUT");
     cb.forced_mode = input_mode_from_i32(read_env_int(
         "MCPELAUNCHER_CLIENT_FORCED_INPUT_MODE",
@@ -1462,7 +1459,7 @@ mod tests {
     use super::*;
 
     fn make_cb() -> WindowCallbacks {
-        let mut cb = WindowCallbacks::new(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        let mut cb = WindowCallbacks::new(std::ptr::null_mut(), std::ptr::null_mut());
         cb.send_events = true;
         cb.input_mode_switch_delay = 100;
         cb
@@ -1563,7 +1560,7 @@ mod tests {
 
     #[test]
     fn touch_pointer_ids_are_reused() {
-        let mut cb = WindowCallbacks::new(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        let mut cb = WindowCallbacks::new(std::ptr::null_mut(), std::ptr::null_mut());
         let p0 = cb.obtain_touch_pointer(100);
         let p1 = cb.obtain_touch_pointer(200);
         assert_ne!(p0, p1);

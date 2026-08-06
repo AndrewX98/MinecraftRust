@@ -191,7 +191,6 @@ fn main() {
 
     // Create C++ JniSupport for FakeLooper (window callbacks, text input, etc.)
     let _cpp_support = capi::create_cpp_jni_support();
-    capi::set_fake_looper_jni_support(_cpp_support);
     log::info!("mcpelauncher-client: C++ JniSupport created for FakeLooper");
 
     // Register game native methods (nativeRegisterThis, etc.) with the C++ Baron JVM.

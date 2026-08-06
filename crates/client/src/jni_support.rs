@@ -82,7 +82,6 @@ extern "C" {
     fn xbox_live_helper_set_jvm(jvm: *mut c_void);
     fn jni_support_get_game_activity_callbacks_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
-    fn jni_support_get_window_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_get_activity_ref(s: *mut c_void) -> *mut c_void;
     fn jni_support_set_game_activity_instance(s: *mut c_void, instance: *mut c_void);
     fn jni_support_get_game_activity_ptr(s: *mut c_void) -> *mut c_void;
@@ -470,10 +469,19 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     jni_support_set_game_activity_instance(s, (*ga).instance);
     eprintln!("=== jni_support_set_game_activity_instance returned ===");
 
-    // Read window from C++ JniSupport (set by FakeLooper::prepare during gameOnCreate)
-    eprintln!("=== About to call jni_support_get_window_ptr ===");
-    let win = jni_support_get_window_ptr(s);
-    eprintln!("=== Rust read window from JniSupport after gameOnCreate: {:p} ===", win);
+    // Read window from the Rust JniSupport (set by `prepare_impl` →
+    // `jni_support_on_window_created` during gameOnCreate; formerly the C++
+    // JniSupport::window read back via jni_support_get_window_ptr).
+    eprintln!("=== Reading window from Rust JniSupport ===");
+    let win = {
+        let rust_support = crate::fake_looper::rust_jni_support();
+        if rust_support.is_null() {
+            std::ptr::null_mut()
+        } else {
+            (*(rust_support as *const JniSupport)).window.0
+        }
+    };
+    eprintln!("=== Rust read window from Rust JniSupport after gameOnCreate: {:p} ===", win);
 
     // Read callbacks from the C++ GameActivityCallbacks (populated by game during gameOnCreate)
     let cb = &*cpp_callbacks;

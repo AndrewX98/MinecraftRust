@@ -20,8 +20,8 @@ Rust declares these extern "C" functions and calls them through FFI. They are im
 | `jni_support_create_cpp` | `jni_support_create_cpp()` (Rust → `jni_support_new_cpp()`) | jni_support.rs | Create C++ JniSupport |
 | `jni_support_destroy_cpp` | `jni_support_destroy_cpp()` (Rust → `jni_support_delete()`) | jni_support.rs | Destroy C++ JniSupport |
 | `jni_support_register_minecraft_natives_cpp` | `JniSupport::registerMinecraftNatives()` | jni_bridge_stub.cpp | Register game native methods |
-| `fake_looper_set_jni_support` | Store C++ JniSupport process global (read back via `mc_get_jni_support`) | jni_bridge_stub.cpp | JniSupport factory wiring for FakeLooper |
-| `fake_looper_set_rust_jni_support` | Store Rust JniSupport process global (read back via `mc_get_rust_jni_support`) | jni_bridge_stub.cpp | JniSupport factory wiring for FakeLooper |
+| `fake_looper_set_jni_support` | **deleted** — C++ `g_jni_support` global removed; looper routing uses Rust `jni_support_set_looper_running`/`jni_support_on_window_created` | — | JniSupport factory wiring for FakeLooper |
+| `fake_looper_set_rust_jni_support` | `crate::fake_looper::fake_looper_set_rust_jni_support` (Rust `#[no_mangle]`, stores `G_RUST_JNI_SUPPORT`; read via `rust_jni_support()`) | fake_looper.rs | JniSupport factory wiring for FakeLooper |
 | `fake_assetmanager_create_and_set_global` | `FakeAssetManager::setGlobalAssetManager` | jni_bridge_stub.cpp | Create global asset mgr |
 
 ### In `jni_support.rs` (7 functions + dispatch)
@@ -108,7 +108,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | File | Lines | Role |
 |------|-------|------|
 | `capi.cpp` | 213 | Low-level bridge: path setup, linker init, GLES2 symbol registration |
-| `jni_bridge_stub.cpp` | 182 | FakeJni/Baron JNI support FFI wrappers + process globals (JniSupport getters); android-hook registration + `mc_dlsym` + dead code ported to Rust (Phase 12) |
+| `jni_bridge_stub.cpp` | 121 | FakeJni/Baron JNI support FFI wrappers (C++ JniSupport factory + VM accessors); android-hook registration + `mc_dlsym` + dead code ported to Rust (Phase 12); process globals, looper routing, game-close hooks + `jni_support_get_window_ptr` moved to Rust (`crate::fake_looper`) |
 | `jnivm_class_wrappers.cpp` | 647 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs` — C++ kept for `registerClass<>()` linker deps from `jni_support.cpp`) |
 | `fake_egl_stub.cpp` | 161 | Delegates all EGL functions to Rust eglut module |
 | `store_stub.cpp` | 96 | Store JNI stubs (Store, StoreFactory, NativeStoreListener, etc.) |
@@ -133,6 +133,8 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | FakeLooper attachInputQueue | `FakeLooper::attachInputQueue()` | `fake_looper::attach_input_queue()` (Rust) | Done |
 | hybris hook lambdas | 6 lambdas in jni_bridge_stub.cpp | `fake_looper.rs` hook registration | Done |
 | `mc_setup_android_hooks` | `jni_bridge_stub.cpp` (unordered_map + `rust_load_stub` + `mc_register_android_hook`) | `capi::setup_android_hooks` (Rust map + `linker::register_stub`; hook fns take `&mut HashMap`; AAudio via `mc_register_aaudio_stub`) | Done (Phase 12) |
+| Looper routing + process globals | `g_jni_support`/`g_rust_jni_support`, `mc_set_looper_running_cpp`, `mc_jni_support_on_window_created_cpp`, `mc_get_jni_support`/`mc_get_rust_jni_support`, `fake_looper_set_*_jni_support` | `crate::fake_looper`: `G_RUST_JNI_SUPPORT` + `rust_jni_support()`; `prepare_impl` calls Rust `jni_support_set_looper_running`/`jni_support_on_window_created`; `jni_support_start_game_with_baron` reads the window from the Rust support | Done |
+| Game-close hooks | `fake_looper_finish`, `fake_looper_on_game_activity_close` (Baron `resolveReference` → `quitCallback`) | `crate::fake_looper::game_finish` → `jni_support_request_exit_game` (also fixes latent `std::bad_function_call` from the never-set C++ `quitCallback`) | Done |
 | start_game_with_baron | `JniSupport::startGame()` (Baron path) | `jni_support::jni_support_start_game_with_baron()` (Rust) | Done |
 | MainActivity JNI methods (57 methods) | `main_activity.cpp` | `main_activity.rs` | Done |
 | Class wrapper JNI methods (9 classes, 21 methods) | `jnivm_class_wrappers.cpp` | `jnivm_class_wrappers.rs` | Done |

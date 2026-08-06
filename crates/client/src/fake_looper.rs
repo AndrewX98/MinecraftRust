@@ -14,6 +14,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -82,15 +83,30 @@ const ALOOPER_POLL_TIMEOUT: i32 = -3;
 /// hooks ignore the looper argument and use thread-local state instead).
 static LOOPER_SENTINEL: u8 = 0;
 
-extern "C" {
-    fn fake_looper_finish(native: *mut c_void);
+/// Process-global Rust JniSupport pointer (replaces `g_rust_jni_support` in
+/// jni_bridge_stub.cpp). Set once during startup via `fake_looper_set_rust_jni_support`
+/// (now defined in Rust); used by `prepare_impl` and the game-close hooks.
+static G_RUST_JNI_SUPPORT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-    // C++ FFI helpers for prepare (JniSupport side only; window helpers are
-    // now Rust — `crate::game_window`)
-    fn mc_set_looper_running_cpp(running: bool);
-    fn mc_jni_support_on_window_created_cpp(window: *mut c_void, queue: *mut c_void);
-    fn mc_get_jni_support() -> *mut c_void;
-    fn mc_get_rust_jni_support() -> *mut c_void;
+/// Set the Rust JniSupport pointer (formerly the C++ `fake_looper_set_rust_jni_support`).
+#[no_mangle]
+pub extern "C" fn fake_looper_set_rust_jni_support(support: *mut c_void) {
+    G_RUST_JNI_SUPPORT.store(support, Ordering::SeqCst);
+}
+
+pub(crate) fn rust_jni_support() -> *mut c_void {
+    G_RUST_JNI_SUPPORT.load(Ordering::SeqCst)
+}
+
+/// Game-close hook body (replaces the C++ `fake_looper_finish` /
+/// `fake_looper_on_game_activity_close`, which resolved the Baron MainActivity
+/// and called its `quitCallback`). Routes to the Rust game-exit path
+/// (`jni_support_request_exit_game`), mirroring C++ `quitCallback = requestExitGame`.
+pub(crate) unsafe fn game_finish() {
+    let support = rust_jni_support();
+    if !support.is_null() {
+        crate::jni_support::jni_support_request_exit_game(support);
+    }
 }
 
 /// Active WindowCallbacks token for the current thread, resolved from looper
@@ -152,8 +168,16 @@ pub unsafe extern "C" fn fake_looper_hook_attach_input_queue(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fake_looper_hook_finish(native: *mut c_void) {
-    fake_looper_finish(native)
+pub unsafe extern "C" fn fake_looper_hook_finish(_native: *mut c_void) {
+    game_finish()
+}
+
+/// C-linkage thunk for the `GameActivity_finish` hook (minecraft_load.rs).
+/// Replaces the C++ `fake_looper_on_game_activity_close`, which resolved the
+/// Baron MainActivity from `ga->vm` and called its `quitCallback`.
+#[no_mangle]
+pub unsafe extern "C" fn fake_looper_on_game_activity_close(_native: *mut c_void) {
+    game_finish()
 }
 
 // --- Rust implementation of prepare ---
@@ -182,16 +206,14 @@ unsafe fn prepare_impl() -> *mut c_void {
         (window, queue)
     });
 
-    mc_set_looper_running_cpp(true);
-    mc_jni_support_on_window_created_cpp(window, queue as *mut c_void);
-    let rust_support = mc_get_rust_jni_support();
+    let rust_support = rust_jni_support();
     if !rust_support.is_null() {
+        crate::jni_support::jni_support_set_looper_running(rust_support, 1);
         crate::jni_support::jni_support_on_window_created(rust_support, window, queue as *mut c_void);
     }
 
     let callbacks = crate::window_callbacks::window_callbacks_create(
         window,
-        mc_get_jni_support(),
         rust_support,
         queue as *mut c_void,
     );
