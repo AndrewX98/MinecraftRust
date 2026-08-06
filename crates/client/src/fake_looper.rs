@@ -12,6 +12,7 @@
 //! resolve it by identity cast.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 
 #[derive(Copy, Clone)]
@@ -82,7 +83,6 @@ const ALOOPER_POLL_TIMEOUT: i32 = -3;
 static LOOPER_SENTINEL: u8 = 0;
 
 extern "C" {
-    fn mc_register_android_hook(map: *mut c_void, name: *const i8, fn_ptr: *mut c_void);
     fn fake_looper_finish(native: *mut c_void);
 
     // C++ FFI helpers for prepare (JniSupport side only; window helpers are
@@ -105,14 +105,15 @@ pub fn current_callbacks() -> *mut c_void {
     })
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn mc_register_fake_looper_hooks(map: *mut c_void) {
-    mc_register_android_hook(map, c"ALooper_prepare".as_ptr(), fake_looper_hook_prepare as *mut c_void);
-    mc_register_android_hook(map, c"ALooper_addFd".as_ptr(), fake_looper_hook_add_fd as *mut c_void);
-    mc_register_android_hook(map, c"ALooper_pollAll".as_ptr(), fake_looper_hook_poll_all as *mut c_void);
-    mc_register_android_hook(map, c"ALooper_pollOnce".as_ptr(), fake_looper_hook_poll_once as *mut c_void);
-    mc_register_android_hook(map, c"AInputQueue_attachLooper".as_ptr(), fake_looper_hook_attach_input_queue as *mut c_void);
-    mc_register_android_hook(map, c"ANativeActivity_finish".as_ptr(), fake_looper_hook_finish as *mut c_void);
+/// Insert all `libandroid.so` looper hooks into the symbol map. Called from
+/// `capi::setup_android_hooks`.
+pub unsafe fn mc_register_fake_looper_hooks(map: &mut HashMap<String, *mut c_void>) {
+    map.insert("ALooper_prepare".to_string(), fake_looper_hook_prepare as *mut c_void);
+    map.insert("ALooper_addFd".to_string(), fake_looper_hook_add_fd as *mut c_void);
+    map.insert("ALooper_pollAll".to_string(), fake_looper_hook_poll_all as *mut c_void);
+    map.insert("ALooper_pollOnce".to_string(), fake_looper_hook_poll_once as *mut c_void);
+    map.insert("AInputQueue_attachLooper".to_string(), fake_looper_hook_attach_input_queue as *mut c_void);
+    map.insert("ANativeActivity_finish".to_string(), fake_looper_hook_finish as *mut c_void);
 }
 
 #[no_mangle]

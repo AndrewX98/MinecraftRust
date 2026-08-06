@@ -38,7 +38,7 @@ The Rust `jni/*.rs` + `jni_support.rs` already provide these natives on the Rust
 | ~~`fake_egl_stub.cpp`~~ | ~~161~~ | **DONE** — libEGL.so stub symbols register purely in Rust; `swappygl_swap` calls `fake_egl_swap_buffers` directly; C++ shim + header deleted |
 | ~~`logger_stub.cpp`~~ | ~~17~~ | **DONE** — `Log::vlog` mangled symbol now exported from Rust (`logger.rs`); C++ shim deleted |
 | ~~`main_stubs.cpp`~~ | ~~8~~ | **DONE** — `LauncherOptions options` global provided from Rust (`main.rs` repr(C) static); patch no-op stubs deleted with their callers |
-| `jni_bridge_stub.cpp` | ~50 (after M1) | Process globals + hybris hook registration + `JNI_OnLoad`-era glue → Rust module |
+| `jni_bridge_stub.cpp` | ~180 (now) → ~50 (after M1) | **hybris hook registration + `mc_dlsym` ported to Rust** (`capi.rs` `setup_android_hooks`); `rust_load_stub`/`rust_add_symbols`/`mc_register_android_hook` + unused extern block + dead `jni_support_start_game_cpp`/`jni_support_get_text_input_handler` deleted; AAudio stubs via new `mc_register_aaudio_stub` C++ shim (`fake_audio.cpp`). Remaining = process globals + FakeJni/Baron wrappers → Rust module in M1 |
 
 **Gate:** boot with assets loading (main menu textures), EGL/FakeEGL swaps, logging, per-milestone `nm` checks.
 

@@ -9,6 +9,29 @@ int32_t rust_audio_start(int32_t channels, int32_t sampleRate);
 void rust_audio_push_i16(const int16_t* samples, int32_t count);
 void rust_audio_stop();
 void mc_fmod_set_sample_rate(int32_t sampleRate);
+size_t linker_load_library_rust(const char* name, const char* const* keys, void* const* vals, size_t len);
+}
+
+// Rust calls this from capi::setup_android_hooks to register the AAudio stubs
+// with the Rust linker. Replaces the `rust_load_stub("libaaudio.so", …)` blocks
+// that used to live in jni_bridge_stub.cpp; FakeAudio::initHybrisHooks stays C++.
+extern "C" void mc_register_aaudio_stub(const char* name) {
+    std::unordered_map<std::string, void*> audio_syms;
+    FakeAudio::initHybrisHooks(audio_syms);
+    size_t n = audio_syms.size();
+    if (n == 0) {
+        linker_load_library_rust(name, nullptr, nullptr, 0);
+        return;
+    }
+    std::vector<const char*> keys(n);
+    std::vector<void*> vals(n);
+    size_t i = 0;
+    for (auto& [k, v] : audio_syms) {
+        keys[i] = k.c_str();
+        vals[i] = v;
+        i++;
+    }
+    linker_load_library_rust(name, keys.data(), vals.data(), n);
 }
 
 int32_t FakeAudio::defaultSampleRate = 48000;

@@ -5,6 +5,7 @@
 //! (Rust) owns a `Box<FakeInputQueue>` directly and hands its pointer to the
 //! game as the `AInputQueue*`; the hooks here resolve it by identity cast.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 
@@ -199,14 +200,11 @@ impl FakeInputQueue {
     }
 }
 
-// The `libandroid.so` input hooks share `mc_register_android_hook` with the
-// looper hooks; the Rust `FakeInputQueue*` IS the `AInputQueue*` the game sees.
-extern "C" {
-    fn mc_register_android_hook(map: *mut c_void, name: *const i8, fn_ptr: *mut c_void);
-}
+// The `libandroid.so` input hooks share the map with the looper hooks; the Rust
+// `FakeInputQueue*` IS the `AInputQueue*` the game sees.
 
 // ============================================================
-// C++-consumed FFI (thin wrapper methods + mc_setup_android_hooks)
+// Rust-consumed FFI (thin wrapper methods + hook registration)
 // ============================================================
 
 #[no_mangle]
@@ -419,32 +417,29 @@ unsafe extern "C" fn hook_motion_get_axis_value(
     }
 }
 
-/// Register all `libandroid.so` input hooks (replaces C++
-/// `FakeInputQueue::initHybrisHooks`).
-#[no_mangle]
-pub unsafe extern "C" fn mc_register_fake_input_queue_hooks(map: *mut c_void) {
-    unsafe {
-        mc_register_android_hook(map, c"AInputQueue_getEvent".as_ptr(), hook_input_queue_get_event as *mut c_void);
-        mc_register_android_hook(map, c"AInputQueue_finishEvent".as_ptr(), hook_input_queue_finish_event as *mut c_void);
-        mc_register_android_hook(map, c"AInputQueue_preDispatchEvent".as_ptr(), hook_input_queue_pre_dispatch_event as *mut c_void);
-        mc_register_android_hook(map, c"AInputEvent_getSource".as_ptr(), hook_event_get_source as *mut c_void);
-        mc_register_android_hook(map, c"AInputEvent_getType".as_ptr(), hook_event_get_type as *mut c_void);
-        mc_register_android_hook(map, c"AInputEvent_getDeviceId".as_ptr(), hook_event_get_device_id as *mut c_void);
-        mc_register_android_hook(map, c"AKeyEvent_getAction".as_ptr(), hook_key_get_action as *mut c_void);
-        mc_register_android_hook(map, c"AKeyEvent_getKeyCode".as_ptr(), hook_key_get_key_code as *mut c_void);
-        mc_register_android_hook(map, c"AKeyEvent_getRepeatCount".as_ptr(), hook_key_get_repeat_count as *mut c_void);
-        mc_register_android_hook(map, c"AKeyEvent_getMetaState".as_ptr(), hook_key_get_meta_state as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getAction".as_ptr(), hook_motion_get_action as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getPointerCount".as_ptr(), hook_motion_get_pointer_count as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getButtonState".as_ptr(), hook_motion_get_button_state as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getPointerId".as_ptr(), hook_motion_get_pointer_id as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getHistorySize".as_ptr(), hook_motion_get_history_size as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getX".as_ptr(), hook_motion_get_x as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getY".as_ptr(), hook_motion_get_y as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getRawX".as_ptr(), hook_motion_get_raw_x as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getRawY".as_ptr(), hook_motion_get_raw_y as *mut c_void);
-        mc_register_android_hook(map, c"AMotionEvent_getAxisValue".as_ptr(), hook_motion_get_axis_value as *mut c_void);
-    }
+/// Insert all `libandroid.so` input hooks into the symbol map (replaces C++
+/// `FakeInputQueue::initHybrisHooks`). Called from `capi::setup_android_hooks`.
+pub unsafe fn mc_register_fake_input_queue_hooks(map: &mut HashMap<String, *mut c_void>) {
+    map.insert("AInputQueue_getEvent".to_string(), hook_input_queue_get_event as *mut c_void);
+    map.insert("AInputQueue_finishEvent".to_string(), hook_input_queue_finish_event as *mut c_void);
+    map.insert("AInputQueue_preDispatchEvent".to_string(), hook_input_queue_pre_dispatch_event as *mut c_void);
+    map.insert("AInputEvent_getSource".to_string(), hook_event_get_source as *mut c_void);
+    map.insert("AInputEvent_getType".to_string(), hook_event_get_type as *mut c_void);
+    map.insert("AInputEvent_getDeviceId".to_string(), hook_event_get_device_id as *mut c_void);
+    map.insert("AKeyEvent_getAction".to_string(), hook_key_get_action as *mut c_void);
+    map.insert("AKeyEvent_getKeyCode".to_string(), hook_key_get_key_code as *mut c_void);
+    map.insert("AKeyEvent_getRepeatCount".to_string(), hook_key_get_repeat_count as *mut c_void);
+    map.insert("AKeyEvent_getMetaState".to_string(), hook_key_get_meta_state as *mut c_void);
+    map.insert("AMotionEvent_getAction".to_string(), hook_motion_get_action as *mut c_void);
+    map.insert("AMotionEvent_getPointerCount".to_string(), hook_motion_get_pointer_count as *mut c_void);
+    map.insert("AMotionEvent_getButtonState".to_string(), hook_motion_get_button_state as *mut c_void);
+    map.insert("AMotionEvent_getPointerId".to_string(), hook_motion_get_pointer_id as *mut c_void);
+    map.insert("AMotionEvent_getHistorySize".to_string(), hook_motion_get_history_size as *mut c_void);
+    map.insert("AMotionEvent_getX".to_string(), hook_motion_get_x as *mut c_void);
+    map.insert("AMotionEvent_getY".to_string(), hook_motion_get_y as *mut c_void);
+    map.insert("AMotionEvent_getRawX".to_string(), hook_motion_get_raw_x as *mut c_void);
+    map.insert("AMotionEvent_getRawY".to_string(), hook_motion_get_raw_y as *mut c_void);
+    map.insert("AMotionEvent_getAxisValue".to_string(), hook_motion_get_axis_value as *mut c_void);
 }
 
 #[cfg(test)]

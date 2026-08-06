@@ -13,10 +13,10 @@ Rust declares these extern "C" functions and calls them through FFI. They are im
 | `mc_get_libc_symbols` | `MinecraftUtils::getLibCSymbols` | capi.cpp | Get merged libc symbols |
 | `mc_load_core_libraries` | `linker::init` + `loadLibM` + `setupHybris` | capi.cpp | Init linker, load core libs |
 | `mc_load_minecraft` | `MinecraftUtils::loadMinecraftLib` | capi.cpp | Load libminecraftpe.so |
-| `mc_setup_android_hooks` | FakeAssetManager/... + FakeEGL::installLibrary + looper/input hooks (Rust `fake_looper.rs`/`fake_inputqueue.rs`) | jni_bridge_stub.cpp | Register android hooks |
+| `mc_setup_android_hooks` | `capi::setup_android_hooks` (Rust, Phase 12): Rust map + `linker::register_stub("libandroid.so")` + AAudio via `mc_register_aaudio_stub` (C++ shim) | capi.rs + fake_audio.cpp | Register android hooks |
 | `mc_create_window_and_setup_graphics` | `crate::game_window::mc_create_window_and_setup_graphics` (Rust, Phase 5) | game_window.rs | Create window (Rust eglut), seed FakeEGL, resolve GL |
 | `mc_egl_swap_buffers` | `fake_egl::eglSwapBuffers` | jni_bridge_stub.cpp | EGL swap (→ Rust) |
-| `mc_dlsym` | `linker::dlsym` | capi.cpp | Resolve game symbol |
+| `mc_dlsym` | `linker::mcpelauncher_dispatch_dlsym` (Rust, Phase 12) | capi.rs + rust_bridge.rs | Resolve game symbol |
 | `jni_support_create_cpp` | `jni_support_create_cpp()` (Rust → `jni_support_new_cpp()`) | jni_support.rs | Create C++ JniSupport |
 | `jni_support_destroy_cpp` | `jni_support_destroy_cpp()` (Rust → `jni_support_delete()`) | jni_support.rs | Destroy C++ JniSupport |
 | `jni_support_register_minecraft_natives_cpp` | `JniSupport::registerMinecraftNatives()` | jni_bridge_stub.cpp | Register game native methods |
@@ -108,7 +108,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | File | Lines | Role |
 |------|-------|------|
 | `capi.cpp` | 213 | Low-level bridge: path setup, linker init, GLES2 symbol registration |
-| `jni_bridge_stub.cpp` | 439 | Android hooks, game lib loading, C++ JniSupport FFI wrappers + process globals (JniSupport getters), FakeJni/Baron LocalFrame wrappers |
+| `jni_bridge_stub.cpp` | 182 | FakeJni/Baron JNI support FFI wrappers + process globals (JniSupport getters); android-hook registration + `mc_dlsym` + dead code ported to Rust (Phase 12) |
 | `jnivm_class_wrappers.cpp` | 647 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs` — C++ kept for `registerClass<>()` linker deps from `jni_support.cpp`) |
 | `fake_egl_stub.cpp` | 161 | Delegates all EGL functions to Rust eglut module |
 | `store_stub.cpp` | 96 | Store JNI stubs (Store, StoreFactory, NativeStoreListener, etc.) |
@@ -132,6 +132,7 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | FakeLooper pollAll | `FakeLooper::pollAll()` | `fake_looper::poll_all()` (Rust) | Done |
 | FakeLooper attachInputQueue | `FakeLooper::attachInputQueue()` | `fake_looper::attach_input_queue()` (Rust) | Done |
 | hybris hook lambdas | 6 lambdas in jni_bridge_stub.cpp | `fake_looper.rs` hook registration | Done |
+| `mc_setup_android_hooks` | `jni_bridge_stub.cpp` (unordered_map + `rust_load_stub` + `mc_register_android_hook`) | `capi::setup_android_hooks` (Rust map + `linker::register_stub`; hook fns take `&mut HashMap`; AAudio via `mc_register_aaudio_stub`) | Done (Phase 12) |
 | start_game_with_baron | `JniSupport::startGame()` (Baron path) | `jni_support::jni_support_start_game_with_baron()` (Rust) | Done |
 | MainActivity JNI methods (57 methods) | `main_activity.cpp` | `main_activity.rs` | Done |
 | Class wrapper JNI methods (9 classes, 21 methods) | `jnivm_class_wrappers.cpp` | `jnivm_class_wrappers.rs` | Done |

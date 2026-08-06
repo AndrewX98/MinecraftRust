@@ -9,12 +9,9 @@
 //! pointer), so their Rust layout is free-form. `AAssetDir` uses the libc
 //! `DIR*`/`readdir` iteration to match the C++ implementation exactly.
 
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::Mutex;
-
-extern "C" {
-    fn mc_register_android_hook(map: *mut c_void, name: *const i8, fn_ptr: *mut c_void);
-}
 
 struct FakeAssetManager {
     root_dir: String,
@@ -242,24 +239,24 @@ pub unsafe extern "C" fn fake_assetmanager_create_and_set_global(root_dir: *cons
 // Hook registration (replaces FakeAssetManager::initHybrisHooks)
 // ============================================================
 
-#[no_mangle]
-pub unsafe extern "C" fn mc_register_fake_asset_manager_hooks(map: *mut c_void) {
-    unsafe {
-        mc_register_android_hook(map, c"AAssetManager_open".as_ptr(), AAssetManager_open as *mut c_void);
-        mc_register_android_hook(map, c"AAssetManager_openDir".as_ptr(), AAssetManager_openDir as *mut c_void);
-        mc_register_android_hook(map, c"AAssetManager_fromJava".as_ptr(), AAssetManager_fromJava as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_close".as_ptr(), AAsset_close as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_isAllocated".as_ptr(), AAsset_isAllocated as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_read".as_ptr(), AAsset_read as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_seek64".as_ptr(), AAsset_seek64 as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_seek".as_ptr(), AAsset_seek as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_getLength64".as_ptr(), AAsset_getLength64 as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_getLength".as_ptr(), AAsset_getLength as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_getRemainingLength64".as_ptr(), AAsset_getRemainingLength64 as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_getRemainingLength".as_ptr(), AAsset_getRemainingLength as *mut c_void);
-        mc_register_android_hook(map, c"AAsset_getBuffer".as_ptr(), AAsset_getBuffer as *mut c_void);
-        mc_register_android_hook(map, c"AAssetDir_close".as_ptr(), AAssetDir_close as *mut c_void);
-        mc_register_android_hook(map, c"AAssetDir_rewind".as_ptr(), AAssetDir_rewind as *mut c_void);
-        mc_register_android_hook(map, c"AAssetDir_getNextFileName".as_ptr(), AAssetDir_getNextFileName as *mut c_void);
-    }
+/// Insert all `libandroid.so` asset hooks into the symbol map. Called from
+/// `capi::setup_android_hooks` (the C++ `mc_register_android_hook` bridge and
+/// the `*mut c_void` map argument are gone — the Rust map is passed directly).
+pub unsafe fn mc_register_fake_asset_manager_hooks(map: &mut HashMap<String, *mut c_void>) {
+    map.insert("AAssetManager_open".to_string(), AAssetManager_open as *mut c_void);
+    map.insert("AAssetManager_openDir".to_string(), AAssetManager_openDir as *mut c_void);
+    map.insert("AAssetManager_fromJava".to_string(), AAssetManager_fromJava as *mut c_void);
+    map.insert("AAsset_close".to_string(), AAsset_close as *mut c_void);
+    map.insert("AAsset_isAllocated".to_string(), AAsset_isAllocated as *mut c_void);
+    map.insert("AAsset_read".to_string(), AAsset_read as *mut c_void);
+    map.insert("AAsset_seek64".to_string(), AAsset_seek64 as *mut c_void);
+    map.insert("AAsset_seek".to_string(), AAsset_seek as *mut c_void);
+    map.insert("AAsset_getLength64".to_string(), AAsset_getLength64 as *mut c_void);
+    map.insert("AAsset_getLength".to_string(), AAsset_getLength as *mut c_void);
+    map.insert("AAsset_getRemainingLength64".to_string(), AAsset_getRemainingLength64 as *mut c_void);
+    map.insert("AAsset_getRemainingLength".to_string(), AAsset_getRemainingLength as *mut c_void);
+    map.insert("AAsset_getBuffer".to_string(), AAsset_getBuffer as *mut c_void);
+    map.insert("AAssetDir_close".to_string(), AAssetDir_close as *mut c_void);
+    map.insert("AAssetDir_rewind".to_string(), AAssetDir_rewind as *mut c_void);
+    map.insert("AAssetDir_getNextFileName".to_string(), AAssetDir_getNextFileName as *mut c_void);
 }

@@ -5,19 +5,18 @@
 //! `setup_paths`, `get_libc_symbols_from_cpp`, `load_core_libraries` and the
 //! C-facing `mc_relocate_glesv2_symbols` (still called from `jni_bridge_stub.cpp`).
 //!
-//! The externs below are still defined in C++ (`jni_bridge_stub.cpp`,
-//! `fake_assetmanager_stub.cpp`, …). The liblog varargs entry points were
-//! ported to Rust (`android_log_hook.rs`, `mod_api.rs`) once the crate moved
-//! to nightly `c_variadic`.
+//! The externs below are still defined in C++ (`jni_bridge_stub.cpp`).
+//! The liblog varargs entry points were ported to Rust (`android_log_hook.rs`,
+//! `mod_api.rs`) once the crate moved to nightly `c_variadic`. The android-hook
+//! registration (`mc_setup_android_hooks`) and `mc_dlsym` were ported here.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_int, c_long, c_void, CString};
 
-use minecraft_imported_symbols::GLESV2_SYMBOLS;
+use minecraft_imported_symbols::{ANDROID_SYMBOLS, GLESV2_SYMBOLS};
 
 extern "C" {
-    fn mc_setup_android_hooks();
-    fn mc_dlsym(handle: *mut c_void, symbol: *const i8) -> *mut c_void;
+    fn mc_register_aaudio_stub(name: *const c_char);
     fn jni_support_register_minecraft_natives_cpp(s: *mut c_void,
                                                   game_handle: *mut c_void);
     fn fake_looper_set_jni_support(support: *mut c_void);
@@ -30,6 +29,25 @@ extern "C" {
 unsafe extern "C" fn glesv2_stub() -> i32 {
     0
 }
+
+// APerformanceHint stubs (BIND_NOW requires non-null GOT entries) and the
+// no-op stub for every remaining `ANDROID_SYMBOLS` entry — Rust twins of the
+// C++ lambdas in `mc_setup_android_hooks`.
+unsafe extern "C" fn android_zero_stub() -> i32 {
+    0
+}
+
+unsafe extern "C" fn aperf_get_manager() -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+unsafe extern "C" fn aperf_create_session(_: *mut c_void, _: c_int, _: c_long) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+unsafe extern "C" fn aperf_close_session(_: *mut c_void) {}
+
+unsafe extern "C" fn aperf_report(_: *mut c_void, _: c_long) {}
 
 pub fn setup_paths(game_dir: Option<&str>, data_dir: Option<&str>, cache_dir: Option<&str>) {
     if let Some(g) = game_dir {
@@ -55,8 +73,45 @@ pub fn get_libc_symbols_from_cpp() -> HashMap<String, *mut c_void> {
     unsafe { corelib::minecraft_utils::get_libc_symbols() }
 }
 
+/// Rust port of `jni_bridge_stub.cpp mc_setup_android_hooks`. Builds the
+/// `libandroid.so` symbol map in-process (no C++ unordered_map / FFI bridge),
+/// registers it with the Rust linker, registers the AAudio stubs (C++ FakeAudio
+/// via `mc_register_aaudio_stub`) and mirrors the game-window symbols. Ordering
+/// preserved 1:1 from the C++ version.
 pub fn setup_android_hooks() {
-    unsafe { mc_setup_android_hooks() }
+    let mut android_syms: HashMap<String, *mut c_void> = HashMap::new();
+    unsafe {
+        crate::fake_assetmanager::mc_register_fake_asset_manager_hooks(&mut android_syms);
+        crate::fake_looper::mc_register_fake_looper_hooks(&mut android_syms);
+        android_syms.insert("ANativeWindow_getWidth".to_string(), crate::rust_bridge::fake_anativewindow_getwidth as *mut c_void);
+        android_syms.insert("ANativeWindow_getHeight".to_string(), crate::rust_bridge::fake_anativewindow_getheight as *mut c_void);
+        crate::fake_inputqueue::mc_register_fake_input_queue_hooks(&mut android_syms);
+
+        // APerformanceHint stubs (BIND_NOW requires non-null GOT entries).
+        android_syms.insert("APerformanceHint_getManager".to_string(), aperf_get_manager as *mut c_void);
+        android_syms.insert("APerformanceHint_createSession".to_string(), aperf_create_session as *mut c_void);
+        android_syms.insert("APerformanceHint_closeSession".to_string(), aperf_close_session as *mut c_void);
+        android_syms.insert("APerformanceHint_reportActualWorkDuration".to_string(), aperf_report as *mut c_void);
+
+        // C++ used unordered_map::insert (no overwrite), so the real hooks
+        // registered above win; entry().or_insert() preserves that.
+        for name in ANDROID_SYMBOLS {
+            android_syms
+                .entry(name.to_string())
+                .or_insert(android_zero_stub as *mut c_void);
+        }
+
+        // Register the libandroid.so stub with the Rust linker.
+        linker::register_stub("libandroid.so", &android_syms);
+
+        // FMOD setOutput is stubbed to keep AAudio; FMOD then dlopen's
+        // libaaudio.so and calls AAudio_* symbols. The C++ FakeAudio keeps the
+        // AAudio backend; register both sonames via the C++ shim.
+        mc_register_aaudio_stub(c"libaaudio.so".as_ptr());
+        mc_register_aaudio_stub(c"libaaudio.so.2".as_ptr());
+
+        crate::core_patches::mc_register_game_window_symbols();
+    }
 }
 
 /// Phase 10 Rust port of `capi.cpp mc_load_core_libraries` (the init sequence the
@@ -101,7 +156,7 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
         // Register libGLESv2.so with stub functions (real GL context needed for proper symbols).
         let gl_syms: HashMap<String, *mut c_void> = GLESV2_SYMBOLS
             .iter()
-            .map(|s| (s.to_string(), glesv2_stub as usize as *mut c_void))
+            .map(|s| (s.to_string(), glesv2_stub as *mut c_void))
             .collect();
         linker::register_stub("libGLESv2.so", &gl_syms);
 
@@ -110,13 +165,13 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
         // FakeEGL::installLibrary() must be called BEFORE mc_load_minecraft.
         // NOTE: "libEGL.so" is deliberately NOT registered here — FakeEGL handles it.
         // NOTE: android hooks (libandroid.so) and game window library are set up in
-        // mc_setup_android_hooks() — call it from Rust AFTER mc_load_core_libraries
+        // setup_android_hooks() — call it from Rust AFTER mc_load_core_libraries
         // but BEFORE mc_load_minecraft.
         let log_syms: HashMap<String, *mut c_void> = [
-            ("__android_log_print", crate::android_log_hook::__android_log_print as usize as *mut c_void),
-            ("__android_log_vprint", crate::android_log_hook::__android_log_vprint as usize as *mut c_void),
-            ("__android_log_write", crate::android_log_hook::__android_log_write as usize as *mut c_void),
-            ("__android_log_assert", crate::android_log_hook::__android_log_assert as usize as *mut c_void),
+            ("__android_log_print", crate::android_log_hook::__android_log_print as *mut c_void),
+            ("__android_log_vprint", crate::android_log_hook::__android_log_vprint as *mut c_void),
+            ("__android_log_write", crate::android_log_hook::__android_log_write as *mut c_void),
+            ("__android_log_assert", crate::android_log_hook::__android_log_assert as *mut c_void),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
@@ -186,7 +241,7 @@ pub fn dlsym(handle: *mut c_void, symbol: &str) -> *mut c_void {
         }
     }
     let sym = CString::new(symbol).unwrap();
-    unsafe { mc_dlsym(handle, sym.as_ptr()) }
+    unsafe { linker::mcpelauncher_dispatch_dlsym(handle, sym.as_ptr()) }
 }
 
 /// Phase 10 Rust port of `capi.cpp mc_relocate_glesv2_symbols`. Called from C++

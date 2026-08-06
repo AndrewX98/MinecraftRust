@@ -1809,8 +1809,5 @@ pub unsafe extern "C" fn jni_resolve_symbol(sym: *const c_char) -> *mut c_void {
     // Then try the game library (libminecraftpe.so)
     let handle = JNI_GAME_HANDLE.load(Ordering::SeqCst);
     if handle.is_null() { return std::ptr::null_mut(); }
-    extern "C" {
-        fn mc_dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    }
-    mc_dlsym(handle, sym)
+    linker::mcpelauncher_dispatch_dlsym(handle, sym)
 }

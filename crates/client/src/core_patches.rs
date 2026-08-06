@@ -254,7 +254,7 @@ pub unsafe extern "C" fn game_window_add_swap_buffers_callback(
 /// Mirrors the 9 `game_window_*` symbols into the Rust linker's
 /// `libmcpelauncher_gamewindow.so` stub. Must run after
 /// `linker::register_stub("libmcpelauncher_gamewindow.so", ...)` (capi.rs) —
-/// kept inside `mc_setup_android_hooks` to preserve that ordering.
+/// kept inside `capi::setup_android_hooks` to preserve that ordering.
 #[no_mangle]
 pub unsafe extern "C" fn mc_register_game_window_symbols() {
     let syms: [(&str, *mut c_void); 9] = [

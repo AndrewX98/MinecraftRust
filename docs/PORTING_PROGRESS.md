@@ -132,7 +132,7 @@ These will shrink automatically as the Rust ports progress. Biggest files:
 | `window_callbacks_stub.cpp` | 713 | ❌ deleted (Phase 3) — full Rust `window_callbacks.rs` |
 | `jnivm_class_wrappers.cpp` | 648 | Registers 10 Java classes with libjnivm-sys (coexists with Rust `jnivm_class_wrappers.rs`) |
 | `http_client_stubs.cpp` | 441 | Stub HTTP client for XAL |
-| `jni_bridge_stub.cpp` | 439 | Android hooks, window creation, game loading, C++ wrappers for Rust `jni_support_start_game_with_baron` (FakeJni, PathHelper, XboxLiveHelper FFI) + process globals (window token, JniSupport getters) |
+| `jni_bridge_stub.cpp` | 182 | FakeJni/Baron JNI support FFI wrappers + process globals (JniSupport getters); android hooks (`mc_setup_android_hooks` → `capi::setup_android_hooks`), `mc_dlsym`, `rust_load_stub`/`rust_add_symbols`/`mc_register_android_hook` + dead `jni_support_start_game_cpp`/`jni_support_get_text_input_handler` ported to Rust (Phase 12) |
 | `text_input_handler_stub.cpp` | 233 | Text input state management |
 | `fake_assetmanager_stub.cpp` | 214 | Asset manager for game resource loading |
 | `fake_egl_stub.cpp` | 161 | Delegates to Rust eglut |

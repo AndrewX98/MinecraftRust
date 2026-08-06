@@ -40,10 +40,12 @@ main()  [main.rs:15]
 │     └── linker_rust_add_search_path(libDir) — register Rust linker search path
 │
 ├─ 7. capi::setup_android_hooks()
-│     → mc_setup_android_hooks() [jni_bridge_stub.cpp]
-│     C++ with Rust hooks: Creates FakeLooper class state, FakeAssetManager, FakeInputQueue, CorePatches
-│     FakeLooper hooks (ALooper_prepare, addFd, pollAll, etc.) registered by Rust
-│     via mc_register_fake_looper_hooks() [fake_looper.rs:69]
+│     → capi::setup_android_hooks() [capi.rs — Rust port of mc_setup_android_hooks]
+│     Pure Rust: builds the libandroid.so symbol map (FakeAssetManager, FakeLooper,
+│     FakeInputQueue, ANativeWindow, APerformanceHint + ANDROID_SYMBOLS stubs),
+│     registers it via linker::register_stub("libandroid.so"); AAudio stubs via
+│     mc_register_aaudio_stub() [fake_audio.cpp C++ shim] for libaaudio.so/.2; then
+│     core_patches::mc_register_game_window_symbols()
 │     ├── FakeEGL::installLibrary():
 │     │   ├── eglutInit() → Rust: XOpenDisplay, eglInitialize
 │     │   ├── eglutCreateWindow() → Rust: XCreateWindow (NO EGL context yet)
