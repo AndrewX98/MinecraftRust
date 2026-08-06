@@ -299,7 +299,6 @@ fn main() {
         "jni_bridge_stub.cpp",
         "jnivm_class_wrappers.cpp",
         "jbase64_stub.cpp",
-        "logger_stub.cpp",
         "arrays_stub.cpp",
         "asset_manager_stub.cpp",
         "package_source_stub.cpp",
@@ -327,9 +326,6 @@ fn main() {
             client_sources.push(path);
         }
     }
-
-    // main_stubs.cpp
-    client_sources.push(client_dir.join("src/main_stubs.cpp"));
 
     // libjnivm C++ sources
     client_sources.push(local_inc.join("libjnivm/src/jnivm/env.cpp"));

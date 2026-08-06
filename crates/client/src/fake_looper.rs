@@ -91,8 +91,6 @@ extern "C" {
     fn mc_jni_support_on_window_created_cpp(window: *mut c_void, queue: *mut c_void);
     fn mc_get_jni_support() -> *mut c_void;
     fn mc_get_rust_jni_support() -> *mut c_void;
-    fn fake_looper_splitscreen_patch_gl_created();
-    fn fake_looper_shader_error_patch_gl_created();
 }
 
 /// Active WindowCallbacks token for the current thread, resolved from looper
@@ -205,8 +203,6 @@ unsafe fn prepare_impl() -> *mut c_void {
     crate::core_patches::core_patches_set_game_window_callbacks(callbacks);
 
     crate::game_window::mc_window_show(window);
-    fake_looper_splitscreen_patch_gl_created();
-    fake_looper_shader_error_patch_gl_created();
     crate::game_window::game_window_make_current(window, 0);
 
     &LOOPER_SENTINEL as *const u8 as *mut c_void

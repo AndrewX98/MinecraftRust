@@ -36,8 +36,8 @@ The Rust `jni/*.rs` + `jni_support.rs` already provide these natives on the Rust
 |------|-------|--------|
 | ~~`fake_assetmanager_stub.cpp`~~ | ~~214~~ | **DONE** — ported to Rust (`fake_assetmanager.rs`); C++ stub + header deleted |
 | ~~`fake_egl_stub.cpp`~~ | ~~161~~ | **DONE** — libEGL.so stub symbols register purely in Rust; `swappygl_swap` calls `fake_egl_swap_buffers` directly; C++ shim + header deleted |
-| `logger_stub.cpp` | ~40 | `Log::vlog` → Rust `util::logger` |
-| `main_stubs.cpp` | 8 | `LauncherOptions` global → Rust (`main.rs` already parses CLI args) |
+| ~~`logger_stub.cpp`~~ | ~~17~~ | **DONE** — `Log::vlog` mangled symbol now exported from Rust (`logger.rs`); C++ shim deleted |
+| ~~`main_stubs.cpp`~~ | ~~8~~ | **DONE** — `LauncherOptions options` global provided from Rust (`main.rs` repr(C) static); patch no-op stubs deleted with their callers |
 | `jni_bridge_stub.cpp` | ~50 (after M1) | Process globals + hybris hook registration + `JNI_OnLoad`-era glue → Rust module |
 
 **Gate:** boot with assets loading (main menu textures), EGL/FakeEGL swaps, logging, per-milestone `nm` checks.

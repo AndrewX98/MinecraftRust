@@ -19,19 +19,48 @@ mod jni;
 mod text_input_handler;
 mod fmod_utils;
 mod android_log_hook;
+mod logger;
 mod mod_api;
 mod cll_telemetry;
 mod minecraft_load;
 mod path_helper;
 mod xbox_auth;
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 extern "C" {
     fn fake_thread_mover_store_start_thread_id();
     fn fake_thread_mover_execute_main_thread();
     fn jni_resolve_symbol(sym: *const c_char) -> *mut c_void;
 }
+
+/// Rust replacement for the `LauncherOptions options` global in the deleted
+/// `main_stubs.cpp`. Layout matches the C++ struct exactly (x86_64 libstdc++):
+/// two `int`s, two `bool`s, `GraphicsApi` enum, then two 32-byte SSO
+/// `std::string`s. Zeroed strings read as `.empty()`, `useStdinImport` reads
+/// `false` — satisfying the (dead) reads in `jni_support.cpp:443-449`.
+#[repr(C, align(8))]
+#[allow(dead_code)]
+pub struct LauncherOptions {
+    window_width: c_int,
+    window_height: c_int,
+    use_stdin_import: bool,
+    emulate_touch: bool,
+    graphics_api: c_int,
+    import_file_path: [u8; 32],
+    send_uri: [u8; 32],
+}
+
+#[no_mangle]
+pub static options: LauncherOptions = LauncherOptions {
+    window_width: 1200,
+    window_height: 800,
+    use_stdin_import: false,
+    emulate_touch: false,
+    graphics_api: 1, // GraphicsApi::OPENGL_ES2
+    import_file_path: [0; 32],
+    send_uri: [0; 32],
+};
 
 fn main() {
     // MinecraftUtils::workaroundLocaleBug — force a locale that MCPE's libc++

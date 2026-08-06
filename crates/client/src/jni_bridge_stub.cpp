@@ -12,9 +12,6 @@
 #include <game_window.h>
 #include <log.h>
 #include <minecraft/imported/android_symbols.h>
-#include "splitscreen_patch.h"
-#include "shader_error_patch.h"
-#include "main.h"
 #include <cstdio>
 #include <memory>
 
@@ -184,14 +181,6 @@ extern "C" void* mc_get_jni_support() {
 
 extern "C" void* mc_get_rust_jni_support() {
     return g_rust_jni_support;
-}
-
-extern "C" void fake_looper_splitscreen_patch_gl_created() {
-    SplitscreenPatch::onGLContextCreated();
-}
-
-extern "C" void fake_looper_shader_error_patch_gl_created() {
-    ShaderErrorPatch::onGLContextCreated();
 }
 
 // (window helpers ported to Rust — see crate::game_window, Phase 5)

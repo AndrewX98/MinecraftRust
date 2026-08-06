@@ -117,7 +117,6 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | `jni/sdl3audio_stub.cpp` | 28 | SDL3 Audio stub (delegates to Rust audio.rs) |
 | `fake_assetmanager_stub.cpp` | 214 | Full FakeAssetManager implementation |
 | `text_input_handler_stub.cpp` | 233 | C++ TextInputHandler class |
-| `main_stubs.cpp` | 8 | `LauncherOptions options` + Splitscreen/Shader patch no-op stubs |
 | 15+ other stub files | ~500 | Minimal stubs for excluded JNI files (`_stub.cpp` for ecdsa, signature, cert_manager, http_stub, jbase64, arrays, asset_manager, package_source, securerandom, accounts, locale, playfab, fmod, webview, shahasher, file_picker, settings, xal_webview_factory, xbox_live_helper) |
 
 ### Notable Ports to Rust
@@ -144,3 +143,5 @@ All located in `MinecraftRust/crates/client/src/`. Files where the C++ logic has
 | Game window | `mcpelauncher-gamewindow` lib + `window_eglut.cpp`/`window_manager_eglut.cpp`/`game_window_manager.cpp` | `crate::game_window.rs` (eglut window token + window creation + FakeEGL seeding) | Done (Phase 5) |
 | MainActivity screen size / clipboard / keys | `main_activity.h` `window->getWindowSize`, `main_activity.cpp` `setClipboard`/`getKeyFromKeyCode` | `extern "C" mc_get_window_size`/`mc_set_clipboard_text`/`mc_get_key_from_key_code` (`crate::game_window`) | Done (Phase 5) |
 | UUID JNI | `uuid.cpp` → `jni/uuid_stub.cpp` | `jni/uuid_stub.cpp` (C++ stub) + Rust registration in `jni_support.rs` | Done |
+| Logger `Log::vlog` | `logger_stub.cpp` (vsnprintf shim) | `logger.rs` (mangled `_ZN3Log4vlog…` export) | Done |
+| `LauncherOptions options` global | `main_stubs.cpp` | `main.rs` `#[no_mangle]` repr(C) static | Done |
