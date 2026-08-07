@@ -289,31 +289,13 @@ fn main() {
         }
     }
 
-    // Stub files
+    // Stub files (FakeJni class stubs for the deleted Baron VM removed — the
+    // Rust VM provides the class natives; see PORT_JNI_SUPPORT.md Phase 5)
     let stub_files = [
         "settings_stub.cpp",
         "xal_webview_factory_stub.cpp",
         "text_input_handler_stub.cpp",
-        "xbox_live_helper_stub.cpp",
-        "xbox_live_stub.cpp",
-        "jni_bridge_stub.cpp",
-        "jnivm_class_wrappers.cpp",
-        "jbase64_stub.cpp",
-        "arrays_stub.cpp",
-        "asset_manager_stub.cpp",
-        "package_source_stub.cpp",
-        "securerandom_stub.cpp",
-        "signature_stub.cpp",
-        "accounts_stub.cpp",
-        "locale_stub.cpp",
-        "playfab_stub.cpp",
-        "fmod_stub.cpp",
-        "webview_stub.cpp",
-        "shahasher_stub.cpp",
         "file_picker_stub.cpp",
-        "store_stub.cpp",
-        "uuid_stub.cpp",
-        "pulseaudio_stub.cpp",
         // AAudio shim — FMOD forces AAudio via setOutput hook, then dlopen's libaaudio.so
         "fake_audio.cpp",
         // Prevents loading the real libHttpClient.Android.so (broken under
@@ -327,37 +309,10 @@ fn main() {
         }
     }
 
-    // libjnivm C++ sources
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/env.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/vm.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/method.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/object.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/array.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/bytebuffer.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/field.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/findclass.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/jValuesfromValist.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/method.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/skipJNIType.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/string.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/stringUtil.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/codegen/class.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/codegen/field.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/codegen/method.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/codegen/namespace.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/codegen/parseJNIType.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/jnivm/internal/codegen/vm.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/fake-jni/fake-jni.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/fake-jni/jvm.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/fake-jni/method.cpp"));
-    client_sources.push(local_inc.join("libjnivm/src/baron/jvm.cpp"));
-
     incr_compile("mcpelauncher-client-jni", &client_sources, |b| {
         b.cpp(true).std("c++17").flag_if_supported("-w");
         b.include(client_dir.join("src"));
         b.include(client_dir.join("src/manifest_headers"));
-        b.define("EnableJNIVMGC", "1");
-        b.include(local_inc.join("libjnivm"));
         b.include(local_inc.join("android-support-headers"));
         b.include(local_inc.join("game-window"));
         b.include(local_inc.join("logger"));
@@ -371,11 +326,6 @@ fn main() {
         b.include(local_inc.join("libc-shim"));
         b.include(client_dir.join("include"));
         b.include(local_inc.join("minecraft-imported-symbols"));
-        b.include(local_inc.join("libjnivm/src"));
         b.define("HAVE_LOGGER", "1");
-        b.define("JNI_DEBUG", "1");
-        b.define("JNI_RETURN_NON_ZERO", "1");
-        b.define("JNIVM_FAKE_JNI_SYNTAX", "0");
-        b.define("JNIVM_FAKE_JNI_MINECRAFT_LINUX_COMPAT", "1");
     });
 }

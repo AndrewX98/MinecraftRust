@@ -74,14 +74,10 @@ extern "C" {
     fn jnivm_set_asset_manager(mgr: *mut c_void);
     fn jnivm_set_stbi_load_from_memory(fn_ptr: *mut c_void);
     fn jnivm_set_stbi_image_free(fn_ptr: *mut c_void);
-    // C++ wrappers for FakeJni/PathHelper/XboxLiveHelper — jni_support_get_jvm,
-    // fake_jni_local_frame_{create,destroy}, xbox_live_helper_set_jvm removed
-    // (Baron chain no longer used at runtime — Phase 5).
-    fn fake_jni_jvm_attach_library(jvm: *mut c_void, path: *const c_char);
-    fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
-    fn jni_support_new_cpp() -> *mut c_void;
-    fn jni_support_init_activity(s: *mut c_void);
-    fn jni_support_delete(s: *mut c_void);
+    // All C++ FakeJni/Baron accessors (jni_support_get_jvm,
+    // fake_jni_local_frame_{create,destroy}, fake_jni_jvm_attach_library,
+    // xbox_live_helper_set_jvm, jni_support_new_cpp/init_activity/delete, …)
+    // are gone — the game runs entirely on the Rust libjnivm-sys VM (Phase 5).
 }
 
 // ================================================================
@@ -567,22 +563,6 @@ pub unsafe extern "C" fn jni_support_send_motion_event(s: *mut c_void, event: *c
     let cb = &*support.game_callbacks.0;
     if let Some(f) = cb.on_touch_event {
         f(ga, event);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn jni_support_create_cpp() -> *mut c_void {
-    let s = jni_support_new_cpp();
-    if !s.is_null() {
-        jni_support_init_activity(s);
-    }
-    s
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn jni_support_destroy_cpp(s: *mut c_void) {
-    if !s.is_null() {
-        jni_support_delete(s);
     }
 }
 
