@@ -1,4 +1,4 @@
-//! Phase 5: Rust replacement for the deleted `mcpelauncher-gamewindow` C++ lib.
+//! Rust replacement for the deleted `mcpelauncher-gamewindow` C++ lib.
 //!
 //! Rust eglut owns the single X11/EGL window (`eglutCreateWindow`). The "window
 //! token" handed to the game (doubling as its `ANativeWindow`/`GameWindow*` and
@@ -140,7 +140,7 @@ pub extern "C" fn mc_get_key_from_key_code(_code: i32, _meta_state: i32) -> u32 
 // Window creation + GL setup (previously C++ `mc_create_window_and_setup_graphics`)
 // ============================================================
 
-/// Phase 5 Rust port of `capi.cpp/jni_bridge_stub.cpp mc_create_window_and_setup_graphics`.
+/// Rust `capi.cpp/jni_bridge_stub.cpp mc_create_window_and_setup_graphics`.
 /// Creates the eglut window, then seeds FakeEGL (proc-addr, EGL library install,
 /// GL overrides, saved window/display/context, release) and relocates the real
 /// GLES2 symbols into the Rust linker.
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn mc_create_window_and_setup_graphics() {
     fake_egl_release_context();
     log::info!("LAUNCHER: FakeEGL installed");
 
-    crate::capi::mc_relocate_glesv2_symbols(Some(fake_egl_get_proc_address));
+    crate::startup::mc_relocate_glesv2_symbols(Some(fake_egl_get_proc_address));
     log::info!("LAUNCHER: Graphics setup complete");
 }
 

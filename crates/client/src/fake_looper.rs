@@ -1,10 +1,10 @@
-//! Port of the C++ `FakeLooper` (Phase 4 of PORT_FAKE_LOOPER.md).
+//! Rust `FakeLooper`.
 //!
 //! Rust owns all looper state (per-thread `LooperState`), the `libandroid.so`
 //! looper hooks, and the `prepare` orchestration that was split across
 //! `fake_looper_stub.cpp` + the 17 `fake_looper_*` extern "C" helpers. The
 //! window token (the game's `ANativeWindow`/`GameWindow*`) is the Rust eglut
-//! X11 window id, owned by `crate::game_window` (Phase 5).
+//! X11 window id, owned by `crate::game_window`.
 //!
 //! The `FakeInputQueue` is a Rust-owned `Box` stored in `LooperState`; the
 //! game-visible `AInputQueue*` handed to `JniSupport::onWindowCreated` IS that
@@ -122,7 +122,7 @@ pub fn current_callbacks() -> *mut c_void {
 }
 
 /// Insert all `libandroid.so` looper hooks into the symbol map. Called from
-/// `capi::setup_android_hooks`.
+/// `startup::setup_android_hooks`.
 pub unsafe fn mc_register_fake_looper_hooks(map: &mut HashMap<String, *mut c_void>) {
     map.insert("ALooper_prepare".to_string(), fake_looper_hook_prepare as *mut c_void);
     map.insert("ALooper_addFd".to_string(), fake_looper_hook_add_fd as *mut c_void);

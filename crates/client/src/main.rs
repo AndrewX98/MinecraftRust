@@ -1,6 +1,6 @@
 #![feature(c_variadic)]
 
-mod capi;
+mod startup;
 mod core_patches;
 mod window_callbacks;
 mod fake_audio;
@@ -121,14 +121,14 @@ fn main() {
     // C++ PathHelper defaults to XDG dirs (~/.local/share/mcpelauncher/, ~/.cache/mcpelauncher/).
     let data_dir_str = data_dir.get();
     let cache_dir_str = cache_dir.get();
-    capi::setup_paths(
+    startup::setup_paths(
         Some(&minecraft_dir),
         if data_dir_str.is_empty() { None } else { Some(&data_dir_str) },
         if cache_dir_str.is_empty() { None } else { Some(&cache_dir_str) },
     );
 
     // Init version info
-    capi::init_version("com.mojang.minecraftpe", 0);
+    startup::init_version("com.mojang.minecraftpe", 0);
 
     // Set up filesystem rewrite rules (matching C++ client behavior).
     // Redirects Minecraft's Android data paths to the real data dir
@@ -151,7 +151,7 @@ fn main() {
     }
 
     // Get merged C++ + Rust libc symbols from the C bridge
-    let libc_syms = capi::get_libc_symbols_from_cpp();
+    let libc_syms = startup::get_libc_symbols_from_cpp();
     log::info!("mcpelauncher-client: {} merged libc symbols from C++ bridge", libc_syms.len());
 
     if !libc_syms.is_empty() {
@@ -159,7 +159,7 @@ fn main() {
     }
 
     // Load core libraries (loads libm, libz, etc. via C++ linker)
-    match capi::load_core_libraries(&minecraft_dir) {
+    match startup::load_core_libraries(&minecraft_dir) {
         Ok(()) => log::info!("mcpelauncher-client: core libraries loaded successfully"),
         Err(code) => log::error!("mcpelauncher-client: failed to load core libraries (code={})", code),
     }
@@ -167,17 +167,17 @@ fn main() {
     // Set up android hooks (FakeLooper, FakeAssetManager, FakeInputQueue, FakeWindow,
     // CorePatches) — MUST happen before loading the game library so its relocations
     // resolve to real implementations.
-    capi::setup_android_hooks();
+    startup::setup_android_hooks();
     log::info!("mcpelauncher-client: android hooks registered successfully");
 
     // Create the Rust eglut window and register GLES2 symbols from real GL driver
-    // (Phase 5: replaces the deleted C++ GameWindowManager path).
-    capi::create_window_and_setup_graphics();
+    // (replaces the deleted C++ GameWindowManager path).
+    startup::create_window_and_setup_graphics();
     log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
 
     // Try loading libminecraftpe.so
     log::info!("mcpelauncher-client: attempting to load libminecraftpe.so...");
-    let game_handle = match capi::load_minecraft() {
+    let game_handle = match startup::load_minecraft() {
         Ok(handle) => {
             log::info!("mcpelauncher-client: libminecraftpe.so loaded at {:p}", handle);
             handle
@@ -197,7 +197,7 @@ fn main() {
     log::info!("mcpelauncher-client: Rust JNI VM created and classes registered");
 
     // Tell FakeLooper about the Rust JniSupport so it can forward the window
-    capi::set_fake_looper_rust_jni_support(rust_support);
+    startup::set_fake_looper_rust_jni_support(rust_support);
 
     // Register native methods from the game library
     log::info!("mcpelauncher-client: registering native methods...");
@@ -206,13 +206,13 @@ fn main() {
 
     // Create FakeAssetManager for game asset loading
     let assets_dir = format!("{}/assets", minecraft_dir);
-    capi::create_and_set_global_asset_manager(&assets_dir);
+    startup::create_and_set_global_asset_manager(&assets_dir);
     log::info!("mcpelauncher-client: FakeAssetManager created with root: {}", assets_dir);
 
     // Resolve game startup symbols
-    let game_create = capi::dlsym(game_handle, "GameActivity_onCreate");
-    let stbi_load = capi::dlsym(game_handle, "stbi_load_from_memory");
-    let stbi_free = capi::dlsym(game_handle, "stbi_image_free");
+    let game_create = startup::dlsym(game_handle, "GameActivity_onCreate");
+    let stbi_load = startup::dlsym(game_handle, "stbi_load_from_memory");
+    let stbi_free = startup::dlsym(game_handle, "stbi_image_free");
 
     // Start the game via Rust JniSupport (libjnivm-sys VM)
     log::info!("mcpelauncher-client: starting game via Rust JniSupport...");

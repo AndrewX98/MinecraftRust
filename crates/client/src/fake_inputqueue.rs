@@ -1,7 +1,7 @@
-//! Port of the C++ `FakeInputQueue` (Phase 1 of PORT_FAKE_LOOPER.md).
+//! Rust `FakeInputQueue`.
 //!
-//! Rust owns the event storage and the `libandroid.so` input hooks. Since
-//! Phase 4 the C++ `FakeInputQueue` forwarding wrapper is gone: `FakeLooper`
+//! Rust owns the event storage and the `libandroid.so` input hooks. The C++
+//! `FakeInputQueue` forwarding wrapper is gone: `FakeLooper`
 //! (Rust) owns a `Box<FakeInputQueue>` directly and hands its pointer to the
 //! game as the `AInputQueue*`; the hooks here resolve it by identity cast.
 
@@ -277,7 +277,7 @@ pub unsafe extern "C" fn mc_fake_input_queue_add_motion_event(
 // libandroid.so hooks (registered by mc_register_fake_input_queue_hooks)
 // ============================================================
 
-/// Phase 4: the game-visible `AInputQueue*` IS the Rust `FakeInputQueue*`
+/// The game-visible `AInputQueue*` IS the Rust `FakeInputQueue*`
 /// (no C++ forwarding wrapper anymore), so this is an identity cast.
 fn rust_queue_of(queue: *mut c_void) -> *mut FakeInputQueue {
     if queue.is_null() {
@@ -418,7 +418,7 @@ unsafe extern "C" fn hook_motion_get_axis_value(
 }
 
 /// Insert all `libandroid.so` input hooks into the symbol map (replaces C++
-/// `FakeInputQueue::initHybrisHooks`). Called from `capi::setup_android_hooks`.
+/// `FakeInputQueue::initHybrisHooks`). Called from `startup::setup_android_hooks`.
 pub unsafe fn mc_register_fake_input_queue_hooks(map: &mut HashMap<String, *mut c_void>) {
     map.insert("AInputQueue_getEvent".to_string(), hook_input_queue_get_event as *mut c_void);
     map.insert("AInputQueue_finishEvent".to_string(), hook_input_queue_finish_event as *mut c_void);

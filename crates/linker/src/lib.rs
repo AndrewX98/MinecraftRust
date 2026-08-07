@@ -207,8 +207,8 @@ pub fn load_library(name: &str, symbols: &HashMap<String, *mut std::ffi::c_void>
 }
 
 /// Register a stub library (never loads a real ELF), matching what the C++
-/// `linker_load_library_rust` twin / `rust_load_stub` used to do. Phase 10
-/// replacement for the `capi.cpp` bridge's stub registrations.
+/// `linker_load_library_rust` twin / `rust_load_stub` used to do. Replacement for
+/// the `capi.cpp` bridge's stub registrations.
 pub fn register_stub(name: &str, symbols: &HashMap<String, *mut std::ffi::c_void>) -> Handle {
     load_library_internal(name, symbols, true)
 }
@@ -219,7 +219,7 @@ pub fn find_library(name: &str) -> Option<Handle> {
     state.libraries_by_name.get(name).copied()
 }
 
-/// Add a directory to the library search path (phase-10 Rust twin of
+/// Add a directory to the library search path (Rust twin of
 /// `linker_rust_add_search_path`).
 pub fn add_search_path(path: &str) {
     log::info!("linker: adding search path: '{}'", path);
@@ -932,9 +932,9 @@ pub unsafe extern "C" fn linker_rust_dlopen_libcxx(
 /// IFUNC, no TLS relocs. `load_library_internal` runs its ctors at load time,
 /// matching C++ `linker::dlopen` behavior.
 ///
-/// Per docs/plan.md fmod procedure:
+/// Per the fmod procedure:
 /// - single owner (Rust) — do NOT call mcpelauncher_linker_register_loaded_library;
-///   a C++ soinfo mirror + C++ load was the phase-3.4 double-owner crash.
+///   a C++ soinfo mirror + C++ load caused a double-owner crash.
 /// - keep libfmod.so in the C++ dlsym fallback cache so libm + __cxa_* imports
 ///   (not present in Rust global_symbols) still resolve via C++.
 #[no_mangle]
@@ -1380,8 +1380,7 @@ struct DlInfo {
 
 /// Handle-type-agnostic dispatch wrappers (pure Rust, no C++ bionic fallback).
 ///
-/// Ported from mcpelauncher-linker/src/linker.cpp. All libraries are
-/// Rust-owned after Phase 4/5, so a handle is either a Rust handle (small int,
+/// All libraries are Rust-owned, so a handle is either a Rust handle (small int,
 /// passed as an opaque pointer) or invalid. On miss, dlopen/dlsym return null
 /// and dlclose returns -1, matching bionic's dlerror semantics without any
 /// C++ linker dependency.

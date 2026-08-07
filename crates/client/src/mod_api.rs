@@ -1,6 +1,6 @@
-//! Rust port of the mod-facing API funnel previously kept in the C++ shim
-//! `jnivm_mod_api.cpp` (Phase 6 survivor). Moved here once the crate switched
-//! to nightly and enabled `#![feature(c_variadic)]`.
+//! Rust mod-facing API funnel (previously the C++ shim `jnivm_mod_api.cpp`).
+//! Moved here once the crate switched to nightly and enabled
+//! `#![feature(c_variadic)]`.
 //!
 //! `mc_mod_log` / `mc_mod_vlog` are true C varargs wrappers over the Rust
 //! logger. `mc_mod_request_google_credentials` keeps the fork/exec helper

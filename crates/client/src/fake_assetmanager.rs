@@ -212,7 +212,7 @@ unsafe extern "C" fn AAssetManager_fromJava(
 }
 
 // ============================================================
-// Instance accessors (called from Rust capi.rs / jni_support.rs)
+// Instance accessors (called from Rust startup.rs / jni_support.rs)
 // ============================================================
 
 /// Replaces the C++ `extern "C" void* fake_assetmanager_get_instance()`.
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn fake_assetmanager_create_and_set_global(root_dir: *cons
 // ============================================================
 
 /// Insert all `libandroid.so` asset hooks into the symbol map. Called from
-/// `capi::setup_android_hooks` (the C++ `mc_register_android_hook` bridge and
+/// `startup::setup_android_hooks` (the C++ `mc_register_android_hook` bridge and
 /// the `*mut c_void` map argument are gone — the Rust map is passed directly).
 pub unsafe fn mc_register_fake_asset_manager_hooks(map: &mut HashMap<String, *mut c_void>) {
     map.insert("AAssetManager_open".to_string(), AAssetManager_open as *mut c_void);

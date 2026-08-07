@@ -1,15 +1,9 @@
-//! Port of `mcpelauncher-core/src/minecraft_utils.cpp` (Phase 6).
-//!
-//! The mod-facing `getApi`/`setupApi` funnel and the boot-adjacent helpers move
-//! here. `mcpelauncher_log/vlog` (C varargs) and the Google-credentials helper
-//! moved to Rust once the client crate enabled nightly `c_variadic`
-//! (`client/src/mod_api.rs`); `jnivm_register_method` cannot be expressed in
-//! Rust (it binds `jnivm::Method` native handles on the C++ FakeJni VM) so it
-//! is stubbed in `mod_api.rs`. All are referenced here by extern "C" address.
-//!
-//! Clean-named `#[no_mangle]` twins are what `capi.cpp` now calls; the C++
-//! `_ZN14MinecraftUtils*` mangled methods are gone (deleted with
-//! `minecraft_utils.cpp`).
+//! The mod-facing `getApi`/`setupApi` funnel and the boot-adjacent helpers.
+//! `mcpelauncher_log/vlog` (C varargs) and the Google-credentials helper live in
+//! the client crate's `mod_api.rs` (nightly `c_variadic`); `jnivm_register_method`
+//! cannot be expressed in Rust (it binds `jnivm::Method` native handles on the
+//! C++ FakeJni VM) so it is stubbed there. All are referenced here by extern "C"
+//! address.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -354,7 +348,7 @@ pub unsafe extern "C" fn core_minecraft_utils_get_libc_symbols(
 }
 
 /// `#[no_mangle]` twin: register merged libc symbols as `libc.so` with the linker
-/// (replaces capi.cpp `MinecraftUtils::getLibCSymbols()` + `rust_load_stub("libc.so", ...)`).
+/// (was C++ `MinecraftUtils::getLibCSymbols()` + `rust_load_stub("libc.so", ...)`).
 #[no_mangle]
 pub unsafe extern "C" fn core_minecraft_utils_register_libc_stub() {
     let syms = get_libc_symbols();

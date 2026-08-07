@@ -77,7 +77,7 @@ extern "C" {
     // All C++ FakeJni/Baron accessors (jni_support_get_jvm,
     // fake_jni_local_frame_{create,destroy}, fake_jni_jvm_attach_library,
     // xbox_live_helper_set_jvm, jni_support_new_cpp/init_activity/delete, …)
-    // are gone — the game runs entirely on the Rust libjnivm-sys VM (Phase 5).
+    // are gone — the game runs entirely on the Rust libjnivm-sys VM.
 }
 
 // ================================================================
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
 
     // Rust env for ga->env. ga->vm is the Rust VM (jnivm_create_vm below); the
     // game acquires per-thread envs via ga->vm->AttachCurrentThread on the Rust
-    // VM for its whole life (Baron/FakeJni LocalFrame chain removed — Phase 5).
+    // VM for its whole life (Baron/FakeJni LocalFrame chain removed).
     let rust_env = get_env();
 
     // Call DT_INIT and DT_INIT_ARRAY constructors for libminecraftpe.so.
@@ -414,7 +414,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     // Critical: the game calls getExternalStoragePath via the cached ga->env (the
     // Rust env), so jnivm_set_storage_dir must be set or AppPlatform logs
     // CurrentFileStoragePath is now '' and paths break (Baron storage-dir setter
-    // removed in Phase 5 — the Baron MainActivity is gone).
+    // removed — the Baron MainActivity is gone).
     let dir = crate::path_helper::path_helper_get_primary_data_directory();
     if !dir.is_null() {
         jnivm_set_storage_dir(dir);
@@ -676,7 +676,7 @@ pub unsafe extern "C" fn jni_support_start_game(
     let text_handler_ptr = Box::into_raw(Box::new(text_handler)) as *mut c_void;
     jnivm_set_text_input_handler(text_handler_ptr);
 
-    // Route the launcher-side keyboard into the game (Phase 4): when the OS
+    // Route the launcher-side keyboard into the game: when the OS
     // keyboard produces text/caret changes, push them into the game via
     // nativeSetTextboxText/nativeCaretPosition on the Rust env (mirrors C++
     // JniSupport::onSetTextboxText/onCaretPosition).

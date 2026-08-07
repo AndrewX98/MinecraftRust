@@ -2,7 +2,7 @@
 //! three varargs siblings previously lived in the C++ shim
 //! `android_log_varargs.cpp`; they were ported here once the crate moved to
 //! nightly and enabled `#![feature(c_variadic)]`. All four are registered as
-//! the `liblog.so` stub symbols by `capi.rs`.
+//! the `liblog.so` stub symbols by `startup.rs`.
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 

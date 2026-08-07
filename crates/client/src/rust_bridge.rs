@@ -248,10 +248,9 @@ pub unsafe extern "C" fn mc_glcorepatch_gl_bind_buffer(target: c_int, buffer: u3
 
 // === CorePatches: vtable patching ===
 // The `game_window_*` symbols and state live in Rust now (core_patches.rs);
-// only the vtable patching logic is here (port of
-// PatchUtils::VtableReplaceHelper, Phase 10: patch_utils.cpp deleted).
+// only the vtable patching logic is here (C++ `patch_utils.cpp` is gone).
 
-/// Rust port of `PatchUtils::VtableReplaceHelper::replace` (`patch_utils.cpp:80-93`,
+/// Rust `PatchUtils::VtableReplaceHelper::replace` (`patch_utils.cpp:80-93`,
 /// called via the former C++ `core_vtable_replace` in core_patches_stub.cpp).
 /// With `vta` as both the reference and target vtable, this resolves `name` via the
 /// linker, scans the null-terminated vtable for the matching entry, and swaps it

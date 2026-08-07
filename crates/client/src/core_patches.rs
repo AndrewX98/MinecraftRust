@@ -1,13 +1,13 @@
-//! Port of the C++ `CorePatches` (Phase 2 of PORT_FAKE_LOOPER.md).
+//! Rust `CorePatches`.
 //!
 //! Rust owns the `GameWindowHandle` state, the `on_window_created_callbacks`
 //! registry, and the 9 `game_window_*` symbols registered into the
 //! `libmcpelauncher_gamewindow.so` Rust linker stub. The `callbacks` token stays
-//! an opaque pointer to the C++ `WindowCallbacks`; the `game_window_*` handlers
-//! forward through small `window_callbacks_*` extern "C" helpers (still backed
-//! by C++ until Phase 3). The vtable patching (`core_patches_install_impl`) and
-//! the swap-buffers callback registry (`fake_egl_add_swap_buffers_callback`)
-//! already lived in Rust and are reused directly.
+//! an opaque pointer to the (fully Rust) `WindowCallbacks`; the `game_window_*`
+//! handlers forward through the `window_callbacks_*` extern "C" helpers. The
+//! vtable patching (`core_patches_install_impl`) and the swap-buffers callback
+//! registry (`fake_egl_add_swap_buffers_callback`) live in Rust and are reused
+//! directly.
 
 use std::ffi::c_void;
 
@@ -17,8 +17,8 @@ type MousePositionCallback = extern "C" fn(*mut c_void, f64, f64, bool) -> bool;
 type MouseScrollCallback = extern "C" fn(*mut c_void, f64, f64, f64, f64) -> bool;
 type SwapBuffersCallback = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
 
-// C++ `WindowCallbacks` helpers (window_callbacks_stub.cpp, removed in Phase 3)
-// and the already-Rust swap-buffers registry (rust_bridge.rs).
+// `WindowCallbacks` helper externs (paths live in window_callbacks.rs) and the
+// Rust swap-buffers registry (rust_bridge.rs).
 extern "C" {
     fn window_callbacks_get_input_mode(callbacks: *mut c_void) -> i32;
     fn window_callbacks_set_cursor_locked(callbacks: *mut c_void, locked: bool);
@@ -33,8 +33,8 @@ extern "C" {
 }
 
 /// Opaque handle returned to the game by `game_window_get_primary_window`.
-/// Raw tokens only — the C++ `FakeLooper` still owns `GameWindow`/`WindowCallbacks`
-/// through Phase 4; Rust mirrors the plan's "stable-address `GameWindowHandle`".
+/// Raw tokens only — `FakeLooper` owns the `GameWindow`/`WindowCallbacks`; Rust
+/// mirrors the plan's stable-address `GameWindowHandle`.
 #[repr(C)]
 pub struct GameWindowHandle {
     #[allow(dead_code)]
@@ -253,8 +253,8 @@ pub unsafe extern "C" fn game_window_add_swap_buffers_callback(
 
 /// Mirrors the 9 `game_window_*` symbols into the Rust linker's
 /// `libmcpelauncher_gamewindow.so` stub. Must run after
-/// `linker::register_stub("libmcpelauncher_gamewindow.so", ...)` (capi.rs) —
-/// kept inside `capi::setup_android_hooks` to preserve that ordering.
+/// `linker::register_stub("libmcpelauncher_gamewindow.so", ...)` (startup.rs) —
+/// kept inside `startup::setup_android_hooks` to preserve that ordering.
 #[no_mangle]
 pub unsafe extern "C" fn mc_register_game_window_symbols() {
     let syms: [(&str, *mut c_void); 9] = [

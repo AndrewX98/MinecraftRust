@@ -84,7 +84,7 @@ fn create_file_object(_env: *mut JNIEnv, path: &str) -> jobject {
     Box::into_raw(fobj) as jobject
 }
 
-// ========== Phase 0: Trivial stubs ==========
+// ========== Trivial stubs ==========
 
 unsafe extern "C" fn get_android_version(_env: *mut JNIEnv, _self: jobject) -> jint {
     32
@@ -207,7 +207,7 @@ unsafe extern "C" fn set_text_box_backend(env: *mut JNIEnv, _self: jobject, text
     update_handler_text(env, text);
 }
 
-// ========== Phase 1: OS syscalls + file stubs ==========
+// ========== OS syscalls + file stubs ==========
 
 unsafe extern "C" fn get_used_memory(_env: *mut JNIEnv, _self: jobject) -> jlong {
     let content = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
@@ -337,7 +337,7 @@ unsafe extern "C" fn get_file_data_bytes(
     0
 }
 
-// ========== Phase 2: Global-state methods ==========
+// ========== Global-state methods ==========
 
 unsafe extern "C" fn get_files_dir(env: *mut JNIEnv, _self: jobject) -> jobject {
     create_file_object(env, storage_dir())
@@ -449,7 +449,7 @@ unsafe extern "C" fn get_key_from_key_code(
     key_code
 }
 
-// ========== Phase 3: Heavy methods ==========
+// ========== Heavy methods ==========
 
 unsafe extern "C" fn create_uuid(env: *mut JNIEnv, _self: jobject) -> jobject {
     let iface = get_iface(env);
@@ -787,7 +787,7 @@ pub fn register(env: *mut JNIEnv) {
             signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
             fnPtr: set_text_box_backend as *mut std::ffi::c_void,
         },
-        // Phase 1: OS syscalls + file stubs
+        // OS syscalls + file stubs
         JNINativeMethod {
             name: b"getUsedMemory\0".as_ptr() as *const c_char,
             signature: b"()J\0".as_ptr() as *const c_char,
@@ -863,7 +863,7 @@ pub fn register(env: *mut JNIEnv) {
             signature: b"(Ljava/lang/String;)[B\0".as_ptr() as *const c_char,
             fnPtr: get_file_data_bytes as *mut std::ffi::c_void,
         },
-        // Phase 2: Global-state methods
+        // Global-state methods
         JNINativeMethod {
             name: b"getFilesDir\0".as_ptr() as *const c_char,
             signature: b"()Ljava/io/File;\0".as_ptr() as *const c_char,
@@ -929,7 +929,7 @@ pub fn register(env: *mut JNIEnv) {
             signature: b"(III)I\0".as_ptr() as *const c_char,
             fnPtr: get_key_from_key_code as *mut std::ffi::c_void,
         },
-        // Phase 3: Heavy methods
+        // Heavy methods
         JNINativeMethod {
             name: b"createUUID\0".as_ptr() as *const c_char,
             signature: b"()Ljava/util/UUID;\0".as_ptr() as *const c_char,

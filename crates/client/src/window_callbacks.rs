@@ -1,15 +1,15 @@
-//! Port of C++ `WindowCallbacks` (Phase 3 of PORT_FAKE_LOOPER.md).
+//! Rust `WindowCallbacks`.
 //!
 //! The C++ `window_callbacks_stub.cpp` is deleted; this module owns the full
 //! input dispatch. `window_callbacks_register` sets the eglut event callbacks
-//! directly (Phase 5 removed the C++ `EGLUTWindow` trampolines — idle/display
+//! directly (the C++ `EGLUTWindow` trampolines are gone — idle/display
 //! are not set because the game drives rendering via FakeEGL). Statistically-unreachable
 //! branches from the C++ original were dropped: `inputQueue.addEvent` paths
 //! (game is always a game activity), `emulateTouch`, and the direct
-//! mouse/keyboard `SymbolsHelper` feeds.
+//! mouse/keyboard feeds.
 //!
-//! The `callbacks` token stays an opaque `*mut c_void`; since Phase 4 the
-//! Rust `FakeLooper` owns it in per-thread state and exposes it via
+//! The `callbacks` token stays an opaque `*mut c_void`; the Rust `FakeLooper`
+//! owns it in per-thread state and exposes it via
 //! `crate::fake_looper::current_callbacks()` (the eglut trampolines and the
 //! gamepad dispatch run on the same game thread that called `prepare`).
 
@@ -1291,8 +1291,8 @@ pub unsafe extern "C" fn window_callbacks_register(w: *mut c_void) {
     }
     // Idle/display are intentionally NOT set: the game drives rendering itself
     // through FakeEGL (`fake_egl_swap_buffers` → `game_window_swap_buffers` →
-    // `eglutSwapBuffers`), so no redraw callback is needed (Phase 5 removed the
-    // C++ EGLUTWindow that used to register `eglutIdleFunc`/`eglutDisplayFunc`).
+    // `eglutSwapBuffers`), so no redraw callback is needed (the C++ EGLUTWindow
+    // that used to register `eglutIdleFunc`/`eglutDisplayFunc` is gone).
     eglutReshapeFunc(Some(eglut_cb_reshape));
     eglutMouseFunc(Some(eglut_cb_mouse));
     eglutMouseRawFunc(Some(eglut_cb_mouse_raw));
@@ -1342,7 +1342,7 @@ pub unsafe extern "C" fn window_callbacks_mark_requeue_gamepad(w: *mut c_void) {
     (&mut *(w as *mut WindowCallbacks)).mark_requeue_gamepad_input();
 }
 
-// --- CorePatches-backed helpers (Phase 2, now fully Rust) ---
+// --- CorePatches-backed helpers (fully Rust) ---
 
 #[no_mangle]
 pub unsafe extern "C" fn window_callbacks_get_input_mode(callbacks: *mut c_void) -> i32 {

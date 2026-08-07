@@ -149,7 +149,7 @@ fn parse_config_file(
     let mut cp = ConfigParser::new(content);
     let mut section_name = String::new();
 
-    // Phase 1: find matching section
+    // Step 1: find matching section
     loop {
         match cp.next_token() {
             Token::Section(_) | Token::EndOfFile => return false,
@@ -210,7 +210,7 @@ fn parse_config_file(
 
     log::info!("[ Using config section \"{}\" ]", section_name);
 
-    // Phase 2: skip to the matching section
+    // Step 2: skip to the matching section
     loop {
         match cp.next_token() {
             Token::Section(name) if name == section_name => break,
@@ -223,7 +223,7 @@ fn parse_config_file(
         }
     }
 
-    // Phase 3: parse properties in the section
+    // Step 3: parse properties in the section
     loop {
         match cp.next_token() {
             Token::EndOfFile | Token::Section(_) => break,

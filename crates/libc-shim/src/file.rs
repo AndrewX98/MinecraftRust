@@ -110,7 +110,7 @@ fn update_feof(stream: *mut BionicFile) {
     }
 }
 
-// Phase 1: Auto-arg-rewritten category — simple unwrap
+// Auto-arg-rewritten category — simple unwrap
 
 pub unsafe extern "C" fn clearerr(stream: *mut BionicFile) {
     libc::clearerr((*stream).wrapped);
@@ -316,7 +316,7 @@ pub unsafe extern "C" fn vfscanf(
     ret
 }
 
-// Phase 2: Wrapping/unwrapping functions
+// Wrapping/unwrapping functions
 
 pub unsafe extern "C" fn fopen(
     path: *const c_char,
@@ -365,7 +365,7 @@ pub unsafe extern "C" fn pclose(stream: *mut BionicFile) -> i32 {
     ret
 }
 
-// Phase 3: Special logic functions
+// Special logic functions
 
 pub unsafe extern "C" fn fread(
     buf: *mut c_void,

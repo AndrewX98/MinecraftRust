@@ -1,16 +1,10 @@
-//! C bridge to the remaining compiled C++ mcpelauncher code.
+//! Launcher startup orchestration.
 //!
-//! Phase 10: the original `capi.cpp` bridge (static lib `mcpelauncher-client-bridge`)
-//! has been deleted. Its four functions were ported into this module:
-//! `setup_paths`, `get_libc_symbols_from_cpp`, `load_core_libraries` and the
-//! C-facing `mc_relocate_glesv2_symbols` (still called from `jni_bridge_stub.cpp`).
-//!
-//! The externs below are still defined in C++ (`jni_bridge_stub.cpp`), except
-//! `fake_looper_set_rust_jni_support`, which is now defined in Rust
-//! (`fake_looper.rs`). The liblog varargs entry points were ported to Rust
-//! (`android_log_hook.rs`, `mod_api.rs`) once the crate moved to nightly
-//! `c_variadic`. The android-hook registration (`mc_setup_android_hooks`) and
-//! `mc_dlsym` were ported here.
+//! Rust port of the old C++ `capi.cpp` bridge and `main.cpp` init sequence:
+//! path/version setup, stub-library registration, Android hook installation,
+//! window creation, and game loading. All `#[no_mangle]` C symbols here were
+//! either deleted with the C++ bridge or reduced to `mc_relocate_glesv2_symbols`,
+//! which the game's C++ code still resolves via dlsym.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_long, c_void, CString};
@@ -66,12 +60,12 @@ pub fn init_version(package: &str, version_code: i32) {
 }
 
 pub fn get_libc_symbols_from_cpp() -> HashMap<String, *mut c_void> {
-    // Phase 10: direct call to the corelib twin (formerly mc_get_libc_symbols →
+    // Direct call to the corelib twin (formerly mc_get_libc_symbols →
     // core_minecraft_utils_get_libc_symbols). Returns only non-null entries.
     unsafe { corelib::minecraft_utils::get_libc_symbols() }
 }
 
-/// Rust port of `jni_bridge_stub.cpp mc_setup_android_hooks`. Builds the
+/// Rust `jni_bridge_stub.cpp mc_setup_android_hooks`. Builds the
 /// `libandroid.so` symbol map in-process (no C++ unordered_map / FFI bridge),
 /// registers it with the Rust linker, registers the AAudio stubs (C++ FakeAudio
 /// via `mc_register_aaudio_stub`) and mirrors the game-window symbols. Ordering
@@ -112,8 +106,8 @@ pub fn setup_android_hooks() {
     }
 }
 
-/// Phase 10 Rust port of `capi.cpp mc_load_core_libraries` (the init sequence the
-/// original C++ main.cpp ran). Calls the Rust linker directly — no C++ bridge.
+/// Rust `capi.cpp mc_load_core_libraries` (the init sequence the C++ main.cpp
+/// ran). Calls the Rust linker directly — no C++ bridge.
 pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
     unsafe {
         // 0) Initialize Rust linker (single owner of all libraries).
@@ -194,15 +188,15 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
     Ok(())
 }
 
-/// Phase 5 Rust port of `jni_bridge_stub.cpp mc_create_window_and_setup_graphics`.
+/// Rust `jni_bridge_stub.cpp mc_create_window_and_setup_graphics`.
 /// Creates the eglut window and seeds FakeEGL — the C++ `GameWindowManager` /
-/// `EGLUTWindow` path was deleted (see `game_window.rs`).
+/// `EGLUTWindow` path is gone (see `game_window.rs`).
 pub fn create_window_and_setup_graphics() {
     unsafe { crate::game_window::mc_create_window_and_setup_graphics() }
 }
 
 pub fn load_minecraft() -> Result<*mut c_void, ()> {
-    // Phase 4: pure-Rust orchestration (port of MinecraftUtils::loadMinecraftLib).
+    // Pure-Rust orchestration of `MinecraftUtils::loadMinecraftLib`.
     let handle = unsafe { crate::minecraft_load::load_minecraft() };
     if handle.is_null() { Err(()) } else { Ok(handle) }
 }
@@ -229,7 +223,7 @@ pub fn dlsym(handle: *mut c_void, symbol: &str) -> *mut c_void {
     unsafe { linker::mcpelauncher_dispatch_dlsym(handle, sym.as_ptr()) }
 }
 
-/// Phase 10 Rust port of `capi.cpp mc_relocate_glesv2_symbols`. Called from C++
+/// Rust `capi.cpp mc_relocate_glesv2_symbols`. Called from C++
 /// (`jni_bridge_stub.cpp mc_create_window_and_setup_graphics`) with
 /// `fake_egl::eglGetProcAddress`; ABI matches the C `void* (*)(const char*)` type.
 #[no_mangle]

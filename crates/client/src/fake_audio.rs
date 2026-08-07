@@ -2,7 +2,7 @@
 //! FMOD's setOutput hook keeps AAudio; FMOD then dlopen's libaaudio.so and
 //! calls the `AAudio*` API. The real libaaudio.so is never loaded — these
 //! symbols are registered with the Rust linker via `mc_register_aaudio_stub`
-//! (called from `crate::capi::setup_android_hooks`). The game treats
+//! (called from `crate::startup::setup_android_hooks`). The game treats
 //! `AAudioStreamBuilder`/`AAudioStream` as opaque handles, so the struct
 //! layout is launcher-internal; only pointer identity crosses the boundary.
 
@@ -505,7 +505,7 @@ pub fn init_hybris_hooks(syms: &mut HashMap<String, *mut c_void>) {
 
 /// Rust replacement for the C++ `mc_register_aaudio_stub` (fake_audio.cpp):
 /// registers the AAudio stub table with the Rust linker under the given
-/// soname. Called from `crate::capi::setup_android_hooks` for both
+/// soname. Called from `crate::startup::setup_android_hooks` for both
 /// `libaaudio.so` and `libaaudio.so.2`.
 pub fn mc_register_aaudio_stub(name: *const c_char) {
     let name_str = unsafe { CStr::from_ptr(name) }

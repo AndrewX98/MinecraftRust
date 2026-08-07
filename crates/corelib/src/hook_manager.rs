@@ -1,20 +1,19 @@
-//! `#[no_mangle]` twin of C++ `HookManager` (`mcpelauncher-core/src/hook.cpp`).
+//! Rust twin of C++ `HookManager` (`mcpelauncher-core/src/hook.cpp`).
 //!
-//! Faithful Rust port of the hooking singleton that rewrites ELF relocations
+//! The hooking singleton that rewrites ELF relocations
 //! (GOT/JUMP_SLOT slots) in loaded-library memory. Target is **x86_64 only**,
 //! which uses **RELA** relocations (`DT_RELA`/`DT_RELASZ`/`DT_JMPREL`,
 //! `DT_PLTREL=RELA`, 24-byte `Elf64_Rela` entries). The C++ original defaults to
 //! 16-byte `Elf64_Rel` when `USE_RELA` is unset, which strides a 24-byte table
-//! incorrectly; this port reads the correct 24-byte entries, so it behaves as the
+//! incorrectly; this Rust version reads the correct 24-byte entries, so it behaves as the
 //! C++ clearly intended but never exercised at boot (`applyHooks` is not on the
 //! boot path).
 //!
-//! **Additive-only (deferral to Phase 6):** `hook.cpp` stays compiled because its
-//! still-C++ callers (`minecraft_utils.cpp`, `mod_loader.cpp`) invoke the **mangled**
+//! **Additive-only:** `hook.cpp` stays compiled because its still-C++ callers
+//! (`minecraft_utils.cpp`, `mod_loader.cpp`) invoke the **mangled**
 //! `HookManager::instance.*` methods, which Rust cannot emit/ABI. This module provides
 //! the Rust singleton plus clean-named `#[no_mangle]` twins (`hook_manager_*`) that
-//! Phase 6's `minecraft_utils` port (and any real mod hooking) will use once the C++
-//! callers are gone.
+//! `minecraft_utils` (and any real mod hooking) call.
 //!
 //! `HookInstance` returned by `createHook` is a leaked `Box`; the caller owns it and
 //! must hand it to `hook_manager_delete_hook`.
@@ -490,8 +489,8 @@ fn run<T>(f: impl FnOnce(&mut HookManager) -> T) -> T {
 }
 
 /// `#[no_mangle]` twins (additive; clean names never collide with the C++ mangled
-/// `HookManager::*` methods still linked in `hook.cpp`). Phase 6's `minecraft_utils`
-/// port and any real mod hooking will call these.
+/// `HookManager::*` methods still linked in `hook.cpp`). `minecraft_utils`
+/// and any real mod hooking call these.
 
 #[no_mangle]
 pub extern "C" fn hook_manager_add_library(handle: *mut c_void) {

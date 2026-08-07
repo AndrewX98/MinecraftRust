@@ -1,10 +1,9 @@
-//! Phase 1 class-registration coverage (docs/PORT_JNI_SUPPORT.md).
+//! Class-registration coverage for the Rust `libjnivm-sys` VM.
 //!
 //! Classes listed in C++ `registerJniClasses()` (jni_support.cpp:190-249)
-//! that were missing from the Rust `libjnivm-sys` VM. Aggressive stubs —
+//! that were missing from the Rust VM. Aggressive stubs —
 //! the game only touches a handful of these at runtime; the rest are
-//! lookup-only. Pure additions: the game still runs on the Baron/FakeJni VM
-//! until Phase 3, so nothing here changes boot behavior.
+//! lookup-only.
 
 use libjnivm_sys::*;
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -644,5 +643,5 @@ pub fn register_all(env: *mut JNIEnv) {
     register_package_source_classes(env);
     register_playfab_classes(env);
     register_marker_classes(env);
-    log::info!("class_stubs: registered Phase-1 coverage classes with libjnivm-sys VM");
+    log::info!("class_stubs: registered coverage classes with libjnivm-sys VM");
 }

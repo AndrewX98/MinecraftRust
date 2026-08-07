@@ -1,4 +1,4 @@
-//! Rust port of `MinecraftUtils::loadMinecraftLib` — Phase 4 core.
+//! Rust `MinecraftUtils::loadMinecraftLib`.
 //!
 //! Orchestrates loading `libminecraftpe.so` through the Rust linker with hook
 //! relocations, replacing the C++ `MinecraftUtils::loadMinecraftLib` entry.
