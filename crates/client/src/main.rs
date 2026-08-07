@@ -189,15 +189,6 @@ fn main() {
     // Set the game handle for the native symbol resolver
     unsafe { rust_bridge::jni_set_game_handle(game_handle) };
 
-    // Create C++ JniSupport for FakeLooper (window callbacks, text input, etc.)
-    let _cpp_support = capi::create_cpp_jni_support();
-    log::info!("mcpelauncher-client: C++ JniSupport created for FakeLooper");
-
-    // Register game native methods (nativeRegisterThis, etc.) with the C++ Baron JVM.
-    // This MUST happen after libminecraftpe.so is loaded but before startGame().
-    log::info!("mcpelauncher-client: registering C++ JniSupport natives...");
-    capi::register_minecraft_natives_cpp(_cpp_support, game_handle);
-
     // Create Rust JniSupport with libjnivm-sys VM and register all classes
     log::info!("mcpelauncher-client: initializing Rust JNI VM...");
     let rust_support = unsafe { jni_support::jni_support_new() };
@@ -222,12 +213,10 @@ fn main() {
     let stbi_free = capi::dlsym(game_handle, "stbi_image_free");
 
     // Start the game via Rust JniSupport (libjnivm-sys VM)
-    // The C++ JniSupport is still used by FakeLooper for event dispatch;
-    // Rust populates its callbacks after GameActivity_onCreate returns.
     log::info!("mcpelauncher-client: starting game via Rust JniSupport...");
     unsafe {
         fake_thread_mover_store_start_thread_id();
-        jni_support::jni_support_start_game(rust_support, _cpp_support, game_create, stbi_load, stbi_free);
+        jni_support::jni_support_start_game(rust_support, std::ptr::null_mut(), game_create, stbi_load, stbi_free);
     }
     log::info!("mcpelauncher-client: game started, entering event loop...");
 

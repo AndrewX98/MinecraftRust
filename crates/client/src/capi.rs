@@ -19,8 +19,6 @@ use minecraft_imported_symbols::{ANDROID_SYMBOLS, GLESV2_SYMBOLS};
 
 extern "C" {
     fn mc_register_aaudio_stub(name: *const c_char);
-    fn jni_support_register_minecraft_natives_cpp(s: *mut c_void,
-                                                  game_handle: *mut c_void);
     fn fake_looper_set_rust_jni_support(support: *mut c_void);
 }
 
@@ -208,15 +206,6 @@ pub fn load_minecraft() -> Result<*mut c_void, ()> {
     // Phase 4: pure-Rust orchestration (port of MinecraftUtils::loadMinecraftLib).
     let handle = unsafe { crate::minecraft_load::load_minecraft() };
     if handle.is_null() { Err(()) } else { Ok(handle) }
-}
-
-pub fn create_cpp_jni_support() -> *mut c_void {
-    unsafe { crate::jni_support::jni_support_create_cpp() }
-}
-
-pub fn register_minecraft_natives_cpp(support: *mut c_void,
-                                      game_handle: *mut c_void) {
-    unsafe { jni_support_register_minecraft_natives_cpp(support, game_handle) }
 }
 
 pub fn set_fake_looper_rust_jni_support(support: *mut c_void) {
