@@ -313,19 +313,15 @@ fn main() {
         b.cpp(true).std("c++17").flag_if_supported("-w");
         b.include(client_dir.join("src"));
         b.include(client_dir.join("src/manifest_headers"));
-        b.include(local_inc.join("android-support-headers"));
+        // game-window (game_window.h/key_mapping.h) via text_input_handler.h;
+        // file-picker (file_picker.h) via file_picker_stub.cpp;
+        // mcpelauncher/linker.h via http_client_stubs.cpp. The remaining vendored
+        // include trees (android-support-headers, minecraft-imported-symbols,
+        // epoll-shim, linux-gamepad, properties-parser, logger, libc-shim,
+        // mcpelauncher-common, base64.h) were deleted — unused after the Baron
+        // VM removal (only GameActivity/gamepad/etc. were C++ consumers).
         b.include(local_inc.join("game-window"));
-        b.include(local_inc.join("logger"));
-        b.include(local_inc.join("mcpelauncher-common"));
-        b.include(local_inc.join("epoll-shim"));
-        b.include(local_inc.join("properties-parser"));
-        // mcpelauncher-errorwindow include dir deleted (Phase 5) — its only header
-        // `errorwindow.h` depended on the deleted `game_window_error_handler.h`.
-        b.include(local_inc.join("linux-gamepad"));
         b.include(local_inc.join("file-picker"));
-        b.include(local_inc.join("libc-shim"));
         b.include(client_dir.join("include"));
-        b.include(local_inc.join("minecraft-imported-symbols"));
-        b.define("HAVE_LOGGER", "1");
     });
 }
