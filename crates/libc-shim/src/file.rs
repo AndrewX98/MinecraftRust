@@ -24,9 +24,9 @@ pub struct BionicFile {
     _p: *const c_char,
     _r: c_int,
     _w: c_int,
-    _flags: c_int,
+    pub(crate) _flags: c_int,
     _file: c_int,
-    wrapped: *mut libc::FILE,
+    pub(crate) wrapped: *mut libc::FILE,
     filler: [u8; 120],
 }
 

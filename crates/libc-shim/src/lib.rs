@@ -1,3 +1,5 @@
+#![feature(c_variadic)]
+
 pub mod types;
 pub mod bionic_conv;
 pub mod pthreads;
@@ -20,26 +22,12 @@ pub mod data;
 pub mod file;
 pub mod misc;
 pub mod path_rewrite;
+pub mod variadic;
 
 use std::ffi::c_int;
 use std::ffi::c_void;
 use std::ffi::CString;
 use types::*;
-
-// C-backed variadic wrappers (va_start/va_end in C, not Rust)
-extern "C" {
-    fn get_shim_sscanf() -> *mut c_void;
-    fn get_shim_printf() -> *mut c_void;
-    fn get_shim_sprintf() -> *mut c_void;
-    fn get_shim_snprintf() -> *mut c_void;
-    fn get_shim_asprintf() -> *mut c_void;
-    fn get_shim___snprintf_chk() -> *mut c_void;
-    fn get_shim_scanf() -> *mut c_void;
-    fn get_shim_swprintf() -> *mut c_void;
-    fn get_shim_syscall() -> *mut c_void;
-    fn get_shim_fprintf() -> *mut c_void;
-    fn get_shim_fscanf() -> *mut c_void;
-}
 
 pub type jmp_buf = [u8; 200];
 pub type sigjmp_buf = [u8; 200];
@@ -380,14 +368,14 @@ unsafe fn get_symbol_ptr(name: &str) -> *mut c_void {
         "isascii" => ctype::isascii as *mut c_void,
         "tolower" => ctype::tolower as *mut c_void,
         "toupper" => ctype::toupper as *mut c_void,
-        "printf" => get_shim_printf(),
-        "sprintf" => get_shim_sprintf(),
-        "snprintf" => get_shim_snprintf(),
-        "scanf" => get_shim_scanf(),
+        "printf" => variadic::shim_printf as *mut c_void,
+        "sprintf" => variadic::shim_sprintf as *mut c_void,
+        "snprintf" => variadic::shim_snprintf as *mut c_void,
+        "scanf" => variadic::shim_scanf as *mut c_void,
         "vsprintf" => stdio::vsprintf as *mut c_void,
         "vsnprintf" => stdio::vsnprintf as *mut c_void,
         "vscanf" => stdio::vscanf as *mut c_void,
-        "swprintf" => get_shim_swprintf(),
+        "swprintf" => variadic::shim_swprintf as *mut c_void,
         "puts" => stdio::puts as *mut c_void,
         "getchar" => stdio::getchar as *mut c_void,
         "putchar" => stdio::putchar as *mut c_void,
@@ -581,7 +569,7 @@ unsafe fn get_symbol_ptr(name: &str) -> *mut c_void {
         "_ZnwmSt11align_val_t" => stdlib::_ZnwmSt11align_val_t as *mut c_void,
         "gettid" => misc::gettid as *mut c_void,
         "getrandom" => misc::getrandom as *mut c_void,
-        "syscall" => get_shim_syscall(),
+        "syscall" => variadic::shim_syscall as *mut c_void,
         "arc4random_buf" => misc::arc4random_buf as *mut c_void,
         "arc4random" => misc::arc4random as *mut c_void,
         "getentropy" => misc::getentropy as *mut c_void,
@@ -720,10 +708,10 @@ unsafe fn get_symbol_ptr(name: &str) -> *mut c_void {
         "inet_netof" => socket::inet_netof as *mut c_void,
         "__cmsg_nxthdr" => socket::__cmsg_nxthdr as *mut c_void,
         "__vsprintf_chk" => stdio::__vsprintf_chk as *mut c_void,
-        "__snprintf_chk" => get_shim___snprintf_chk(),
+        "__snprintf_chk" => variadic::shim___snprintf_chk as *mut c_void,
         "__vsnprintf_chk" => stdio::__vsnprintf_chk as *mut c_void,
         "__fgets_chk" => file::__fgets_chk as *mut c_void,
-        "asprintf" => get_shim_asprintf(),
+        "asprintf" => variadic::shim_asprintf as *mut c_void,
         "__ctype_get_mb_cur_max" => ctype::__ctype_get_mb_cur_max as *mut c_void,
         "_ctype_" => &ctype::_CTYPE_PTR.0 as *const *const u8 as *mut c_void,
         "_tolower_tab_" => &ctype::_TOLOWER_PTR.0 as *const *const i16 as *mut c_void,
@@ -818,7 +806,7 @@ unsafe fn get_symbol_ptr(name: &str) -> *mut c_void {
         "tolower_l" => ctype::tolower_l as *mut c_void,
         "toupper_l" => ctype::toupper_l as *mut c_void,
         "freelocale" => locale::freelocale as *mut c_void,
-        "sscanf" => get_shim_sscanf(),
+        "sscanf" => variadic::shim_sscanf as *mut c_void,
         "vprintf" => stdio::vprintf as *mut c_void,
         "vasprintf" => stdio::vasprintf as *mut c_void,
         "vsscanf" => stdio::vsscanf as *mut c_void,
@@ -842,13 +830,13 @@ unsafe fn get_symbol_ptr(name: &str) -> *mut c_void {
         "fileno" => file::fileno as *mut c_void,
         "flockfile" => file::flockfile as *mut c_void,
         "fopen" => file::fopen as *mut c_void,
-        "fprintf" => get_shim_fprintf(),
+        "fprintf" => variadic::shim_fprintf as *mut c_void,
         "fputc" => file::fputc as *mut c_void,
         "fputs" => file::fputs as *mut c_void,
         "fread" => file::fread as *mut c_void,
         "freopen" => file::freopen as *mut c_void,
         "freopen64" => file::freopen64 as *mut c_void,
-        "fscanf" => get_shim_fscanf(),
+        "fscanf" => variadic::shim_fscanf as *mut c_void,
         "fseek" => file::fseek as *mut c_void,
         "fseeko" => file::fseeko as *mut c_void,
         "ftell" => file::ftell as *mut c_void,
