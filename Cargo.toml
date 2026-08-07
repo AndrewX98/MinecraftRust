@@ -15,7 +15,6 @@ members = [
     "crates/linker",
     "crates/client",
     "crates/corelib",
-    "crates/cpp-bridge-sys",
 ]
 
 [workspace.lints.rust]

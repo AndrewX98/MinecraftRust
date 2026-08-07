@@ -18,7 +18,6 @@ use std::ffi::{c_char, c_int, c_long, c_void, CString};
 use minecraft_imported_symbols::{ANDROID_SYMBOLS, GLESV2_SYMBOLS};
 
 extern "C" {
-    fn mc_register_aaudio_stub(name: *const c_char);
     fn fake_looper_set_rust_jni_support(support: *mut c_void);
 }
 
@@ -104,10 +103,10 @@ pub fn setup_android_hooks() {
         linker::register_stub("libandroid.so", &android_syms);
 
         // FMOD setOutput is stubbed to keep AAudio; FMOD then dlopen's
-        // libaaudio.so and calls AAudio_* symbols. The C++ FakeAudio keeps the
-        // AAudio backend; register both sonames via the C++ shim.
-        mc_register_aaudio_stub(c"libaaudio.so".as_ptr());
-        mc_register_aaudio_stub(c"libaaudio.so.2".as_ptr());
+        // libaaudio.so and calls AAudio_* symbols. The Rust fake_audio module
+        // keeps the AAudio backend; register both sonames.
+        crate::fake_audio::mc_register_aaudio_stub(c"libaaudio.so".as_ptr());
+        crate::fake_audio::mc_register_aaudio_stub(c"libaaudio.so.2".as_ptr());
 
         crate::core_patches::mc_register_game_window_symbols();
     }

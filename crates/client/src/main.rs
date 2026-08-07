@@ -3,6 +3,7 @@
 mod capi;
 mod core_patches;
 mod window_callbacks;
+mod fake_audio;
 mod game_window;
 mod rust_bridge;
 mod jni_support;

@@ -12,23 +12,4 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib={name}");
         println!("cargo:rustc-link-arg-bins=-l{name}");
     }
-
-    // Static C++ libs from cc::Build (compiled by cpp-bridge-sys).
-    // cc::Build emits `rustc-link-lib=static=...` which reaches the lib
-    // target but not the binary — same-package lib+bin skips the rlib.
-    // Phase 10 removed `mcpelauncher-client-bridge` (capi.cpp deleted).
-    // mcpelauncher-core was removed when its last two files
-    // (android_log_varargs.cpp, jnivm_mod_api.cpp) were ported to Rust.
-    // mcpelauncher-cll-telemetry was removed when cll-telemetry was ported
-    // to the Rust crate crates/cll-telemetry (client/src/cll_telemetry.rs).
-    // Phase 5 removed `mcpelauncher-gamewindow` (window owned by Rust eglut,
-    // see crate::game_window.rs).
-    static STATIC_LIBS: &[&str] = &[
-        "mcpelauncher-client-jni",
-    ];
-    println!("cargo:rustc-link-arg-bins=-Wl,-Bstatic");
-    for lib in STATIC_LIBS {
-        println!("cargo:rustc-link-arg-bins=-l{lib}");
-    }
-    println!("cargo:rustc-link-arg-bins=-Wl,-Bdynamic");
 }

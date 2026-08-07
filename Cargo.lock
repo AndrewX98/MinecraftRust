@@ -262,7 +262,6 @@ dependencies = [
  "cll-telemetry",
  "corelib",
  "cpal",
- "cpp-bridge-sys",
  "daemon-utils",
  "env_logger",
  "libc",
@@ -407,13 +406,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "windows",
-]
-
-[[package]]
-name = "cpp-bridge-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
 ]
 
 [[package]]
