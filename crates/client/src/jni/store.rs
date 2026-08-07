@@ -94,53 +94,44 @@ unsafe extern "C" fn Store_destructor(_env: *mut JNIEnv, _this: jobject) {}
 // NativeStoreListener — com/mojang/minecraftpe/store/NativeStoreListener
 // ================================================================
 
-unsafe extern "C" fn NativeStoreListener_onStoreInitialized(
+// The game C++ creates the Java NativeStoreListener via JNI NewObject with the
+// (J)V constructor, passing a pointer to its own C++ StoreListener. The Rust VM
+// does not interpret the Java <init> for native-created objects, so capture the
+// pointer into the mStoreListener field ourselves so the game's native
+// onStoreInitialized(JZ)V receives the real value.
+unsafe extern "C" fn NativeStoreListener_init(
     env: *mut JNIEnv,
     this: jobject,
-    _available: jboolean,
+    ptr: i64,
+    _a2: i64,
+    _a3: i64,
+    _a4: i64,
 ) {
-    // Call back into Java: this.onStoreInitialized(true)
-    let mut args = [jvalue { z: 1 }]; // true
-    call_void_method(env, this, "onStoreInitialized", "(Z)V", &mut args);
-}
-
-unsafe extern "C" fn NativeStoreListener_onPurchaseFailed(
-    env: *mut JNIEnv,
-    this: jobject,
-    message: jstring,
-) {
-    let mut args = [jvalue { l: message }];
-    call_void_method(env, this, "onPurchaseFailed", "(Ljava/lang/String;)V", &mut args);
-}
-
-unsafe extern "C" fn NativeStoreListener_onQueryProductsSuccess(
-    env: *mut JNIEnv,
-    this: jobject,
-    products: jobject,
-) {
-    let mut args = [jvalue { l: products }];
-    call_void_method(
-        env,
-        this,
-        "onQueryProductsSuccess",
-        "([Lcom/mojang/minecraftpe/store/Product;)V",
-        &mut args,
-    );
-}
-
-unsafe extern "C" fn NativeStoreListener_onQueryPurchasesSuccess(
-    env: *mut JNIEnv,
-    this: jobject,
-    purchases: jobject,
-) {
-    let mut args = [jvalue { l: purchases }];
-    call_void_method(
-        env,
-        this,
-        "onQueryPurchasesSuccess",
-        "([Lcom/mojang/minecraftpe/store/Purchase;)V",
-        &mut args,
-    );
+    let iface = get_iface(env);
+    if iface.is_null() {
+        return;
+    }
+    let get_class = match unsafe { (*iface).GetObjectClass } {
+        Some(f) => f,
+        None => return,
+    };
+    let get_fid = match unsafe { (*iface).GetFieldID } {
+        Some(f) => f,
+        None => return,
+    };
+    let set_long = match unsafe { (*iface).SetLongField } {
+        Some(f) => f,
+        None => return,
+    };
+    let cls = unsafe { get_class(env, this) };
+    if cls.is_null() {
+        return;
+    }
+    let fid = unsafe { get_fid(env, cls, b"mStoreListener\0".as_ptr() as *const c_char, b"J\0".as_ptr() as *const c_char) };
+    if fid.is_null() {
+        return;
+    }
+    unsafe { set_long(env, this, fid, ptr as jlong) };
 }
 
 // ================================================================
@@ -184,22 +175,82 @@ unsafe extern "C" fn NotificationListenerService_getDeviceRegistrationToken(
 // ================================================================
 
 unsafe extern "C" fn StoreFactory_createGooglePlayStore(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     _this: jobject,
     _license_key: jstring,
-    _store_listener: jobject,
+    store_listener: jobject,
 ) -> jobject {
-    // Stub: return null (no store on Linux)
-    std::ptr::null_mut()
+    create_store(env, store_listener)
 }
 
 unsafe extern "C" fn StoreFactory_createAmazonAppStore(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     _this: jobject,
-    _store_listener: jobject,
+    store_listener: jobject,
 ) -> jobject {
-    // Stub: return null (no store on Linux)
-    std::ptr::null_mut()
+    create_store(env, store_listener)
+}
+
+// Mirror C++ StoreFactory::createGooglePlayStore: allocate a Store object and
+// fire storeListener->onStoreInitialized(JZ)V (the C++ Store ctor behavior),
+// so the game's store init completes instead of waiting forever. The native is
+// the game's own Java_com_mojang_minecraftpe_store_NativeStoreListener_*
+// registered via jni_support_register_natives, so this must NOT recurse.
+unsafe fn create_store(env: *mut JNIEnv, store_listener: jobject) -> jobject {
+    let iface = get_iface(env);
+    if iface.is_null() {
+        return std::ptr::null_mut();
+    }
+    let find_class = match unsafe { (*iface).FindClass } {
+        Some(f) => f,
+        None => return std::ptr::null_mut(),
+    };
+    let alloc = match unsafe { (*iface).AllocObject } {
+        Some(f) => f,
+        None => return std::ptr::null_mut(),
+    };
+    let cls = find_class(env, b"com/mojang/minecraftpe/store/Store\0".as_ptr() as *const c_char);
+    if cls.is_null() {
+        return std::ptr::null_mut();
+    }
+    let store = alloc(env, cls);
+    if store.is_null() {
+        return std::ptr::null_mut();
+    }
+    if !store_listener.is_null() {
+        let native_ptr = get_listener_native_ptr(env, store_listener);
+        let mut args = [jvalue { j: native_ptr }, jvalue { z: 1 }];
+        call_void_method(env, store_listener, "onStoreInitialized", "(JZ)V", &mut args);
+    }
+    store
+}
+
+unsafe fn get_listener_native_ptr(env: *mut JNIEnv, obj: jobject) -> jlong {
+    let iface = get_iface(env);
+    if iface.is_null() {
+        return 0;
+    }
+    let get_class = match unsafe { (*iface).GetObjectClass } {
+        Some(f) => f,
+        None => return 0,
+    };
+    let get_fid = match unsafe { (*iface).GetFieldID } {
+        Some(f) => f,
+        None => return 0,
+    };
+    let get_long = match unsafe { (*iface).GetLongField } {
+        Some(f) => f,
+        None => return 0,
+    };
+    let cls = unsafe { get_class(env, obj) };
+    if cls.is_null() {
+        return 0;
+    }
+    let fid = unsafe { get_fid(env, cls, b"mStoreListener\0".as_ptr() as *const c_char, b"J\0".as_ptr() as *const c_char) };
+    if fid.is_null() {
+        return 0;
+    }
+    unsafe { get_long(env, obj, fid) }
 }
 
 // ================================================================
@@ -283,32 +334,15 @@ pub fn register_all(env: *mut JNIEnv) {
         ],
     );
 
-    // NativeStoreListener methods
+    // NativeStoreListener <init>(J)V — capture the game's StoreListener pointer
     reg(
         env,
         b"com/mojang/minecraftpe/store/NativeStoreListener\0",
-        &[
-            JNINativeMethod {
-                name: b"onStoreInitialized\0".as_ptr() as *const c_char,
-                signature: b"(Z)V\0".as_ptr() as *const c_char,
-                fnPtr: NativeStoreListener_onStoreInitialized as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"onPurchaseFailed\0".as_ptr() as *const c_char,
-                signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
-                fnPtr: NativeStoreListener_onPurchaseFailed as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"onQueryProductsSuccess\0".as_ptr() as *const c_char,
-                signature: b"([Lcom/mojang/minecraftpe/store/Product;)V\0".as_ptr() as *const c_char,
-                fnPtr: NativeStoreListener_onQueryProductsSuccess as *mut c_void,
-            },
-            JNINativeMethod {
-                name: b"onQueryPurchasesSuccess\0".as_ptr() as *const c_char,
-                signature: b"([Lcom/mojang/minecraftpe/store/Purchase;)V\0".as_ptr() as *const c_char,
-                fnPtr: NativeStoreListener_onQueryPurchasesSuccess as *mut c_void,
-            },
-        ],
+        &[JNINativeMethod {
+            name: b"<init>\0".as_ptr() as *const c_char,
+            signature: b"(J)V\0".as_ptr() as *const c_char,
+            fnPtr: NativeStoreListener_init as *mut c_void,
+        }],
     );
 
     // ExtraLicenseResponseData methods
