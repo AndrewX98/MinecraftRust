@@ -1,6 +1,6 @@
 use crate::types::*;
 use crate::vm::JNIEnv;
-use crate::read_args::read_jvalue_args;
+use crate::read_args::{read_jvalue_args, read_va_list_args};
 use crate::state::find_method;
 
 macro_rules! def_call_base {
@@ -18,7 +18,7 @@ macro_rules! def_call_base {
 macro_rules! def_call_variants {
     ($base:ident, $v:ident, $a:ident, $ret:ty) => {
         pub unsafe extern "C" fn $v(env: *mut JNIEnv, obj: jobject, mid: jmethodID, args: *mut jvalue) -> $ret {
-            let (a1, a2, a3, a4) = read_jvalue_args(args);
+            let (a1, a2, a3, a4) = read_va_list_args(args);
             $base(env, obj, mid, a1, a2, a3, a4)
         }
         pub unsafe extern "C" fn $a(env: *mut JNIEnv, obj: jobject, mid: jmethodID, args: *mut jvalue) -> $ret {
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn jni_CallVoidMethod(env: *mut JNIEnv, obj: jobject, mid:
     }
 }
 pub unsafe extern "C" fn jni_CallVoidMethodV(env: *mut JNIEnv, obj: jobject, mid: jmethodID, args: *mut jvalue) {
-    let (a1, a2, a3, a4) = read_jvalue_args(args);
+    let (a1, a2, a3, a4) = read_va_list_args(args);
     jni_CallVoidMethod(env, obj, mid, a1, a2, a3, a4)
 }
 pub unsafe extern "C" fn jni_CallVoidMethodA(env: *mut JNIEnv, obj: jobject, mid: jmethodID, args: *mut jvalue) {

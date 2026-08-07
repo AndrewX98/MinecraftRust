@@ -1,6 +1,6 @@
 use crate::types::*;
 use crate::vm::JNIEnv;
-use crate::read_args::read_jvalue_args;
+use crate::read_args::{read_jvalue_args, read_va_list_args};
 use crate::state::{jvm_state, get_class_name_from_handle, alloc_object_fields};
 use std::ffi::CStr;
 
@@ -23,7 +23,7 @@ unsafe fn invoke_init(env: *mut JNIEnv, clazz: jclass, mid: jmethodID, obj: jobj
             }
             if let Some(f) = cls.methods.iter().find(|((n, _s), _)| n == "<init>").map(|(_, &f)| f) {
                 drop(state);
-                let (a1, a2, a3, a4) = read_jvalue_args(args);
+                let (a1, a2, a3, a4) = read_va_list_args(args);
                 type InitFn = unsafe extern "C" fn(*mut JNIEnv, jobject, i64, i64, i64, i64);
                 let f: InitFn = std::mem::transmute(f);
                 f(env, obj, a1, a2, a3, a4);

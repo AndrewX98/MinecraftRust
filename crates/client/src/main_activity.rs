@@ -635,8 +635,22 @@ unsafe extern "C" fn get_image_data(env: *mut JNIEnv, _self: jobject, filename: 
     arr as jobject
 }
 
-unsafe extern "C" fn run_native_callback_on_ui_thread(_env: *mut JNIEnv, _self: jobject, _handle: jlong) {
-    // TODO: call nativeRunNativeCallbackOnUiThread through JNI
+unsafe extern "C" fn run_native_callback_on_ui_thread(env: *mut JNIEnv, self_: jobject, handle: jlong) {
+    // Mirror C++ MainActivity_runNativeCallbackOnUiThread: forward to the
+    // game's own nativeRunNativeCallbackOnUiThread(J)V so the callback runs.
+    let iface = get_iface(env);
+    if iface.is_null() { return; }
+    let get_class = match (*iface).GetObjectClass { Some(f) => f, None => return };
+    let get_mid = match (*iface).GetMethodID { Some(f) => f, None => return };
+    let cls = get_class(env, self_);
+    if cls.is_null() { return; }
+    let mid = get_mid(env, cls,
+        b"nativeRunNativeCallbackOnUiThread\0".as_ptr() as *const c_char,
+        b"(J)V\0".as_ptr() as *const c_char);
+    if mid.is_null() { return; }
+    let call_a = match (*iface).CallVoidMethodA { Some(f) => f, None => return };
+    let mut args = [jvalue { j: handle }];
+    call_a(env, self_, mid, args.as_mut_ptr());
 }
 
 unsafe extern "C" fn request_integrity_token(env: *mut JNIEnv, self_: jobject, _str: jstring) {

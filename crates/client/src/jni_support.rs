@@ -111,6 +111,28 @@ fn get_env() -> *mut JNIEnv {
     jvm_state().lock().unwrap().env.0
 }
 
+/// Run a game library's `JNI_OnLoad` against the Rust VM so the game caches the
+/// Rust VM/env (replaces FakeJni::Jvm::attachLibrary). Returns true if JNI_OnLoad
+/// was found and invoked.
+unsafe fn rust_attach_library(vm: *mut JavaVM, path: *const c_char) -> bool {
+    let name = match CStr::from_ptr(path).to_str() {
+        Ok(n) => n.to_owned(),
+        Err(_) => return false,
+    };
+    let Some(handle) = linker::find_library(&name) else {
+        log::warn!("rust_attach_library: '{}' not found in Rust linker", name);
+        return false;
+    };
+    let Some(onload) = linker::dlsym(handle, "JNI_OnLoad") else {
+        log::debug!("rust_attach_library: '{}' has no JNI_OnLoad", name);
+        return false;
+    };
+    let f: unsafe extern "C" fn(*mut JavaVM, *mut c_void) -> i32 = std::mem::transmute(onload);
+    log::info!("rust_attach_library: calling JNI_OnLoad for '{}' (vm={:p})", name, vm);
+    f(vm, std::ptr::null_mut());
+    true
+}
+
 fn get_iface(env: *mut JNIEnv) -> *mut JNINativeInterface {
     if env.is_null() { return std::ptr::null_mut(); }
     unsafe {
@@ -430,18 +452,22 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     jnivm_set_stbi_image_free(stbi_image_free);
     xbox_live_helper_set_jvm(jvm);
 
-    // Attach game libraries to Baron JVM (the game's runtime still uses the Baron VM
-    // for per-thread envs; the Rust VM handles ga->env calls and launcher dispatch).
-    fake_jni_jvm_attach_library(jvm, b"libfmod.so\0" as *const _ as *const c_char);
-    fake_jni_jvm_attach_library(jvm, b"libminecraftpe.so\0" as *const _ as *const c_char);
-    fake_jni_jvm_attach_library(jvm, b"libPlayFabMultiplayer.so\0" as *const _ as *const c_char);
+    // Attach game libraries to the Rust JVM (JNI_OnLoad against the Rust VM so the
+    // game caches the Rust VM/env for its whole life — replacing the Baron
+    // attachLibrary).
+    // TEMP-EXPERIMENT: attachLibrary via Rust VM instead of Baron.
+    let rust_vm = jnivm_create_vm();
+    rust_attach_library(rust_vm, b"libfmod.so\0" as *const _ as *const c_char);
+    rust_attach_library(rust_vm, b"libminecraftpe.so\0" as *const _ as *const c_char);
+    rust_attach_library(rust_vm, b"libPlayFabMultiplayer.so\0" as *const _ as *const c_char);
 
     // Set up GameActivity. ga->env is the Rust env (libjnivm-sys); ga->vm stays the
     // Baron VM — the game caches it and uses ga->vm->AttachCurrentThread to get
     // per-thread envs for its whole life (see note above).
     // Use the C++ GameActivityCallbacks — the game will populate these
     (*ga).callbacks = cpp_callbacks;
-    (*ga).vm = jni_support_get_java_vm_ptr(s) as *mut JavaVM;
+    // TEMP-EXPERIMENT: point ga->vm at the Rust VM to reproduce the Phase 3 crash
+    (*ga).vm = rust_vm;
     (*ga).env = rust_env;
     (*ga).asset_manager = asset_manager;
     (*ga).java_game_activity = jni_support_get_activity_ref(s);

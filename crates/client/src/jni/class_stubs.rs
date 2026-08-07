@@ -153,8 +153,21 @@ fn register_fmod_class(env: *mut JNIEnv) {
 // java/lang/ClassLoader
 // ================================================================
 
-unsafe extern "C" fn ClassLoader_loadClass(_env: *mut JNIEnv, _self: jobject, _name: jstring) -> jclass {
-    std::ptr::null_mut()
+unsafe extern "C" fn ClassLoader_loadClass(env: *mut JNIEnv, _self: jobject, name: jstring) -> jclass {
+    if name.is_null() {
+        return std::ptr::null_mut();
+    }
+    // jstrings are NUL-terminated C strings in libjnivm-sys; resolve the class
+    // by name (FindClass auto-creates the class registry entry).
+    let name = CStr::from_ptr(name as *const i8);
+    jnivm_find_class(env, name.as_ptr())
+}
+
+// java/lang/Class.getClassLoader()Ljava/lang/ClassLoader; — the game's JNI_OnLoad
+// calls this on the MainActivity class object to obtain the ClassLoader it then
+// uses for ClassLoader.findClass(). Return the ClassLoader class handle.
+unsafe extern "C" fn Class_getClassLoader(env: *mut JNIEnv, _self: jobject) -> jobject {
+    jnivm_find_class(env, b"java/lang/ClassLoader\0".as_ptr() as *const c_char) as jobject
 }
 
 fn register_class_loader_class(env: *mut JNIEnv) {
@@ -173,6 +186,18 @@ fn register_class_loader_class(env: *mut JNIEnv) {
                 fnPtr: ClassLoader_loadClass as *mut c_void,
             },
         ],
+    );
+}
+
+fn register_class_class(env: *mut JNIEnv) {
+    reg(
+        env,
+        b"java/lang/Class\0",
+        &[JNINativeMethod {
+            name: b"getClassLoader\0".as_ptr() as *const c_char,
+            signature: b"()Ljava/lang/ClassLoader;\0".as_ptr() as *const c_char,
+            fnPtr: Class_getClassLoader as *mut c_void,
+        }],
     );
 }
 
@@ -607,6 +632,7 @@ fn register_marker_classes(env: *mut JNIEnv) {
 pub fn register_all(env: *mut JNIEnv) {
     register_fmod_class(env);
     register_class_loader_class(env);
+    register_class_class(env);
     register_context_wrapper_class(env);
     register_sha_hasher_class(env);
     register_secure_random_class(env);

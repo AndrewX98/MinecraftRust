@@ -16,7 +16,9 @@ pub unsafe extern "C" fn jni_GetMethodID(_env: *mut JNIEnv, clazz: jclass, name:
     }
     drop(state);
     log::warn!("GetMethodID: no native registered for {}.{}{} — calls will return 0/null", cls_name, n, s);
-    Box::into_raw(Box::new((n, s))) as jmethodID
+    let tok = Box::into_raw(Box::new((n.clone(), s.clone()))) as jmethodID;
+    jvm_state().lock().unwrap().method_tokens.insert(tok, (n, s));
+    tok
 }
 
 pub unsafe extern "C" fn jni_GetStaticMethodID(env: *mut JNIEnv, clazz: jclass, name: *const i8, sig: *const i8) -> jmethodID {

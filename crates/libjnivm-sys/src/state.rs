@@ -20,6 +20,11 @@ pub struct JvmInner {
     pub handles: HashMap<usize, String>,
     pub next_class_id: usize,
     pub object_fields: HashMap<usize, HashMap<String, jvalue>>,
+    // methodID tokens from jni_GetMethodID for methods not yet registered as
+    // natives: mid -> (name, signature). Lets find_method resolve them against
+    // cls.methods by name/signature once the native is registered (mirrors
+    // FakeJni/Baron's lookup-by-(name, signature) semantics).
+    pub method_tokens: HashMap<jmethodID, (String, String)>,
 }
 
 unsafe impl Send for JvmInner {}
@@ -41,6 +46,7 @@ pub fn jvm_state() -> &'static Mutex<JvmInner> {
             handles: HashMap::new(),
             next_class_id: 1,
             object_fields: HashMap::new(),
+            method_tokens: HashMap::new(),
         })
     })
 }
@@ -62,12 +68,39 @@ pub fn get_iface_from_env(env: *mut JNIEnv) -> *mut JNINativeInterface {
 pub fn find_method(mid: jmethodID) -> Option<*mut std::ffi::c_void> {
     if mid.is_null() { return None; }
     let state = jvm_state().lock().unwrap();
+    // Fast path: mid is a registered native's fnPtr.
     for (_, cls) in &state.classes {
         for ((_, _), &f) in &cls.methods {
             if f as jmethodID == mid {
                 return Some(f);
             }
         }
+    }
+    // Fallback: mid is a boxed (name, signature) token issued by jni_GetMethodID
+    // before the native was registered. Resolve it against the registry now.
+    if let Some((n, s)) = state.method_tokens.get(&mid) {
+        for (_, cls) in &state.classes {
+            if let Some(&f) = cls.methods.get(&(n.clone(), s.clone())) {
+                return Some(f);
+            }
+        }
+        return None;
+    }
+    None
+}
+
+pub fn method_name(mid: jmethodID) -> Option<String> {
+    if mid.is_null() { return None; }
+    let state = jvm_state().lock().unwrap();
+    for (_, cls) in &state.classes {
+        for ((n, _), &f) in &cls.methods {
+            if f as jmethodID == mid {
+                return Some(n.clone());
+            }
+        }
+    }
+    if let Some((n, _)) = state.method_tokens.get(&mid) {
+        return Some(n.clone());
     }
     None
 }
