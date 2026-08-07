@@ -80,10 +80,7 @@ extern "C" {
     fn fake_jni_local_frame_create(jvm: *mut c_void) -> *mut c_void;
     fn fake_jni_local_frame_destroy(frame: *mut c_void);
     fn xbox_live_helper_set_jvm(jvm: *mut c_void);
-    fn jni_support_get_game_activity_callbacks_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
-    fn jni_support_set_game_activity_instance(s: *mut c_void, instance: *mut c_void);
-    fn jni_support_get_game_activity_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_new_cpp() -> *mut c_void;
     fn jni_support_init_activity(s: *mut c_void);
     fn jni_support_delete(s: *mut c_void);
@@ -464,8 +461,8 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     // Set up GameActivity. ga->env is the Rust env (libjnivm-sys); ga->vm stays the
     // Baron VM — the game caches it and uses ga->vm->AttachCurrentThread to get
     // per-thread envs for its whole life (see note above).
-    // Use the C++ GameActivityCallbacks — the game will populate these
-    (*ga).callbacks = cpp_callbacks;
+    // Rust-owned GameActivityCallbacks — the game will populate these
+    (*ga).callbacks = callbacks_ptr as *mut GameActivityCallbacks;
     // TEMP-EXPERIMENT: point ga->vm at the Rust VM to reproduce the Phase 3 crash
     (*ga).vm = rust_vm;
     (*ga).env = rust_env;
@@ -493,10 +490,9 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     gameOnCreate(ga, std::ptr::null_mut(), 0);
     eprintln!("=== gameOnCreate returned ===");
 
-    // Copy game instance to C++ JniSupport's gameActivity for FakeLooper dispatch
-    eprintln!("=== About to call jni_support_set_game_activity_instance ===");
-    jni_support_set_game_activity_instance(s, (*ga).instance);
-    eprintln!("=== jni_support_set_game_activity_instance returned ===");
+    // ga->instance was set by the game during onCreate; the Rust JniSupport's
+    // game_activity points at this same struct, so event dispatch reads it
+    // directly (the C++ set_game_activity_instance mirror is gone).
 
     // Read window from the Rust JniSupport (set by `prepare_impl` →
     // `jni_support_on_window_created` during gameOnCreate; formerly the C++
@@ -512,8 +508,8 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     };
     eprintln!("=== Rust read window from Rust JniSupport after gameOnCreate: {:p} ===", win);
 
-    // Read callbacks from the C++ GameActivityCallbacks (populated by game during gameOnCreate)
-    let cb = &*cpp_callbacks;
+    // Read callbacks from the Rust-owned GameActivityCallbacks (populated by game during gameOnCreate)
+    let cb = &*(callbacks_ptr as *const GameActivityCallbacks);
 
     fn fmt_ptr(opt: Option<*const c_void>) -> String {
         match opt {
@@ -635,9 +631,48 @@ pub unsafe extern "C" fn jni_support_start_game(
 
     // Storage dir is set inside jni_support_start_game_with_baron via path_helper_get_primary_data_directory()
 
-    // Get C++ GameActivity and callbacks pointers — the game will populate these
-    let cpp_game_activity = jni_support_get_game_activity_ptr(cpp_support) as *mut GameActivity;
-    let cpp_callbacks = jni_support_get_game_activity_callbacks_ptr(cpp_support) as *mut GameActivityCallbacks;
+    // Own the GameActivity + GameActivityCallbacks structs in Rust (the game
+    // populates both during GameActivity_onCreate; formerly the C++ JniSupport
+    // owned them and Rust mirrored the pointers). Same #[repr(C)] layout as the
+    // game's NDK structs. Leaked for process lifetime.
+    let ga = Box::into_raw(Box::new(GameActivity {
+        callbacks: std::ptr::null_mut(),
+        vm: std::ptr::null_mut(),
+        env: std::ptr::null_mut(),
+        java_game_activity: std::ptr::null_mut(),
+        internal_data_path: std::ptr::null(),
+        external_data_path: std::ptr::null(),
+        sdk_version: 0,
+        instance: std::ptr::null_mut(),
+        asset_manager: std::ptr::null_mut(),
+        obb_path: std::ptr::null(),
+    }));
+    let callbacks = Box::into_raw(Box::new(GameActivityCallbacks {
+        on_start: None,
+        on_resume: None,
+        on_save_instance_state: None,
+        on_pause: None,
+        on_stop: None,
+        on_destroy: None,
+        on_window_focus_changed: None,
+        on_native_window_created: None,
+        on_native_window_resized: None,
+        on_native_window_redraw_needed: None,
+        on_native_window_destroyed: None,
+        on_configuration_changed: None,
+        on_trim_memory: None,
+        on_touch_event: None,
+        on_key_down: None,
+        on_key_up: None,
+        on_text_input_event: None,
+        on_window_insets_changed: None,
+        on_content_rect_changed: None,
+        on_software_keyboard_visibility_changed: None,
+        on_editor_action: None,
+    }));
+    (*ga).callbacks = callbacks;
+    support.game_activity = SendPtr(ga);
+    support.game_callbacks = SendPtr(callbacks);
 
     // Set the asset manager (FakeAssetManager instance)
     let am = crate::fake_assetmanager::fake_assetmanager_get_instance();
@@ -646,13 +681,13 @@ pub unsafe extern "C" fn jni_support_start_game(
 
     // Combined bridge call: sets up the Rust env (and Baron VM) on the GameActivity,
     // calls GameActivity_onCreate (the game caches them for its whole life),
-    // populates C++ JniSupport callbacks, and dispatches onStart/onNativeWindowCreated.
+    // populates the Rust-owned callbacks, and dispatches onStart/onNativeWindowCreated.
     log::info!("jni_support: calling jni_support_start_game_with_baron...");
     jni_support_start_game_with_baron(
         cpp_support,
         game_create,
-        cpp_game_activity as *mut c_void,
-        cpp_callbacks as *mut c_void,
+        ga as *mut c_void,
+        callbacks as *mut c_void,
         am,
         stbi_load,
         stbi_image_free,
@@ -676,10 +711,6 @@ pub unsafe extern "C" fn jni_support_start_game(
 
     // Set game activity flag on support
     support.is_game_activity = true;
-
-    // Store pointers to C++ GameActivity and callbacks for event dispatch
-    support.game_activity = SendPtr(cpp_game_activity);
-    support.game_callbacks = SendPtr(cpp_callbacks);
 
     // Initialize the Rust TextInputHandler global (replaces C++ TextInputHandler)
     let text_handler = crate::text_input_handler::TextInputHandler::new();
