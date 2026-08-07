@@ -82,7 +82,6 @@ extern "C" {
     fn xbox_live_helper_set_jvm(jvm: *mut c_void);
     fn jni_support_get_game_activity_callbacks_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_get_java_vm_ptr(s: *mut c_void) -> *mut c_void;
-    fn jni_support_get_activity_ref(s: *mut c_void) -> *mut c_void;
     fn jni_support_set_game_activity_instance(s: *mut c_void, instance: *mut c_void);
     fn jni_support_get_game_activity_ptr(s: *mut c_void) -> *mut c_void;
     fn jni_support_new_cpp() -> *mut c_void;
@@ -391,6 +390,7 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     asset_manager: *mut c_void,
     stbi_load: *mut c_void,
     stbi_image_free: *mut c_void,
+    activity_ref: jobject,
 ) {
     if s.is_null() || game_create_func.is_null() { return; }
     let gameOnCreate: unsafe extern "C" fn(*mut GameActivity, *mut c_void, usize) =
@@ -470,7 +470,10 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
     (*ga).vm = rust_vm;
     (*ga).env = rust_env;
     (*ga).asset_manager = asset_manager;
-    (*ga).java_game_activity = jni_support_get_activity_ref(s);
+    // MainActivity jobject on the Rust VM (opaque handle passed as `this` to
+    // game natives — GetObjectClass always resolves to java/lang/Object, so the
+    // Baron MainActivity ref is unnecessary here; mirrors C++ activity.get()).
+    (*ga).java_game_activity = activity_ref;
     (*ga).sdk_version = 32;
     let internal_path = CString::new("/internal").unwrap();
     let external_path = CString::new("/external").unwrap();
@@ -624,10 +627,11 @@ pub unsafe extern "C" fn jni_support_start_game(
     jnivm_set_stbi_load_from_memory(stbi_load);
     jnivm_set_stbi_image_free(stbi_image_free);
 
-    // Create MainActivity instance via JNI NewObject
-    // libjnivm-sys NewObject ignores args and returns a valid dummy pointer
+    // Create MainActivity instance via JNI NewObject on the Rust VM and keep a
+    // global ref: libjnivm-sys NewObject ignores args and returns a valid dummy
+    // pointer, used opaquely as ga->java_game_activity (Baron activity ref gone).
     let activity = jni_call!(env, NewObject(std::ptr::null_mut(), std::ptr::null_mut()));
-    let _activity_ref = jni_call!(env, NewGlobalRef(activity));
+    let activity_ref = jni_call!(env, NewGlobalRef(activity));
 
     // Storage dir is set inside jni_support_start_game_with_baron via path_helper_get_primary_data_directory()
 
@@ -652,6 +656,7 @@ pub unsafe extern "C" fn jni_support_start_game(
         am,
         stbi_load,
         stbi_image_free,
+        activity_ref,
     );
     log::info!("jni_support: jni_support_start_game_with_baron returned");
 
