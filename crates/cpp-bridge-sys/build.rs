@@ -226,7 +226,6 @@ where
 fn main() {
     let client_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../client");
-    let local_inc = client_dir.join("include");
 
     // --- mcpelauncher-client-bridge: Phase 10 DELETED (capi.cpp ported to
     //     Rust capi.rs; linker::register_stub replaces rust_load_stub) ---
@@ -249,79 +248,24 @@ fn main() {
     //     window token (the game's ANativeWindow/GameWindow*) is the eglut X11
     //     window id; FakeEGL make-current/swap/get-size forward to Rust eglut. ---
 
-    // --- mcpelauncher-client-jni (JNI bridge + stubs + libjnivm) ---
-    let mut client_sources: Vec<PathBuf> = Vec::new();
-
-    // JNI class files (excluding ported ones)
-    let excluded_jni: std::collections::HashSet<&str> = [
-        "jbase64.cpp",
-        "arrays.cpp",
-        "asset_manager.cpp",
-        "package_source.cpp",
-        "securerandom.cpp",
-        "signature.cpp",
-        "accounts.cpp",
-        "locale.cpp",
-        "playfab.cpp",
-        "fmod.cpp",
-        "cert_manager.cpp",
-        "webview.cpp",
-        "shahasher.cpp",
-        "http_stub.cpp",
-        "ecdsa.cpp",
-        "store.cpp",
-        "uuid.cpp",
-        // pulseaudio.cpp excluded: conflicts with sdl3audio AudioDevice when
-        // HAVE_SDL3AUDIO is set. AAudio (fake_audio.cpp) is the primary path.
-        "pulseaudio.cpp",
-        "xbox_live.cpp",
-    ]
-    .into_iter()
-    .collect();
-    for entry in std::fs::read_dir(client_dir.join("src/jni")).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if path.extension().and_then(|s| s.to_str()) == Some("cpp")
-            && !excluded_jni.contains(fname)
-        {
-            client_sources.push(path);
-        }
-    }
-
-    // Stub files (FakeJni class stubs for the deleted Baron VM removed — the
-    // Rust VM provides the class natives; see PORT_JNI_SUPPORT.md Phase 5)
+    // --- mcpelauncher-client-jni (remaining game-facing shims; all JNI class
+    //     files ported to Rust — see PORT_JNI_SUPPORT.md + ROADMAP_TO_FULL_RUST.md)
     let stub_files = [
-        "settings_stub.cpp",
-        "xal_webview_factory_stub.cpp",
-        "text_input_handler_stub.cpp",
-        "file_picker_stub.cpp",
         // AAudio shim — FMOD forces AAudio via setOutput hook, then dlopen's libaaudio.so
         "fake_audio.cpp",
         // Prevents loading the real libHttpClient.Android.so (broken under
         // the Rust linker — HCTraceInit@plt SIGSEGV at 0x49dd6).
         "http_client_stubs.cpp",
     ];
-    for f in &stub_files {
-        let path = client_dir.join("src").join(f);
-        if path.exists() {
-            client_sources.push(path);
-        }
-    }
+    let client_sources: Vec<PathBuf> = stub_files
+        .iter()
+        .map(|f| client_dir.join("src").join(f))
+        .filter(|p| p.exists())
+        .collect();
 
     incr_compile("mcpelauncher-client-jni", &client_sources, |b| {
         b.cpp(true).std("c++17").flag_if_supported("-w");
         b.include(client_dir.join("src"));
-        b.include(client_dir.join("src/manifest_headers"));
-        // game-window (game_window.h/key_mapping.h) via text_input_handler.h;
-        // file-picker (file_picker.h) via file_picker_stub.cpp;
-        // mcpelauncher/linker.h via http_client_stubs.cpp. The remaining vendored
-        // include trees (android-support-headers, minecraft-imported-symbols,
-        // epoll-shim, linux-gamepad, properties-parser, logger, libc-shim,
-        // mcpelauncher-common, base64.h) were deleted — unused after the Baron
-        // VM removal (only GameActivity/gamepad/etc. were C++ consumers).
-        b.include(local_inc.join("game-window"));
-        b.include(local_inc.join("file-picker"));
         b.include(client_dir.join("include"));
     });
 }

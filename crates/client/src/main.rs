@@ -7,6 +7,7 @@ mod game_window;
 mod rust_bridge;
 mod jni_support;
 mod file_picker;
+mod settings;
 mod gamepad;
 mod eglut;
 mod fake_looper;
