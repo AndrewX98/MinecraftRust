@@ -279,13 +279,29 @@ unsafe extern "C" fn calculate_available_disk_free_space(
     1024i64 * 1024 * 1024 * 1024
 }
 
-unsafe extern "C" fn get_usable_space(
-    _env: *mut JNIEnv,
-    _self: jobject,
-    _path: jstring,
-) -> jlong {
-    log::info!("MainActivity: getUsableSpace called -> 1TB");
-    1024i64 * 1024 * 1024 * 1024
+fn statvfs_space(path: &str, field_fn: fn(&libc::statvfs) -> u64) -> jlong {
+    let c_path = std::ffi::CString::new(path).unwrap_or_default();
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } == 0 {
+        (field_fn(&stat) * stat.f_bsize as u64) as jlong
+    } else {
+        log::warn!("MainActivity: statvfs({}) failed, returning 1TB fallback", path);
+        1024i64 * 1024 * 1024 * 1024
+    }
+}
+
+unsafe extern "C" fn get_total_space(env: *mut JNIEnv, _self: jobject, path: jstring) -> jlong {
+    let path_str = get_jstring_content(env, path).unwrap_or_default();
+    let val = statvfs_space(&path_str, |s| s.f_blocks);
+    log::info!("MainActivity: getTotalSpace({}) -> {}", path_str, val);
+    val
+}
+
+unsafe extern "C" fn get_usable_space(env: *mut JNIEnv, _self: jobject, path: jstring) -> jlong {
+    let path_str = get_jstring_content(env, path).unwrap_or_default();
+    let val = statvfs_space(&path_str, |s| s.f_bavail);
+    log::info!("MainActivity: getUsableSpace({}) -> {}", path_str, val);
+    val
 }
 
 unsafe extern "C" fn get_platform_dpi(_env: *mut JNIEnv, _self: jobject) -> jint {
@@ -811,6 +827,11 @@ pub fn register(env: *mut JNIEnv) {
             name: b"calculateAvailableDiskFreeSpace\0".as_ptr() as *const c_char,
             signature: b"(Ljava/lang/String;)J\0".as_ptr() as *const c_char,
             fnPtr: calculate_available_disk_free_space as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getTotalSpace\0".as_ptr() as *const c_char,
+            signature: b"(Ljava/lang/String;)J\0".as_ptr() as *const c_char,
+            fnPtr: get_total_space as *mut std::ffi::c_void,
         },
         JNINativeMethod {
             name: b"getUsableSpace\0".as_ptr() as *const c_char,
