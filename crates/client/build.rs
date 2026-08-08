@@ -12,4 +12,8 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib={name}");
         println!("cargo:rustc-link-arg-bins=-l{name}");
     }
+    // Export launcher-provided JNI natives (`Java_com_*`) from the client
+    // binary so `jni_resolve_symbol` (dlsym(NULL)) can find them, exactly like
+    // the C++ mcpelauncher-client exported MainActivity::initializeXboxLive etc.
+    println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=Java_*");
 }

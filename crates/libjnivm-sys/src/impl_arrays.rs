@@ -25,10 +25,16 @@ pub unsafe extern "C" fn jni_SetObjectArrayElement(_env: *mut JNIEnv, array: job
 macro_rules! make_array_funcs {
     ($New:ident, $GetElements:ident, $ReleaseElements:ident, $GetRegion:ident, $SetRegion:ident, $elems_ty:ty) => {
         pub unsafe extern "C" fn $New(_env: *mut JNIEnv, len: jsize) -> jobject {
+            if len < 0 {
+                return std::ptr::null_mut();
+            }
             let v = vec![<$elems_ty>::default(); len as usize];
             Box::into_raw(Box::new(v)) as jobject
         }
         pub unsafe extern "C" fn $GetElements(_env: *mut JNIEnv, arr: jobject, _isCopy: *mut jboolean) -> *mut $elems_ty {
+            if arr.is_null() {
+                return std::ptr::null_mut();
+            }
             let v = &mut *(arr as *mut Vec<$elems_ty>);
             v.as_mut_ptr()
         }

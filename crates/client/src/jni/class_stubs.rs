@@ -47,6 +47,11 @@ fn new_jbyte_array(data: &[u8]) -> jobject {
     Box::into_raw(Box::new(v)) as jobject
 }
 
+fn new_jint_array(values: &[jint]) -> jobject {
+    let v: Vec<jint> = values.to_vec();
+    Box::into_raw(Box::new(v)) as jobject
+}
+
 fn new_jstring_array(values: &[&str], env: *mut JNIEnv) -> jobject {
     let v: Vec<jobject> = values.iter().map(|s| new_jstring(env, s)).collect();
     Box::into_raw(Box::new(v)) as jobject
@@ -119,6 +124,18 @@ unsafe extern "C" fn FMOD_getAssetManager(_env: *mut JNIEnv, _clazz: jclass) -> 
     std::ptr::null_mut()
 }
 
+// FMOD's AAudio device backend enumerates its driver list through the Java
+// wrapper (org/fmod/FMOD.getDevices/getDeviceName). Return a single fake
+// device so init does not crash on a null array/string.
+
+unsafe extern "C" fn FMOD_getDevices(_env: *mut JNIEnv, _clazz: jclass, _flags: jint) -> jobject {
+    new_jint_array(&[0i32])
+}
+
+unsafe extern "C" fn FMOD_getDeviceName(env: *mut JNIEnv, _clazz: jclass, _device: jint) -> jobject {
+    new_jstring(env, "AAudio")
+}
+
 fn register_fmod_class(env: *mut JNIEnv) {
     reg(
         env,
@@ -143,6 +160,16 @@ fn register_fmod_class(env: *mut JNIEnv) {
                 name: b"getAssetManager\0".as_ptr() as *const c_char,
                 signature: b"()Landroid/content/res/AssetManager;\0".as_ptr() as *const c_char,
                 fnPtr: FMOD_getAssetManager as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getDevices\0".as_ptr() as *const c_char,
+                signature: b"(I)[I\0".as_ptr() as *const c_char,
+                fnPtr: FMOD_getDevices as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getDeviceName\0".as_ptr() as *const c_char,
+                signature: b"(I)Ljava/lang/String;\0".as_ptr() as *const c_char,
+                fnPtr: FMOD_getDeviceName as *mut c_void,
             },
         ],
     );
