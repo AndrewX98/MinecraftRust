@@ -1,7 +1,7 @@
 use libjnivm_sys::*;
 use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 const JNI_TRUE: jboolean = 1;
 
@@ -695,6 +695,77 @@ unsafe extern "C" fn request_integrity_token(env: *mut JNIEnv, self_: jobject, _
     call_a(env, self_, mid, args.as_mut_ptr());
 }
 
+// ================================================================
+// Phase 0 probes: 26.2x login API natives (registered so we can trace
+// which ones the game calls). These match the DEX-native set on
+// com/mojang/minecraftpe/MainActivity in 1.26.20/26.33: getAccessToken,
+// getClientId, setLoginInformation, setRefreshToken, setSession,
+// getProfileId/getProfileName, clearLoginInformation. The game .so does
+// NOT export them, so the launcher must provide them.
+// ================================================================
+
+static LOGIN_ACCESS_TOKEN: OnceLock<Mutex<String>> = OnceLock::new();
+static LOGIN_CLIENT_ID: OnceLock<Mutex<String>> = OnceLock::new();
+static LOGIN_PROFILE_NAME: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn login_store() -> &'static Mutex<String> {
+    LOGIN_ACCESS_TOKEN.get_or_init(|| Mutex::new(String::new()))
+}
+
+unsafe extern "C" fn get_access_token(env: *mut JNIEnv, _self: jobject) -> jstring {
+    let token = login_store().lock().unwrap().clone();
+    log::info!("LoginProbe: getAccessToken -> {} bytes", token.len());
+    new_jstring(env, &token)
+}
+
+unsafe extern "C" fn get_client_id(env: *mut JNIEnv, _self: jobject) -> jstring {
+    let cid = LOGIN_CLIENT_ID.get().map(|m| m.lock().unwrap().clone()).unwrap_or_default();
+    log::info!("LoginProbe: getClientId -> {}", cid);
+    new_jstring(env, &cid)
+}
+
+unsafe extern "C" fn get_profile_name(env: *mut JNIEnv, _self: jobject) -> jstring {
+    let name = LOGIN_PROFILE_NAME.get().map(|m| m.lock().unwrap().clone()).unwrap_or_default();
+    log::info!("LoginProbe: getProfileName -> {}", name);
+    new_jstring(env, &name)
+}
+
+unsafe extern "C" fn set_login_information(
+    env: *mut JNIEnv,
+    _self: jobject,
+    a: jstring,
+    b: jstring,
+    c: jstring,
+    d: jstring,
+) {
+    let args: Vec<String> = [a, b, c, d]
+        .into_iter()
+        .map(|s| get_jstring_content(env, s).unwrap_or_default())
+        .collect();
+    log::info!(
+        "LoginProbe: setLoginInformation ({} bytes) ({} bytes) ({} bytes) ({} bytes)",
+        args[0].len(), args[1].len(), args[2].len(), args[3].len()
+    );
+    if !args[1].is_empty() {
+        *LOGIN_CLIENT_ID.get_or_init(|| Mutex::new(String::new())).lock().unwrap() = args[1].clone();
+    }
+}
+
+unsafe extern "C" fn set_refresh_token(env: *mut JNIEnv, _self: jobject, token: jstring) {
+    let t = get_jstring_content(env, token).unwrap_or_default();
+    log::info!("LoginProbe: setRefreshToken -> {} bytes", t.len());
+}
+
+unsafe extern "C" fn set_session(env: *mut JNIEnv, _self: jobject, s: jstring) {
+    let s = get_jstring_content(env, s).unwrap_or_default();
+    log::info!("LoginProbe: setSession -> {} bytes", s.len());
+}
+
+unsafe extern "C" fn clear_login_information(_env: *mut JNIEnv, _self: jobject) {
+    log::info!("LoginProbe: clearLoginInformation");
+    *login_store().lock().unwrap() = String::new();
+}
+
 pub fn register(env: *mut JNIEnv) {
     let methods = [
         JNINativeMethod {
@@ -989,6 +1060,41 @@ pub fn register(env: *mut JNIEnv) {
             name: b"requestIntegrityToken\0".as_ptr() as *const c_char,
             signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
             fnPtr: request_integrity_token as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getAccessToken\0".as_ptr() as *const c_char,
+            signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+            fnPtr: get_access_token as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getClientId\0".as_ptr() as *const c_char,
+            signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+            fnPtr: get_client_id as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getProfileName\0".as_ptr() as *const c_char,
+            signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+            fnPtr: get_profile_name as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"setLoginInformation\0".as_ptr() as *const c_char,
+            signature: b"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V\0".as_ptr() as *const c_char,
+            fnPtr: set_login_information as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"setRefreshToken\0".as_ptr() as *const c_char,
+            signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
+            fnPtr: set_refresh_token as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"setSession\0".as_ptr() as *const c_char,
+            signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
+            fnPtr: set_session as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"clearLoginInformation\0".as_ptr() as *const c_char,
+            signature: b"()V\0".as_ptr() as *const c_char,
+            fnPtr: clear_login_information as *mut std::ffi::c_void,
         },
     ];
 

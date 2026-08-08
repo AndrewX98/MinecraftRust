@@ -68,7 +68,38 @@ fn read_config_file_content() -> String {
     std::fs::read_to_string(&config_path).unwrap_or_else(|_| "{}".to_string())
 }
 
-// ======== XboxInterop (com/microsoft/xbox/idp/interop/Interop) ========
+// 26.x (+Rxapiens) Interop natives. Game declares/requires these and the
+// DEX has NO invokeMSA/invokeAuthFlow/initCLL/logCLL (old-API dead).
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_initializeInterop(
+    env: *mut JNIEnv,
+    _self: jobject,
+    _context: jobject,
+) -> jboolean {
+    log::info!("XboxInterop: initializeInterop called");
+    1u8 as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_deinitializeInterop(
+    env: *mut JNIEnv,
+    _self: jobject,
+) -> jboolean {
+    log::info!("XboxInterop: deinitializeInterop called");
+    1u8 as jboolean
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_notificiation_registration_callback(
+    env: *mut JNIEnv,
+    _self: jobject,
+    _registration: jstring,
+) {
+    log::info!("XboxInterop: notificiation_registration_callback called");
+}
+
+// ======== XboxLocalStorage (com/microsoft/xboxlive/LocalStorage) ========
 
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_getLocalStoragePath(
@@ -267,24 +298,19 @@ pub fn register(env: *mut JNIEnv) {
             fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_getLocale as *mut c_void,
         },
         JNINativeMethod {
-            name: b"invokeMSA\0".as_ptr() as *const c_char,
-            signature: b"(Landroid/content/Context;IZLjava/lang/String;)V\0".as_ptr() as *const c_char,
-            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_invokeMSA as *mut c_void,
+            name: b"initializeInterop\0".as_ptr() as *const c_char,
+            signature: b"(Landroid/content/Context;)Z\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_initializeInterop as *mut c_void,
         },
         JNINativeMethod {
-            name: b"invokeAuthFlow\0".as_ptr() as *const c_char,
-            signature: b"(JLandroid/app/Activity;ZLjava/lang/String;)V\0".as_ptr() as *const c_char,
-            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_invokeAuthFlow as *mut c_void,
+            name: b"deinitializeInterop\0".as_ptr() as *const c_char,
+            signature: b"()Z\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_deinitializeInterop as *mut c_void,
         },
         JNINativeMethod {
-            name: b"initCLL\0".as_ptr() as *const c_char,
-            signature: b"(Landroid/content/Context;Ljava/lang/String;)V\0".as_ptr() as *const c_char,
-            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_initCLL as *mut c_void,
-        },
-        JNINativeMethod {
-            name: b"logCLL\0".as_ptr() as *const c_char,
-            signature: b"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V\0".as_ptr() as *const c_char,
-            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_logCLL as *mut c_void,
+            name: b"notificiation_registration_callback\0".as_ptr() as *const c_char,
+            signature: b"(Ljava/lang/String;)V\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_microsoft_xbox_idp_interop_Interop_notificiation_registration_callback as *mut c_void,
         },
     ];
 
