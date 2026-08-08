@@ -5,11 +5,70 @@ use std::sync::OnceLock;
 
 use libjnivm_sys::*;
 
+// libHttpClient.Android.so exports the HCHttpCall* C API; the Rust linker loads
+// that .so, and jni_resolve_symbol (rust_bridge.rs) resolves these at runtime.
+extern "C" {
+    fn jni_resolve_symbol(sym: *const c_char) -> *mut c_void;
+}
+
+type HcGetBodyFn = unsafe extern "C" fn(call: *mut c_void, bytes: *mut *const u8, size: *mut u32) -> i32;
+
+unsafe fn hc_symbol(name: &str) -> *mut c_void {
+    let c = std::ffi::CString::new(name).unwrap_or_default();
+    jni_resolve_symbol(c.as_ptr())
+}
+
+// Read the request body set on the HCCallHandle by the game (via
+// HCHttpCallRequestSetRequestBodyBytes) before doRequestAsync was invoked.
+unsafe fn read_call_request_body(call_handle: i64) -> Vec<u8> {
+    let sym = hc_symbol("HCHttpCallRequestGetRequestBodyBytes");
+    if sym.is_null() {
+        return Vec::new();
+    }
+    let f: HcGetBodyFn = std::mem::transmute(sym);
+    let mut bytes: *const u8 = std::ptr::null();
+    let mut size: u32 = 0;
+    if f(call_handle as *mut c_void, &mut bytes, &mut size) != 0 || size == 0 || bytes.is_null() {
+        return Vec::new();
+    }
+    std::slice::from_raw_parts(bytes, size as usize).to_vec()
+}
+
+// Deliver the response body back into the HCCallHandle so the game can read it
+// via HCHttpCallResponseGetResponseString. This mirrors what the real Java
+// NativeOutputStream.nativeWrite does: fetch the call's response-body write
+// function and invoke it with the body bytes (HCHttpCallResponseSetResponseBodyBytes
+// returns E_FAIL whenever the call uses a custom write function).
+type HcGetWriteFn = unsafe extern "C" fn(call: *mut c_void, write_function: *mut *mut c_void, context: *mut *mut c_void) -> i32;
+type HcWriteFn = unsafe extern "C" fn(call: *mut c_void, source: *const u8, bytes_available: usize, context: *mut c_void) -> i32;
+
+unsafe fn write_call_response_body(call_handle: i64, body: &[u8]) {
+    if body.is_empty() {
+        return;
+    }
+    let get_sym = hc_symbol("HCHttpCallResponseGetResponseBodyWriteFunction");
+    if get_sym.is_null() {
+        log::warn!("HTTP: HCHttpCallResponseGetResponseBodyWriteFunction not resolvable");
+        return;
+    }
+    let get_fn: HcGetWriteFn = std::mem::transmute(get_sym);
+    let mut write_fn: *mut c_void = std::ptr::null_mut();
+    let mut write_ctx: *mut c_void = std::ptr::null_mut();
+    let hr = get_fn(call_handle as *mut c_void, &mut write_fn, &mut write_ctx);
+    if hr != 0 || write_fn.is_null() {
+        log::warn!("HTTP: get response write function failed hr={:#x}", hr);
+        return;
+    }
+    let wf: HcWriteFn = std::mem::transmute(write_fn);
+    wf(call_handle as *mut c_void, body.as_ptr(), body.len(), write_ctx);
+}
+
 // Response state stored per-instance
 struct HttpResponseState {
     response_code: i32,
     response_headers: Vec<(String, String)>,
     response_body: Vec<u8>,
+    call_handle: i64,
 }
 
 static RESPONSE_STATES: OnceLock<Mutex<HashMap<usize, Arc<Mutex<HttpResponseState>>>>> = OnceLock::new();
@@ -25,6 +84,7 @@ struct HttpRequestState {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     call_handle: i64,
+    body_length: usize,
 }
 
 // Map from jobject to request state
@@ -80,42 +140,6 @@ fn get_jstring_content(env: *mut JNIEnv, s: jstring) -> Option<String> {
 }
 
 // Helper to read byte array
-fn get_byte_array_elements(env: *mut JNIEnv, arr: jbyteArray) -> Option<*const u8> {
-    let iface = get_iface(env);
-    if iface.is_null() {
-        return None;
-    }
-    let get_bytes = unsafe { (*iface).GetByteArrayElements }?;
-    let ptr = unsafe { get_bytes(env, arr, std::ptr::null_mut()) };
-    if ptr.is_null() {
-        None
-    } else {
-        Some(ptr as *const u8)
-    }
-}
-
-// Helper to release byte array
-fn release_byte_array_elements(env: *mut JNIEnv, arr: jbyteArray, ptr: *const u8) {
-    let iface = get_iface(env);
-    if iface.is_null() {
-        return;
-    }
-    if let Some(release) = unsafe { (*iface).ReleaseByteArrayElements } {
-        unsafe { release(env, arr, ptr as *mut i8, 0) };
-    }
-}
-
-// Helper to get array length
-fn get_array_length(env: *mut JNIEnv, arr: jarray) -> Option<jint> {
-    let iface = get_iface(env);
-    if iface.is_null() {
-        return None;
-    }
-    let get_len = unsafe { (*iface).GetArrayLength }?;
-    Some(unsafe { get_len(env, arr) })
-}
-
-// Helper to create byte array
 fn new_byte_array(env: *mut JNIEnv, data: &[u8]) -> jbyteArray {
     let iface = get_iface(env);
     if iface.is_null() {
@@ -174,6 +198,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_init(
         headers: Vec::new(),
         body: Vec::new(),
         call_handle: 0,
+        body_length: 0,
     }));
 
     let key = self_ as usize;
@@ -270,40 +295,31 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_setHttpUrl(
     }
 }
 
-// com/xbox/httpclient/HttpClientRequest.setHttpMethodAndBody(Ljava/lang/String;Ljava/lang/String;[B)V
+// com/xbox/httpclient/HttpClientRequest.setHttpMethodAndBody(Ljava/lang/String;JLjava/lang/String;J)V
+// (method jstring, call jlong = HCCallHandle, contentType jstring, contentLength jlong)
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_setHttpMethodAndBody(
     env: *mut JNIEnv,
     self_: jobject,
     method: jstring,
+    call_handle: jlong,
     _content_type: jstring,
-    body: jbyteArray,
+    body_length: jlong,
 ) {
     let method_str = match get_jstring_content(env, method) {
         Some(s) => s,
         None => return,
     };
 
-    let body_data = if !body.is_null() {
-        let ptr = get_byte_array_elements(env, body);
-        let len = get_array_length(env, body as jarray).unwrap_or(0) as usize;
-        if let Some(p) = ptr {
-            let data = std::slice::from_raw_parts(p, len).to_vec();
-            release_byte_array_elements(env, body, p);
-            data
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-
     let key = self_ as usize;
     if let Ok(states) = request_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(mut s) = state.lock() {
-                s.method = method_str;
-                s.body = body_data;
+                if !method_str.is_empty() {
+                    s.method = method_str;
+                }
+                s.call_handle = call_handle;
+                s.body_length = body_length.max(0) as usize;
             }
         }
     }
@@ -355,8 +371,37 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
         None => return,
     };
 
+    let call_handle = {
+        if let Ok(mut s) = state.lock() {
+            if s.call_handle != 0 {
+                s.call_handle
+            } else {
+                s.call_handle = source_call;
+                source_call
+            }
+        } else {
+            source_call
+        }
+    };
+
+    // The request body (if any) lives on the HCCallHandle in libHttpClient; the
+    // game registered it via HCHttpCallRequestSetRequestBodyBytes before firing
+    // doRequestAsync. Read it on the game thread while the call is still owned
+    // by the game, then hand it to the worker thread.
+    let prefetch_body = {
+        if let Ok(s) = state.lock() {
+            s.body_length
+        } else {
+            0
+        }
+    };
+    let body = if prefetch_body > 0 {
+        unsafe { read_call_request_body(call_handle) }
+    } else {
+        Vec::new()
+    };
     if let Ok(mut s) = state.lock() {
-        s.call_handle = source_call;
+        s.body = body.clone();
     }
 
     let thread_state = state.clone();
@@ -386,7 +431,8 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
             }
         };
 
-        let method = match method.to_uppercase().as_str() {
+        let method_string = method.to_uppercase();
+        let method = match method_string.as_str() {
             "GET" => reqwest::Method::GET,
             "POST" => reqwest::Method::POST,
             "PUT" => reqwest::Method::PUT,
@@ -395,8 +441,13 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
             "PATCH" => reqwest::Method::PATCH,
             _ => reqwest::Method::GET,
         };
+        let needs_zero_length = body.is_empty()
+            && matches!(method, reqwest::Method::POST | reqwest::Method::PUT | reqwest::Method::PATCH);
 
         let mut req = client.request(method, &url);
+        if needs_zero_length {
+            req = req.header("Content-Length", "0");
+        }
         for (name, value) in &headers {
             req = req.header(name.as_str(), value.as_str());
         }
@@ -404,6 +455,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
             req = req.body(body);
         }
 
+        let before = std::time::Instant::now();
         let result = req.send();
 
         // Get JNI env for this thread
@@ -424,9 +476,9 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
                     .collect();
                 let resp_body = response.bytes().unwrap_or_default().to_vec();
 
-                let resp_obj = create_response_object(env, status, resp_headers, resp_body);
+                let resp_obj = create_response_object(env, status, resp_headers, resp_body, call_handle);
                 if resp_obj.is_null() {
-                    log::error!("HTTP: failed to create HttpClientResponse object");
+                    log::error!("HTTP: failed to create HttpClientResponse object for {} {}", method_string, url);
                     return;
                 }
 
@@ -436,26 +488,43 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
                 ];
                 call_void_method(env, self_ptr as jobject, "OnRequestCompleted",
                     "(JLcom/xbox/httpclient/HttpClientResponse;)V", &mut args);
-                log::info!("HTTP request completed: {} -> OnRequestCompleted called", status);
+                log::info!("HTTP request: {} {} -> {} ({}ms)", method_string, url, status, before.elapsed().as_millis());
             }
             Err(e) => {
-                log::error!("HTTP request failed: {}", e);
-                let err_str = new_jstring(env, &e.to_string());
-                if err_str.is_null() {
-                    return;
-                }
-                let mut args = [
-                    jvalue { j: source_call },
-                    jvalue { l: err_str as jobject },
-                ];
-                call_void_method(env, self_ptr as jobject, "OnRequestFailed",
-                    "(JLjava/lang/String;)V", &mut args);
+                log::error!("HTTP request failed: {} {} {}", method_string, url, e);
+                call_request_failed_direct(env, source_call, &e.to_string());
             }
         }
     });
 }
 
-unsafe fn create_response_object(env: *mut JNIEnv, status: i32, headers: Vec<(String, String)>, body: Vec<u8>) -> jobject {
+// Call libHttpClient's Java_com_xbox_httpclient_HttpClientRequest_OnRequestFailed
+// native directly with the full 5-arg signature the game's DEX declares
+// (call, errorMessage, stackTrace, networkDetails, isNoNetwork). Going straight
+// to the exported symbol avoids the VM's 4-jvalue CallVoidMethodA limit.
+unsafe fn call_request_failed_direct(env: *mut JNIEnv, call: jlong, message: &str) {
+    let sym = hc_symbol("Java_com_xbox_httpclient_HttpClientRequest_OnRequestFailed");
+    if sym.is_null() {
+        return;
+    }
+    let err_str = new_jstring(env, message);
+    let empty = new_jstring(env, "");
+    if err_str.is_null() {
+        return;
+    }
+    let f: unsafe extern "C" fn(
+        *mut JNIEnv,
+        jobject,
+        jlong,
+        jstring,
+        jstring,
+        jstring,
+        jboolean,
+    ) = std::mem::transmute(sym);
+    f(env, std::ptr::null_mut(), call, err_str, empty, empty, 0);
+}
+
+unsafe fn create_response_object(env: *mut JNIEnv, status: i32, headers: Vec<(String, String)>, body: Vec<u8>, call_handle: i64) -> jobject {
     let iface = get_iface(env);
     if iface.is_null() { return std::ptr::null_mut(); }
 
@@ -480,6 +549,7 @@ unsafe fn create_response_object(env: *mut JNIEnv, status: i32, headers: Vec<(St
         response_code: status,
         response_headers: headers,
         response_body: body,
+        call_handle,
     }));
 
     if let Ok(mut states) = response_states().lock() {
@@ -580,26 +650,30 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponse
     0
 }
 
-// com/xbox/httpclient/HttpClientResponse.getResponseBodyBytes2()V
+// com/xbox/httpclient/HttpClientResponse.getResponseBodyBytes()V
+// The game (libHttpClient android_http_request.cpp ProcessResponseBody) invokes
+// this via CallVoidMethod; we deliver the captured response body back onto the
+// HCCallHandle so HCHttpCallResponseGetResponseString sees it.
 #[no_mangle]
-pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytes2(
-    env: *mut JNIEnv,
+pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytesVoid(
+    _env: *mut JNIEnv,
     self_: jobject,
 ) {
     let key = self_ as usize;
-    let _body = if let Ok(states) = response_states().lock() {
+    let (call_handle, body) = if let Ok(states) = response_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(s) = state.lock() {
-                s.response_body.clone()
-            } else { return }
-        } else { return }
-    } else { return };
-
-    // Write response body to NativeOutputStream via the call_handle
-    let call_handle = 0; // not stored on response currently; this is a best-effort write
-    let mut args = [jvalue { j: call_handle }];
-    call_void_method(env, self_,
-        "getResponseBodyBytes2", "()V", &mut args);
+                (s.call_handle, s.response_body.clone())
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+    } else {
+        return;
+    };
+    write_call_response_body(call_handle, &body);
 }
 
 // Clean up response state when object is destroyed
@@ -620,6 +694,11 @@ pub fn register(env: *mut JNIEnv) {
         JNINativeMethod {
             name: b"<init>\0".as_ptr() as *const c_char,
             signature: b"()V\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_xbox_httpclient_HttpClientRequest_init as *mut c_void,
+        },
+        JNINativeMethod {
+            name: b"<init>\0".as_ptr() as *const c_char,
+            signature: b"(Landroid/content/Context;)V\0".as_ptr() as *const c_char,
             fnPtr: Java_com_xbox_httpclient_HttpClientRequest_init as *mut c_void,
         },
         JNINativeMethod {
@@ -644,7 +723,7 @@ pub fn register(env: *mut JNIEnv) {
         },
         JNINativeMethod {
             name: b"setHttpMethodAndBody\0".as_ptr() as *const c_char,
-            signature: b"(Ljava/lang/String;Ljava/lang/String;[B)V\0".as_ptr() as *const c_char,
+            signature: b"(Ljava/lang/String;JLjava/lang/String;J)V\0".as_ptr() as *const c_char,
             fnPtr: Java_com_xbox_httpclient_HttpClientRequest_setHttpMethodAndBody as *mut c_void,
         },
         JNINativeMethod {
@@ -681,14 +760,14 @@ pub fn register(env: *mut JNIEnv) {
             fnPtr: Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytes as *mut c_void,
         },
         JNINativeMethod {
+            name: b"getResponseBodyBytes\0".as_ptr() as *const c_char,
+            signature: b"()V\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytesVoid as *mut c_void,
+        },
+        JNINativeMethod {
             name: b"getResponseCode\0".as_ptr() as *const c_char,
             signature: b"()I\0".as_ptr() as *const c_char,
             fnPtr: Java_com_xbox_httpclient_HttpClientResponse_getResponseCode as *mut c_void,
-        },
-        JNINativeMethod {
-            name: b"getResponseBodyBytes2\0".as_ptr() as *const c_char,
-            signature: b"()V\0".as_ptr() as *const c_char,
-            fnPtr: Java_com_xbox_httpclient_HttpClientResponse_getResponseBodyBytes2 as *mut c_void,
         },
         JNINativeMethod {
             name: b"destroy\0".as_ptr() as *const c_char,
