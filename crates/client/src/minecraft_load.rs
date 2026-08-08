@@ -7,9 +7,51 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use linker::McpelauncherHook;
 
+static REAL_CXA_THROW: AtomicUsize = AtomicUsize::new(0);
+static LOGGED_CXA_THROW: AtomicUsize = AtomicUsize::new(0);
+
+/// Interposer for `__cxa_throw`. Logs the first few throws (exception type +
+/// mangled type name + a backtrace of raw PCs) before forwarding to the real
+/// libc++ `__cxa_throw`. Installed via the Rust linker hook table so we can see
+/// uncaught `Xal::Exception`s that the abort() shim can't diagnose.
+unsafe extern "C" fn hook_cxa_throw(
+    thrown: *mut c_void,
+    tinfo: *mut c_void,
+    dest: unsafe extern "C" fn(*mut c_void),
+) -> ! {
+    if !tinfo.is_null() {
+        // std::type_info layout (Itanium): [vtable, name_ptr]
+        let name_ptr = *((tinfo as *mut *const c_char).add(1));
+        if !name_ptr.is_null() {
+            let name = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
+            let interesting =
+                name.contains("Xal") || name.contains("Exception") || name.contains("Error");
+            if interesting && LOGGED_CXA_THROW.load(Ordering::Relaxed) < 16 {
+                LOGGED_CXA_THROW.fetch_add(1, Ordering::Relaxed);
+                log::warn!("cxa_throw: {}", name);
+                if !thrown.is_null() {
+                    // Xal::Exception layout (from disasm of C1Ei PKcm):
+                    //   +0x00 vtable, +0x08 hr, +0x10 const char* message
+                    let msg_ptr = *(thrown as *const *const c_char).add(2);
+                    if !msg_ptr.is_null() {
+                        log::warn!("  message: {}", CStr::from_ptr(msg_ptr).to_string_lossy());
+                    }
+                }
+            }
+        }
+    }
+    let real = REAL_CXA_THROW.load(Ordering::Relaxed);
+    if real != 0 {
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void, unsafe extern "C" fn(*mut c_void)) -> ! =
+            std::mem::transmute(real);
+        f(thrown, tinfo, dest);
+    }
+    std::process::abort();
+}
 // C++ helpers that keep type-dependent state (preinitHooks, HookManager) in C++.
 extern "C" {
     fn mc_find_data_file(path: *const c_char) -> *const c_char;
@@ -76,7 +118,7 @@ pub unsafe fn load_minecraft() -> *mut c_void {
         log::error!("MinecraftUtils: Failed to load libc++_shared via Rust linker");
     }
 
-    // 2. libstdc++ stub: relocate the __cxa_* runtime symbols from libc++ so
+    // 2. libstdc++ stub: relocate the libcxa runtime symbols from libc++ so
     //    libfmod standalone loads resolve against the C++ runtime.
     let libstdcxx = linker::dlopen("libstdc++.so", 0);
     if libcxx_rust != 0 {
@@ -90,6 +132,12 @@ pub unsafe fn load_minecraft() -> *mut c_void {
             if let Some(libstdcxx_h) = libstdcxx {
                 linker::add_symbols(libstdcxx_h, &cxa);
             }
+        }
+        // Capture the real libc++ __cxa_throw so our interposer can forward to it.
+        if let Some(real) = linker::dlsym(libcxx_rust, "__cxa_throw") {
+            REAL_CXA_THROW.store(real as usize, Ordering::Relaxed);
+        } else {
+            log::warn!("MinecraftUtils: could not resolve __cxa_throw from libc++");
         }
     }
 
@@ -135,10 +183,16 @@ pub unsafe fn load_minecraft() -> *mut c_void {
         name: hook_name("_ZN11AppPlatform17setFullscreenModeE14FullscreenMode"),
         value: core_patches_set_fullscreen as *mut c_void,
     });
-    hooks.push(McpelauncherHook {
+hooks.push(McpelauncherHook {
         name: hook_name("GameActivity_finish"),
         value: crate::fake_looper::fake_looper_on_game_activity_close as *mut c_void,
     });
+    if REAL_CXA_THROW.load(Ordering::Relaxed) != 0 {
+        hooks.push(McpelauncherHook {
+            name: hook_name("__cxa_throw"),
+            value: hook_cxa_throw as *mut c_void,
+        });
+    }
 
     // 4. FMOD: load via Rust linker, resolve System functions, hook init/setOutput.
     let mut fmod: usize = 0;

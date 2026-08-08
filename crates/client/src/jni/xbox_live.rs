@@ -99,6 +99,65 @@ pub unsafe extern "C" fn Java_com_microsoft_xbox_idp_interop_Interop_notificiati
     log::info!("XboxInterop: notificiation_registration_callback called");
 }
 
+// ================================================================
+// XAL androidjava helpers (com/microsoft/xal/androidjava/*).
+// The game's statically-linked XAL (in libminecraftpe.so) invokes these
+// Java static methods through JNI during XalInitialize. The 26.x DEX
+// declares them as Java code; the Rust VM does not interpret DEX bytecode,
+// so the launcher must back them with natives.
+// ================================================================
+
+/// `DeviceInfo.GetOsVersion()Ljava/lang/String;`
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_DeviceInfo_GetOsVersion(
+    env: *mut JNIEnv,
+    _clazz: jobject,
+) -> jstring {
+    let v = "Android 14 (API 34)";
+    log::info!("XalJava: DeviceInfo.GetOsVersion -> {}", v);
+    new_jstring(env, v)
+}
+
+/// `DeviceInfo.GetDeviceId(Landroid/content/Context;)Ljava/lang/String;`
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_DeviceInfo_GetDeviceId(
+    env: *mut JNIEnv,
+    _clazz: jobject,
+    _context: jobject,
+) -> jstring {
+    let id = "c91a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8";
+    log::info!("XalJava: DeviceInfo.GetDeviceId -> {}", id);
+    new_jstring(env, id)
+}
+
+/// `XalInitTelemetry.initOneDS(Landroid/content/Context;)V` — OneDS
+/// telemetry bootstrap; the game logs "New AuthTokensController instance"
+/// right before this is invoked. Nothing to wire up for offline play.
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_XalInitTelemetry_initOneDS(
+    _env: *mut JNIEnv,
+    _clazz: jobject,
+    _context: jobject,
+) {
+    log::info!("XalJava: XalInitTelemetry.initOneDS called");
+}
+
+/// `Storage.getStoragePath(Landroid/content/Context;)Ljava/lang/String;`
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_Storage_getStoragePath(
+    env: *mut JNIEnv,
+    _clazz: jobject,
+    _context: jobject,
+) -> jstring {
+    let dir = unsafe {
+        let ptr = crate::path_helper::path_helper_get_primary_data_directory();
+        if ptr.is_null() { return new_jstring(env, ""); }
+        CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    };
+    log::info!("XalJava: Storage.getStoragePath -> {}", dir);
+    new_jstring(env, &dir)
+}
+
 // ======== XboxLocalStorage (com/microsoft/xboxlive/LocalStorage) ========
 
 #[no_mangle]
@@ -353,4 +412,54 @@ pub fn register(env: *mut JNIEnv) {
     } else {
         log::warn!("xbox_live: could not find LocalStorage class");
     }
+
+    // The game's static XAL calls these Java helpers through the Rust VM
+    // during XalInitialize. Register them so GetStaticMethodID / CallStatic*
+    // resolve instead of returning null (which made the game throw).
+    let xal_deviceinfo = [
+        JNINativeMethod {
+            name: b"GetOsVersion\0".as_ptr() as *const c_char,
+            signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_microsoft_xal_androidjava_DeviceInfo_GetOsVersion as *mut c_void,
+        },
+        JNINativeMethod {
+            name: b"GetDeviceId\0".as_ptr() as *const c_char,
+            signature: b"(Landroid/content/Context;)Ljava/lang/String;\0".as_ptr() as *const c_char,
+            fnPtr: Java_com_microsoft_xal_androidjava_DeviceInfo_GetDeviceId as *mut c_void,
+        },
+    ];
+    let xal_init_telemetry = [JNINativeMethod {
+        name: b"initOneDS\0".as_ptr() as *const c_char,
+        signature: b"(Landroid/content/Context;)V\0".as_ptr() as *const c_char,
+        fnPtr: Java_com_microsoft_xal_androidjava_XalInitTelemetry_initOneDS as *mut c_void,
+    }];
+    let xal_storage = [JNINativeMethod {
+        name: b"getStoragePath\0".as_ptr() as *const c_char,
+        signature: b"(Landroid/content/Context;)Ljava/lang/String;\0".as_ptr() as *const c_char,
+        fnPtr: Java_com_microsoft_xal_androidjava_Storage_getStoragePath as *mut c_void,
+    }];
+
+    let reg = |cls_name: &[u8], methods: &[JNINativeMethod]| unsafe {
+        let cls = jnivm_find_class(env, cls_name.as_ptr() as *const c_char);
+        if !cls.is_null() {
+            let rc = jnivm_register_natives(env, cls, methods.as_ptr(), methods.len() as i32);
+            log::info!(
+                "xbox_live: register {} natives on {} = {}",
+                methods.len(),
+                String::from_utf8_lossy(&cls_name[..cls_name.len() - 1]),
+                rc
+            );
+        } else {
+            log::warn!("xbox_live: could not find XAL class");
+        }
+    };
+    reg(
+        b"com/microsoft/xal/androidjava/DeviceInfo\0",
+        &xal_deviceinfo,
+    );
+    reg(
+        b"com/microsoft/xal/androidjava/XalInitTelemetry\0",
+        &xal_init_telemetry,
+    );
+    reg(b"com/microsoft/xal/androidjava/Storage\0", &xal_storage);
 }

@@ -114,6 +114,7 @@ const LIB_M_SYMS: &[&[u8]] = &[
 const LIB_Z_SYMS: &[&[u8]] = &[
     b"deflate", b"deflateEnd", b"deflateInit_", b"deflateInit2_", b"inflate",
     b"inflateEnd", b"inflateInit_", b"inflateInit2_", b"compressBound", b"crc32",
+    b"deflateBound",
 ];
 
 /// Build the owned CStrings + a null-terminated contiguous `*const c_char`
