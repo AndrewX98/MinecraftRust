@@ -1449,6 +1449,28 @@ mod ecdsa_impl {
         Box::into_raw(Box::new(1u8)) as jobject
     }
 
+    fn jstring_to_string_ref(env: *mut JNIEnv, s: jstring) -> Option<String> {
+        if env.is_null() || s.is_null() {
+            return None;
+        }
+        let iface = unsafe { *(env as *mut *mut JNINativeInterface) };
+        let get_chars = match unsafe { (*iface).GetStringUTFChars } {
+            Some(f) => f,
+            None => return None,
+        };
+        unsafe {
+            let chars = get_chars(env, s, std::ptr::null_mut());
+            if chars.is_null() {
+                return None;
+            }
+            let out = CStr::from_ptr(chars).to_string_lossy().into_owned();
+            if let Some(rel) = (*iface).ReleaseStringUTFChars {
+                rel(env, s, chars);
+            }
+            Some(out)
+        }
+    }
+
     unsafe extern "C" fn ecdsa_init(_env: *mut JNIEnv, this: jobject) {
         if this.is_null() {
             return;
@@ -1613,13 +1635,131 @@ mod ecdsa_impl {
         new_jstring(env, &uid)
     }
 
+    // ---- Persistent ECDSA store (Phase 2) ----
+    //
+    // The game's C++ XAL round-trips the ECDSA keypair through these Java
+    // methods: generateKey → storeKeyPairAndId (persist) on boot 1, then
+    // restoreKeyAndId on boot 2. If restore returns null while a stored key
+    // exists, CryptographyFactoryJava::DeserializeEcdsa throws Xal::Exception
+    // ("Failed to restore Ecdsa from stored key and Id."). We persist the raw
+    // private scalar (d) + unique_id in the data dir so the round-trip works.
+
+    fn ecdsa_store_path() -> std::path::PathBuf {
+        let data_dir = unsafe {
+            let ptr = crate::path_helper::path_helper_get_primary_data_directory();
+            if ptr.is_null() {
+                return std::path::PathBuf::from("ecdsa_key.json");
+            }
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        };
+        std::path::Path::new(&data_dir).join("ecdsa_key.json")
+    }
+
+    fn ecdsa_hex(bytes: &[u8]) -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for &b in bytes {
+            s.push_str(&format!("{:02x}", b));
+        }
+        s
+    }
+
+    fn ecdsa_store_persist(unique_id: &str, d: &[u8; 32]) {
+        let path = ecdsa_store_path();
+        let json = format!(
+            "{{\"Id\":\"{}\",\"Key\":\"{}\"}}\n",
+            unique_id,
+            ecdsa_hex(d)
+        );
+        if let Err(e) = std::fs::write(&path, json) {
+            log::warn!("ecdsa: persist failed {}: {}", path.display(), e);
+        } else {
+            log::debug!("ecdsa: persisted keypair to {}", path.display());
+        }
+    }
+
+    fn ecdsa_store_load() -> Option<(String, [u8; 32])> {
+        let path = ecdsa_store_path();
+        let data = std::fs::read_to_string(&path).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+        let id = json.get("Id")?.as_str()?.to_string();
+        let key = json.get("Key")?.as_str()?;
+        if key.len() != 64 {
+            return None;
+        }
+        let mut d = [0u8; 32];
+        for (i, c) in key.as_bytes().chunks(2).enumerate() {
+            let hi = (c[0] as char).to_digit(16)? as u8;
+            let lo = (c[1] as char).to_digit(16)? as u8;
+            d[i] = (hi << 4) | lo;
+        }
+        if signing_key_from(&d).is_none() {
+            return None;
+        }
+        Some((id, d))
+    }
+
+    unsafe extern "C" fn ecdsa_storeKeyPairAndId(
+        env: *mut JNIEnv,
+        this: jobject,
+        _ctx: jobject,
+        _id: jstring,
+    ) -> jboolean {
+        if this.is_null() {
+            return 0;
+        }
+        let (uid, d) = {
+            let map = match ecdsa_states().lock() {
+                Ok(m) => m,
+                Err(_) => return 0,
+            };
+            match map.get(&(this as usize)) {
+                Some(s) if s.has_key => (s.unique_id.clone(), s.d),
+                _ => {
+                    log::warn!("ecdsa: storeKeyPairAndId called without key this={:p}", this);
+                    return 0;
+                }
+            }
+        };
+        if uid.trim().is_empty() {
+            // Fall back to the id arg if the state has no unique_id.
+            if let Some(id_str) = jstring_to_string_ref(env, _id) {
+                if !id_str.is_empty() {
+                    ecdsa_store_persist(&id_str, &d);
+                    return 1;
+                }
+            }
+            log::warn!("ecdsa: storeKeyPairAndId has no id, not persisting");
+            return 0;
+        }
+        ecdsa_store_persist(&uid, &d);
+        1
+    }
+
     unsafe extern "C" fn ecdsa_restoreKeyAndId(
-        _env: *mut JNIEnv,
+        env: *mut JNIEnv,
         _clazz: jclass,
         _ctx: jobject,
     ) -> jobject {
-        // Upstream mcpelauncher also returns null — force generateKey path.
-        std::ptr::null_mut()
+        let (uid, d) = match ecdsa_store_load() {
+            Some(v) => v,
+            None => {
+                log::debug!("ecdsa: restoreKeyAndId — no stored key, generate path");
+                return std::ptr::null_mut();
+            }
+        };
+        let handle = new_handle();
+        if let Ok(mut map) = ecdsa_states().lock() {
+            map.insert(
+                handle as usize,
+                EcdsaState {
+                    unique_id: uid.clone(),
+                    d,
+                    has_key: true,
+                },
+            );
+        }
+        log::info!("ecdsa: restoreKeyAndId -> {} (restored from disk)", uid);
+        handle
     }
 
     // ---- EccPubKey methods ----
@@ -1720,6 +1860,12 @@ mod ecdsa_impl {
                     signature: b"(Landroid/content/Context;)Lcom/microsoft/xal/crypto/Ecdsa;\0"
                         .as_ptr() as *const c_char,
                     fnPtr: ecdsa_restoreKeyAndId as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"storeKeyPairAndId\0".as_ptr() as *const c_char,
+                    signature: b"(Landroid/content/Context;Ljava/lang/String;)Z\0"
+                        .as_ptr() as *const c_char,
+                    fnPtr: ecdsa_storeKeyPairAndId as *mut c_void,
                 },
             ],
         );

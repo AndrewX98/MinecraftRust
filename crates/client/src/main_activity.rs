@@ -1,5 +1,5 @@
 use libjnivm_sys::*;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -696,38 +696,118 @@ unsafe extern "C" fn request_integrity_token(env: *mut JNIEnv, self_: jobject, _
 }
 
 // ================================================================
-// Phase 0 probes: 26.2x login API natives (registered so we can trace
-// which ones the game calls). These match the DEX-native set on
-// com/mojang/minecraftpe/MainActivity in 1.26.20/26.33: getAccessToken,
-// getClientId, setLoginInformation, setRefreshToken, setSession,
-// getProfileId/getProfileName, clearLoginInformation. The game .so does
-// NOT export them, so the launcher must provide them.
+// Phase 2: 26.x token store (MainActivity natives)
+//
+// The 26.x game reads login state from these MainActivity natives — the
+// launcher acts as the identity store. Backed by a JSON file in the data
+// dir so tokens survive restarts. XAL's silent restore calls getAccessToken
+// on boot; after an interactive sign-in the game pushes its tokens in
+// through setLoginInformation / setRefreshToken / setSession.
 // ================================================================
 
-static LOGIN_ACCESS_TOKEN: OnceLock<Mutex<String>> = OnceLock::new();
-static LOGIN_CLIENT_ID: OnceLock<Mutex<String>> = OnceLock::new();
-static LOGIN_PROFILE_NAME: OnceLock<Mutex<String>> = OnceLock::new();
+#[derive(Default, Clone)]
+struct IdentityStore {
+    access_token: String,
+    client_id: String,
+    profile_id: String,
+    profile_name: String,
+    refresh_token: String,
+    session: String,
+}
 
-fn login_store() -> &'static Mutex<String> {
-    LOGIN_ACCESS_TOKEN.get_or_init(|| Mutex::new(String::new()))
+static IDENTITY: OnceLock<Mutex<IdentityStore>> = OnceLock::new();
+
+fn identity_store() -> &'static Mutex<IdentityStore> {
+    IDENTITY.get_or_init(|| {
+        let mut s = IdentityStore::default();
+        load_identity_store(&mut s);
+        Mutex::new(s)
+    })
+}
+
+fn identity_path() -> Option<std::path::PathBuf> {
+    let dir = unsafe {
+        let ptr = crate::path_helper::path_helper_get_primary_data_directory();
+        if ptr.is_null() {
+            return None;
+        }
+        CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    };
+    Some(std::path::Path::new(&dir).join("identity.json"))
+}
+
+fn load_identity_store(s: &mut IdentityStore) {
+    let path = match identity_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let data = match std::fs::read_to_string(&path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+        s.access_token = json.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        s.client_id = json.get("client_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        s.profile_id = json.get("profile_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        s.profile_name = json.get("profile_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        s.refresh_token = json.get("refresh_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        s.session = json.get("session").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        log::info!(
+            "LoginStore: loaded identity (token {}B, client {}B, name {}B, session {}B)",
+            s.access_token.len(), s.client_id.len(), s.profile_name.len(), s.session.len()
+        );
+    }
+}
+
+fn save_identity_store(s: &IdentityStore) {
+    let path = match identity_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let json = serde_json::json!({
+        "access_token": s.access_token,
+        "client_id": s.client_id,
+        "profile_id": s.profile_id,
+        "profile_name": s.profile_name,
+        "refresh_token": s.refresh_token,
+        "session": s.session,
+    });
+    if let Ok(text) = serde_json::to_string_pretty(&json) {
+        if let Err(e) = std::fs::write(&path, text) {
+            log::warn!("Identity: failed to persist {}: {}", path.display(), e);
+        } else {
+            log::info!("Identity: persisted to {}", path.display());
+        }
+    }
+}
+
+fn get_jstr_content(env: *mut JNIEnv, s: jstring) -> Option<String> {
+    get_jstring_content(env, s)
 }
 
 unsafe extern "C" fn get_access_token(env: *mut JNIEnv, _self: jobject) -> jstring {
-    let token = login_store().lock().unwrap().clone();
-    log::info!("LoginProbe: getAccessToken -> {} bytes", token.len());
+    let token = identity_store().lock().unwrap().access_token.clone();
+    log::info!("Identity: getAccessToken -> {} bytes ({} present)",
+        token.len(), if token.is_empty() { "no" } else { "yes" });
     new_jstring(env, &token)
 }
 
 unsafe extern "C" fn get_client_id(env: *mut JNIEnv, _self: jobject) -> jstring {
-    let cid = LOGIN_CLIENT_ID.get().map(|m| m.lock().unwrap().clone()).unwrap_or_default();
-    log::info!("LoginProbe: getClientId -> {}", cid);
+    let cid = identity_store().lock().unwrap().client_id.clone();
+    log::info!("Identity: getClientId -> {} bytes", cid.len());
     new_jstring(env, &cid)
 }
 
 unsafe extern "C" fn get_profile_name(env: *mut JNIEnv, _self: jobject) -> jstring {
-    let name = LOGIN_PROFILE_NAME.get().map(|m| m.lock().unwrap().clone()).unwrap_or_default();
-    log::info!("LoginProbe: getProfileName -> {}", name);
+    let name = identity_store().lock().unwrap().profile_name.clone();
+    log::info!("Identity: getProfileName -> {} bytes", name.len());
     new_jstring(env, &name)
+}
+
+unsafe extern "C" fn get_profile_id(env: *mut JNIEnv, _self: jobject) -> jstring {
+    let pid = identity_store().lock().unwrap().profile_id.clone();
+    log::info!("Identity: getProfileId -> {} bytes", pid.len());
+    new_jstring(env, &pid)
 }
 
 unsafe extern "C" fn set_login_information(
@@ -740,30 +820,43 @@ unsafe extern "C" fn set_login_information(
 ) {
     let args: Vec<String> = [a, b, c, d]
         .into_iter()
-        .map(|s| get_jstring_content(env, s).unwrap_or_default())
+        .map(|s| get_jstr_content(env, s).unwrap_or_default())
         .collect();
     log::info!(
-        "LoginProbe: setLoginInformation ({} bytes) ({} bytes) ({} bytes) ({} bytes)",
+        "Identity: setLoginInformation = ({}B) ({}B) ({}B) ({}B)",
         args[0].len(), args[1].len(), args[2].len(), args[3].len()
     );
-    if !args[1].is_empty() {
-        *LOGIN_CLIENT_ID.get_or_init(|| Mutex::new(String::new())).lock().unwrap() = args[1].clone();
+    {
+        let mut s = identity_store().lock().unwrap();
+        s.access_token = args[0].clone();
+        s.client_id = args[1].clone();
+        s.profile_id = args[2].clone();
+        s.profile_name = args[3].clone();
     }
+    save_identity_store(&identity_store().lock().unwrap().clone());
 }
 
 unsafe extern "C" fn set_refresh_token(env: *mut JNIEnv, _self: jobject, token: jstring) {
-    let t = get_jstring_content(env, token).unwrap_or_default();
-    log::info!("LoginProbe: setRefreshToken -> {} bytes", t.len());
+    let t = get_jstr_content(env, token).unwrap_or_default();
+    log::info!("Identity: setRefreshToken -> {} bytes", t.len());
+    identity_store().lock().unwrap().refresh_token = t;
+    save_identity_store(&identity_store().lock().unwrap().clone());
 }
 
 unsafe extern "C" fn set_session(env: *mut JNIEnv, _self: jobject, s: jstring) {
-    let s = get_jstring_content(env, s).unwrap_or_default();
-    log::info!("LoginProbe: setSession -> {} bytes", s.len());
+    let s = get_jstr_content(env, s).unwrap_or_default();
+    log::info!("Identity: setSession -> {} bytes", s.len());
+    identity_store().lock().unwrap().session = s;
+    save_identity_store(&identity_store().lock().unwrap().clone());
 }
 
 unsafe extern "C" fn clear_login_information(_env: *mut JNIEnv, _self: jobject) {
-    log::info!("LoginProbe: clearLoginInformation");
-    *login_store().lock().unwrap() = String::new();
+    log::info!("Identity: clearLoginInformation");
+    identity_store().lock().unwrap().access_token.clear();
+    identity_store().lock().unwrap().client_id.clear();
+    identity_store().lock().unwrap().profile_id.clear();
+    identity_store().lock().unwrap().profile_name.clear();
+    save_identity_store(&identity_store().lock().unwrap().clone());
 }
 
 pub fn register(env: *mut JNIEnv) {
@@ -1075,6 +1168,11 @@ pub fn register(env: *mut JNIEnv) {
             name: b"getProfileName\0".as_ptr() as *const c_char,
             signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
             fnPtr: get_profile_name as *mut std::ffi::c_void,
+        },
+        JNINativeMethod {
+            name: b"getProfileId\0".as_ptr() as *const c_char,
+            signature: b"()Ljava/lang/String;\0".as_ptr() as *const c_char,
+            fnPtr: get_profile_id as *mut std::ffi::c_void,
         },
         JNINativeMethod {
             name: b"setLoginInformation\0".as_ptr() as *const c_char,

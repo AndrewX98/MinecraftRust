@@ -432,19 +432,19 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
         };
 
         let method_string = method.to_uppercase();
-        let method = match method_string.as_str() {
-            "GET" => reqwest::Method::GET,
-            "POST" => reqwest::Method::POST,
-            "PUT" => reqwest::Method::PUT,
-            "HEAD" => reqwest::Method::HEAD,
-            "DELETE" => reqwest::Method::DELETE,
-            "PATCH" => reqwest::Method::PATCH,
-            _ => reqwest::Method::GET,
-        };
-        let needs_zero_length = body.is_empty()
-            && matches!(method, reqwest::Method::POST | reqwest::Method::PUT | reqwest::Method::PATCH);
+                let method = match method_string.as_str() {
+                    "GET" => reqwest::Method::GET,
+                    "POST" => reqwest::Method::POST,
+                    "PUT" => reqwest::Method::PUT,
+                    "HEAD" => reqwest::Method::HEAD,
+                    "DELETE" => reqwest::Method::DELETE,
+                    "PATCH" => reqwest::Method::PATCH,
+                    _ => reqwest::Method::GET,
+                };
+                let needs_zero_length = body.is_empty()
+                && matches!(method, reqwest::Method::POST | reqwest::Method::PUT | reqwest::Method::PATCH);
 
-        let mut req = client.request(method, &url);
+let mut req = client.request(method, &url);
         if needs_zero_length {
             req = req.header("Content-Length", "0");
         }
@@ -452,11 +452,29 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
             req = req.header(name.as_str(), value.as_str());
         }
         if !body.is_empty() {
-            req = req.body(body);
+            req = req.body(body.clone());
         }
 
-        let before = std::time::Instant::now();
-        let result = req.send();
+            // Phase 2 diag: dump bodies for the auth endpoints
+            if url.contains("device.auth.xboxlive.com")
+                || url.contains("user.auth.xboxlive.com")
+                || url.contains("title.auth.xboxlive.com")
+                || url.contains("xsts.auth")
+            {
+                log::warn!(
+                    "HTTP-AUTH >>> {} {} headers={:?} body={}",
+                    method_string,
+                    url,
+                    headers
+                        .iter()
+                        .filter(|(k, _)| k.to_lowercase() != "user-agent")
+                        .collect::<Vec<_>>(),
+                    String::from_utf8_lossy(&body)
+                );
+            }
+
+                let before = std::time::Instant::now();
+                let result = req.send();
 
         // Get JNI env for this thread
         let vm = jnivm_create_vm();
@@ -475,6 +493,16 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
                     .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
                 let resp_body = response.bytes().unwrap_or_default().to_vec();
+                if url.contains("auth.xboxlive.com") || url.contains("auth.xbox.com") {
+                    log::warn!(
+                        "HTTP-AUTH <<< {} {} -> {} resp_headers={:?} body={}",
+                        method_string,
+                        url,
+                        status,
+                        resp_headers.iter().take(6).map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>(),
+                        String::from_utf8_lossy(&resp_body)
+                    );
+                }
 
                 let resp_obj = create_response_object(env, status, resp_headers, resp_body, call_handle);
                 if resp_obj.is_null() {
