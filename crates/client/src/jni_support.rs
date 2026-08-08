@@ -162,6 +162,7 @@ pub fn register_all_classes() {
     crate::jni::audio::register(env);
     crate::jni::http_client::register(env);
     crate::jni::websocket::register(env);
+    crate::jni::xal_browser::register(env);
     crate::jni::xbox_live::register(env);
     log::info!("jni_support: registered all Java classes with libjnivm-sys VM");
 }

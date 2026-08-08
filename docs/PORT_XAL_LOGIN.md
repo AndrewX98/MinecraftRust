@@ -1,7 +1,10 @@
 # Port: Real XAL / MSA Login (enable featured & online server list)
 
-**Status:** Phase 0 done — 26.x login API mapped (DEX+readelf+traces), plan updated.
-Nothing implemented yet beyond probe natives.
+**Status:** Phases 0–2 done · Phase 3 (browser UI) implemented (Rust `showUrl`
+override) but not end-to-end verified (game hasn't reached the interactive
+sign-in step in headless runs).
+
+<!--newline-->
 
 ## Goal
 
@@ -164,17 +167,40 @@ is the identity store. Implement them backed by the Rust token chain:
 
 ### Phase 3 — Interactive sign-in UI
 
-- When XAL needs a browser it uses **`BrowserLaunchActivity.showUrl`** (the game's
-  own native, exported) — the launcher just has to display the URL. Options:
-  - **CLI mode**: print the sign-in URL in the terminal, let the user paste the
-    final redirect URL back (matches `xal_webview_cli.cpp`).
-  - **System-browser mode** (`xdg-open`) + local callback capture.
-  - **In-process webview** later — larger lift.
-- Remove the stale `class_stubs.rs:489-519` `WebView` registration (the class
-  doesn't exist in 26.x); the real `BrowserLaunchActivity` natives are already
-  provided by the game.
+- When XAL needs a browser it uses **`BrowserLaunchActivity.showUrl`** — a **Java
+  static method in the DEX** (access `0x0009`, 9 params), **not** a game-exposed
+  native (`nm` on `libminecraftpe.so` shows only `checkIsLoaded` /
+  `urlOperation*`). So the launcher must **override** `showUrl` on the Rust VM.
+  **Done (`crates/client/src/jni/xal_browser.rs`):**
+  - Registered `showUrl:(JLandroid/content/Context;Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/String;[Ljava/lang/String;Z)V`
+    via `jnivm_register_natives` on `com/microsoft/xal/browser/BrowserLaunchActivity`.
+  - Body reads `opId` (a1), `starturl` (a3), `endurl` (a4) from the 4 gp args the
+    VM forwards; CLI mode prints the URL + opens `xdg-open`, then reads the final
+    redirect line from stdin and calls the game-exported
+    `Java_..._urlOperationSucceeded(opId, finalUrl, false, "webkit-noDefault::0::none")`
+    (mirrors `xal_webview_cli.cpp` / `mcpelauncher-client/src/jni/webview.cpp`).
+  - Caveat: only the first 4 gp args survive the VM's `jni_CallStaticVoidMethod`
+    shim (call_static.rs:50-63) — enough for CLI mode.
+- **Not end-to-end verified:** headless runs park at the `device.auth.xboxlive.com`
+  device-auth 404-loop (below) and never reach the interactive sign-in step, so
+  `showUrl` is registered but never invoked in CI runs. Manual/real-X11 sign-in
+  click is the way to exercise it.
+- Stale `class_stubs.rs:489-519` `WebView` registration: **keep** (log-only
+  missing-symbol warning, harmless; removing risks a FindClass no-op if any
+  legacy path touches it).
 - **Exit:** clicking "Sign in" opens the browser flow, user signs in, and
   `urlOperationSucceeded` hands the final URL back into XAL.
+
+> **Known device-auth blocker:** `POST device.auth.xboxlive.com/device/authenticate`
+> returns **500** (`content-length:0`) with an **all-zero `Signature` header and
+> empty body** (`HTTP-AUTH >>>` logs). XAL still initializes and the menu
+> renders, but the game loops retrying every ~10s instead of firing the
+> `MainActivity` login natives. The 26.x token natives (`getAccessToken`,
+> `setLoginInformation`, …) are registered/probed but never invoked in any run so
+> far. Likely the device-auth request needs a properly ECDSA-signed body (our
+> `Ecdsa.sign` handles the Java-side crypto path in `jni_support.rs`), or XAL
+> expects the request body filled before dispatch — this is the next thing to fix
+> for the browser flow to be reachable.
 
 ### Phase 4 — Complete the login handshake
 
