@@ -39,8 +39,24 @@ macro_rules! make_array_funcs {
             v.as_mut_ptr()
         }
         pub unsafe extern "C" fn $ReleaseElements(_env: *mut JNIEnv, _arr: jobject, _elems: *mut $elems_ty, _mode: jint) {}
-        pub unsafe extern "C" fn $GetRegion(_env: *mut JNIEnv, _arr: jobject, _start: jsize, _len: jsize, _buf: *mut $elems_ty) {}
-        pub unsafe extern "C" fn $SetRegion(_env: *mut JNIEnv, _arr: jobject, _start: jsize, _len: jsize, _buf: *const $elems_ty) {}
+        pub unsafe extern "C" fn $GetRegion(_env: *mut JNIEnv, arr: jobject, start: jsize, len: jsize, buf: *mut $elems_ty) {
+            if arr.is_null() || buf.is_null() || len <= 0 || start < 0 {
+                return;
+            }
+            let v = &*(arr as *const Vec<$elems_ty>);
+            let start = start as usize;
+            let len = (len as usize).min(v.len().saturating_sub(start));
+            std::ptr::copy_nonoverlapping(v.as_ptr().add(start), buf, len);
+        }
+        pub unsafe extern "C" fn $SetRegion(_env: *mut JNIEnv, arr: jobject, start: jsize, len: jsize, buf: *const $elems_ty) {
+            if arr.is_null() || buf.is_null() || len <= 0 || start < 0 {
+                return;
+            }
+            let v = &mut *(arr as *mut Vec<$elems_ty>);
+            let start = start as usize;
+            let len = (len as usize).min(v.len().saturating_sub(start));
+            std::ptr::copy_nonoverlapping(buf, v.as_mut_ptr().add(start), len);
+        }
     };
 }
 

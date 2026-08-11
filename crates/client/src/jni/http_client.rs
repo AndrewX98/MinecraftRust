@@ -13,6 +13,27 @@ extern "C" {
 
 type HcGetBodyFn = unsafe extern "C" fn(call: *mut c_void, bytes: *mut *const u8, size: *mut u32) -> i32;
 
+// libHttpClient request-body streaming: XAL registers the request body with
+// HCHttpCallRequestSetRequestBodyReadFunction (or the byte-array setter which
+// installs HC_CALL::ReadRequestBody as the read function). requestBodyBytes
+// stays empty in the read-function case, so HCHttpCallRequestGetRequestBodyBytes
+// reports the size but a null buffer. To get the real body we must invoke the
+// call's read function the way the providers do.
+type HcGetReadFn = unsafe extern "C" fn(
+    call: *mut c_void,
+    read_function: *mut *mut c_void,
+    body_size: *mut usize,
+    context: *mut *mut c_void,
+) -> i32;
+type HcReadFn = unsafe extern "C" fn(
+    call: *mut c_void,
+    offset: usize,
+    bytes_available: usize,
+    context: *mut c_void,
+    destination: *mut u8,
+    bytes_written: *mut usize,
+) -> i32;
+
 unsafe fn hc_symbol(name: &str) -> *mut c_void {
     let c = std::ffi::CString::new(name).unwrap_or_default();
     jni_resolve_symbol(c.as_ptr())
@@ -21,6 +42,51 @@ unsafe fn hc_symbol(name: &str) -> *mut c_void {
 // Read the request body set on the HCCallHandle by the game (via
 // HCHttpCallRequestSetRequestBodyBytes) before doRequestAsync was invoked.
 unsafe fn read_call_request_body(call_handle: i64) -> Vec<u8> {
+    let call = call_handle as *mut c_void;
+    if call.is_null() {
+        return Vec::new();
+    }
+
+    // Preferred path: pump the call's request-body read function (covers both
+    // SetRequestBodyBytes and SetRequestBodyReadFunction, since the byte-array
+    // setter installs HC_CALL::ReadRequestBody as the read function).
+    let get_read_sym = hc_symbol("HCHttpCallRequestGetRequestBodyReadFunction");
+    if !get_read_sym.is_null() {
+        let get_read: HcGetReadFn = std::mem::transmute(get_read_sym);
+        let mut read_fn: *mut c_void = std::ptr::null_mut();
+        let mut body_size: usize = 0;
+        let mut read_ctx: *mut c_void = std::ptr::null_mut();
+        if get_read(call, &mut read_fn, &mut body_size, &mut read_ctx) == 0
+            && !read_fn.is_null()
+            && body_size > 0
+        {
+            let rf: HcReadFn = std::mem::transmute(read_fn);
+            let mut body = vec![0u8; body_size];
+            let mut offset = 0usize;
+            while offset < body_size {
+                let remaining = body_size - offset;
+                let mut written: usize = 0;
+                let hr = rf(
+                    call,
+                    offset,
+                    remaining,
+                    read_ctx,
+                    body[offset..].as_mut_ptr(),
+                    &mut written,
+                );
+                if hr != 0 || written == 0 {
+                    break;
+                }
+                offset += written;
+            }
+            body.truncate(offset);
+            if !body.is_empty() {
+                return body;
+            }
+        }
+    }
+
+    // Fallback: direct byte-array read.
     let sym = hc_symbol("HCHttpCallRequestGetRequestBodyBytes");
     if sym.is_null() {
         return Vec::new();
@@ -28,7 +94,7 @@ unsafe fn read_call_request_body(call_handle: i64) -> Vec<u8> {
     let f: HcGetBodyFn = std::mem::transmute(sym);
     let mut bytes: *const u8 = std::ptr::null();
     let mut size: u32 = 0;
-    if f(call_handle as *mut c_void, &mut bytes, &mut size) != 0 || size == 0 || bytes.is_null() {
+    if f(call, &mut bytes, &mut size) != 0 || size == 0 || bytes.is_null() {
         return Vec::new();
     }
     std::slice::from_raw_parts(bytes, size as usize).to_vec()
@@ -320,6 +386,12 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_setHttpMetho
                 }
                 s.call_handle = call_handle;
                 s.body_length = body_length.max(0) as usize;
+                log::debug!(
+                    "http: setHttpMethodAndBody method={} call={:#x} body_len={}",
+                    s.method,
+                    call_handle,
+                    s.body_length
+                );
             }
         }
     }
@@ -396,7 +468,17 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
         }
     };
     let body = if prefetch_body > 0 {
-        unsafe { read_call_request_body(call_handle) }
+        let b = unsafe { read_call_request_body(call_handle) };
+        log::debug!(
+            "http: doRequestAsync {} call={:#x} prefetch_body={} read_body_len={}",
+            {
+                if let Ok(s) = state.lock() { s.method.clone() } else { String::new() }
+            },
+            call_handle,
+            prefetch_body,
+            b.len()
+        );
+        b
     } else {
         Vec::new()
     };

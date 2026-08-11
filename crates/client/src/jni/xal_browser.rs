@@ -82,33 +82,134 @@ unsafe extern "C" fn browser_launch_show_url(
     call_url_operation_succeeded(env, op_id, &final_url);
 }
 
-/// Present the sign-in URL. CLI mode: print and read a line from stdin.
-/// Also best-effort: open the URL in the system browser (xdg-open) so an
-/// interactive user can complete sign-in there.
+/// Scheme + host of the OAuth redirect used by the game's XAL client id.
+/// Brave/Chrome will delegate a `ms-xal-0000000048183522://auth?...` URL to
+/// whatever `xdg-mime` handler is registered for this scheme; we install a
+/// tiny script that writes the URL to a known file the client polls.
+const REDIRECT_SCHEME: &str = "ms-xal-0000000048183522";
+const REDIRECT_FILE: &str = "xal-redirect-url";
+
+fn redirect_capture_path() -> std::path::PathBuf {
+    let cache = std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{}/.cache", std::env::var("HOME").unwrap_or_default()));
+    std::path::PathBuf::from(cache).join("mcpelauncher").join(REDIRECT_FILE)
+}
+
+/// Install a desktop handler mapping the XAL redirect scheme to a script that
+/// records the final redirect URL in the capture file (so it survives the
+/// browser→OS handoff without an app visible in the portal picker).
+fn ensure_redirect_handler() {
+    use std::os::unix::fs::PermissionsExt;
+    let capture = redirect_capture_path();
+    let cache_dir = capture.parent().unwrap_or(std::path::Path::new("/tmp"));
+    if let Err(e) = std::fs::create_dir_all(cache_dir) {
+        log::warn!("xal_browser: create_dir_all {} failed: {}", cache_dir.display(), e);
+        return;
+    }
+    let script = cache_dir.join("xal-redirect.sh");
+    let script_body = format!(
+        "#!/bin/bash\nexec >/dev/null 2>&1\nprintf '%s' \"$1\" > \"{}\"\n",
+        capture.display()
+    );
+    if std::fs::write(&script, script_body).is_ok() {
+        let _ = std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755));
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let apps_dir = std::path::PathBuf::from(home).join(".local/share/applications");
+    if std::fs::create_dir_all(&apps_dir).is_err() {
+        return;
+    }
+    let desktop = apps_dir.join("minecraft-xal-redirect.desktop");
+    let desktop_body = format!(
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Minecraft XAL Redirect\nExec=\"{}\" %u\nMimeType=x-scheme-handler/{};\n",
+        script.display(),
+        REDIRECT_SCHEME
+    );
+    if std::fs::write(&desktop, desktop_body).is_ok() {
+        let _ = std::process::Command::new("xdg-mime")
+            .args([
+                "default",
+                "minecraft-xal-redirect.desktop",
+                &format!("x-scheme-handler/{}", REDIRECT_SCHEME),
+            ])
+            .output();
+        let _ = std::process::Command::new("update-desktop-database")
+            .arg(&apps_dir)
+            .output();
+    }
+    if script.exists() && desktop.exists() {
+        log::info!(
+            "xal_browser: installed redirect handler {} -> {}",
+            desktop.display(),
+            script.display()
+        );
+    }
+}
+
+/// Present the sign-in URL in the system browser, then wait for the flow to
+/// complete:
+///  - the browser redirects to `ms-xal-0000000048183522://auth?...` (captured
+///    by the handler script into the capture file), and
+///  - a manual paste of the redirect URL into stdin if it is a TTY.
+/// Blocking the game thread for the duration is acceptable: this mirrors the
+/// synchronous webview flow XAL expects.
 fn cli_browser_flow(start: &str) -> Option<String> {
     eprintln!();
     eprintln!("===== Minecraft sign-in required =====");
     eprintln!("Sign in by visiting:");
     eprintln!("  {}", start);
-    let _ = std::process::Command::new("xdg-open")
-        .arg(start)
-        .spawn()
-        .and_then(|mut c| c.wait())
-        .map(|_| ());
-    eprintln!("After signing in, paste the final redirect URL here and press Enter");
-    eprintln!("(empty line cancels):");
+    ensure_redirect_handler();
+    // Clear any stale capture from a previous attempt.
+    let _ = std::fs::remove_file(redirect_capture_path());
+    let _ = std::process::Command::new("xdg-open").arg(start).spawn();
+    eprintln!("Waiting for sign-in to complete in the browser…");
+    eprintln!("If the browser shows “No apps installed that can open ms-xal-…”,");
+    eprintln!("copy the full ms-xal-… URL from the address bar and paste it here:");
     eprintln!("------------------------------------");
-    use std::io::{BufRead, BufReader};
-    let mut line = String::new();
-    let mut stdin = BufReader::new(std::io::stdin());
-    if stdin.read_line(&mut line).is_err() {
-        return None;
+
+    use std::io::{BufRead, BufReader, IsTerminal};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let stdin_reader = std::io::stdin();
+    let capture = redirect_capture_path();
+    let (tx, rx) = mpsc::channel::<Option<String>>();
+    if stdin_reader.is_terminal() {
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            if BufReader::new(std::io::stdin()).read_line(&mut line).is_ok() {
+                let out = line.trim().to_string();
+                let _ = tx.send(if out.is_empty() { None } else { Some(out) });
+            } else {
+                let _ = tx.send(None);
+            }
+        });
     }
-    let out = line.trim().to_string();
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
+
+    let deadline = Instant::now() + Duration::from_secs(600);
+    loop {
+        if let Ok(content) = std::fs::read_to_string(&capture) {
+            let out = content.trim().to_string();
+            if !out.is_empty() {
+                let _ = std::fs::remove_file(&capture);
+                return Some(out);
+            }
+        }
+        if stdin_reader.is_terminal() {
+            if let Ok(msg) = rx.recv_timeout(Duration::from_millis(250)) {
+                return match msg {
+                    Some(u) => Some(u),
+                    None => None,
+                };
+            }
+        }
+        if Instant::now() >= deadline {
+            log::warn!("xal_browser: sign-in flow timed out after 600s");
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 

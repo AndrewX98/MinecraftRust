@@ -1368,7 +1368,7 @@ mod certificate {
 mod ecdsa_impl {
     use libjnivm_sys::*;
     use p256::{
-        ecdsa::{SigningKey, Signature, signature::Signer},
+        ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner},
         EncodedPoint,
     };
     use rand_core::OsRng;
@@ -1568,10 +1568,20 @@ mod ecdsa_impl {
             Some(f) => f(env, data as jarray),
             None => return std::ptr::null_mut(),
         };
-        let msg = std::slice::from_raw_parts(elems as *const u8, len as usize);
-        let sig: Signature = sk.sign(msg);
+let msg = std::slice::from_raw_parts(elems as *const u8, len as usize);
+    // XAL passes the already-SHA-256'd digest here (its Java Ecdsa uses
+    // Signature("NONEwithECDSA")): sign the pre-hash directly. Using the
+    // hashing variant would double-hash and fail server-side PoP verification.
+    let sig: Signature = match sk.sign_prehash(msg) {
+        Ok(s) => s,
+        Err(_) => {
+            log::warn!("ecdsa: sign_prehash failed this={:p}", this);
+            return std::ptr::null_mut();
+        }
+    };
         // Fixed 64-byte r||s (P-256 field size), matching OpenSSL BN_bn2binpad path.
         let sig_bytes = sig.to_bytes();
+        log::debug!("ecdsa: sign called data_len={} sig_len={} first16={:02x?}", len, sig_bytes.len(), &sig_bytes[..16.min(sig_bytes.len())]);
         if let Some(f) = (*iface).ReleaseByteArrayElements {
             f(env, data, elems, 0);
         }
@@ -1843,6 +1853,11 @@ mod ecdsa_impl {
                 },
                 JNINativeMethod {
                     name: b"sign\0".as_ptr() as *const c_char,
+                    signature: b"([B)[B\0".as_ptr() as *const c_char,
+                    fnPtr: ecdsa_sign as *mut c_void,
+                },
+                JNINativeMethod {
+                    name: b"hashAndSign\0".as_ptr() as *const c_char,
                     signature: b"([B)[B\0".as_ptr() as *const c_char,
                     fnPtr: ecdsa_sign as *mut c_void,
                 },
