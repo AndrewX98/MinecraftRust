@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.arch }}
 
@@ -53,6 +53,6 @@ jobs:
             libegl1-mesa-dev libcurl4-openssl-dev libssl-dev libsdl2-dev \
             libudev-dev libpng-dev libevdev-dev
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
       - name: Build (debug)
         run: cargo build -p client
