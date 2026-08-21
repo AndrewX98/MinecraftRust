@@ -119,10 +119,10 @@ What remains:
 | Tier | Method | What it proves |
 |------|--------|----------------|
 | 1 | `cargo check --target {aarch64,x86_64}-apple-darwin` locally | type/API portability, fast iteration (~free) |
-| 2 | GitHub Actions `macos-{15,13}` runners (repo is on GitHub: `AndrewX98/MinecraftRust`) | full build+link on real Apple toolchain |
-| 2b | CI smoke run: launch headless-ish, then `screencapture shot.png` + upload artifact — macOS runners expose a real GUI session, so the window renders (Intel runners fall back to Apple Software Renderer, GL 4.1 core — enough for the desktop-GL menu path) | you literally *see* the main menu as a CI artifact |
+| 2 | GitHub Actions `macos-15` runner (M1): release build of both arches + smoke launch (`MCPELAUNCHER_SMOKE_SECS`, log artifact) | full build+link on real Apple toolchain; boot integrity through linker/hooks |
+| 2x | ~~CI screenshots~~ **not viable**: the virtualized M1 runners expose no OpenGL renderer (`NSGL: Failed to find a suitable pixel format` for every context version incl. legacy) — verified empirically, run logs 2026-08-21 | — |
 | 3 | `sickcodes/docker-osx` QEMU/KVM VM locally | interactive screen, but software-GL only (no Metal in a VM), slow, and against Apple's EULA on non-Apple hardware |
-| 4 | any real/borrowed Mac (Screen Sharing/VNC from Remmina) | final validation incl. Metal/ANGLE |
+| 4 | any real/borrowed Mac (Screen Sharing/VNC from Remmina) | final validation incl. rendering — the only way to see the game draw |
 
 Practical loop while developing: Tier 1 for code, Tier 2b for eyes-on.
 
