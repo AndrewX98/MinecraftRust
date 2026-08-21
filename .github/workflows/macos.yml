@@ -49,28 +49,20 @@ jobs:
       - name: Build (release)
         run: cargo build -p client --release --target ${{ matrix.arch }}
 
-      # arm64 only: run the launcher with no game files — window creation
-      # happens before libminecraftpe load, so this proves Cocoa/GLFW/GL work
-      - name: Smoke run + screenshot
+      # arm64 only: boot-integrity check — launcher must reach the window stage
+      # (linker init, stub libs, hooks) without crashing. No game files needed.
+      # NOTE: GL contexts cannot be created on these virtualized runners
+      # (no renderer exposed to NSGL), so no screenshots here — visual testing
+      # requires real hardware (docs/PORT_MACOS.md, Testing from Linux).
+      - name: Smoke run (boot check)
         if: matrix.march == 'arm64'
         run: |
           DYLD_LIBRARY_PATH=/usr/local/lib RUST_LOG=info \
-            MCPELAUNCHER_SMOKE_SECS=12 \
+            MCPELAUNCHER_SMOKE_SECS=6 \
             ./target/aarch64-apple-darwin/release/client -dg /tmp/no-game-dir \
             2>&1 | tee $RUNNER_TEMP/client.log &
-          APP_PID=$!
-          sleep 6
-          screencapture -x "$RUNNER_TEMP/smoke.png" || true
-          wait $APP_PID || true
-        shell: bash
-
-      - name: Upload screenshot
-        if: matrix.march == 'arm64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-screenshot-arm64
-          path: ${{ runner.temp }}/smoke.png
-          if-no-files-found: warn
+          wait $! || true
+          grep -q "SMOKE: done" $RUNNER_TEMP/client.log
 
       - name: Upload client log
         if: matrix.march == 'arm64'
