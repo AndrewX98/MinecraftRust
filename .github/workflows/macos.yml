@@ -31,9 +31,6 @@ jobs:
         with:
           targets: ${{ matrix.arch }}
 
-      - name: Build (debug)
-        run: cargo build -p client --target ${{ matrix.arch }}
-
       - name: Build (release)
         run: cargo build -p client --release --target ${{ matrix.arch }}
 
