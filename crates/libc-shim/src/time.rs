@@ -37,7 +37,11 @@ pub unsafe extern "C" fn ctime_r(t: *const libc::time_t, buf: *mut c_char) -> *m
 pub unsafe extern "C" fn tzset() { libc_tzset(); }
 pub unsafe extern "C" fn nanosleep(req: *const libc::timespec, rem: *mut libc::timespec) -> i32 { libc::nanosleep(req, rem) }
 pub unsafe extern "C" fn gettimeofday(tv: *mut libc::timeval, tz: *mut std::ffi::c_void) -> i32 {
-    libc::gettimeofday(tv, tz as *mut libc::timezone)
+    #[cfg(not(target_os = "macos"))]
+    { libc::gettimeofday(tv, tz as *mut libc::timezone) }
+    // macOS takes a `void *` here (struct __timezone44 is not exported)
+    #[cfg(target_os = "macos")]
+    { libc::gettimeofday(tv, tz) }
 }
 pub unsafe extern "C" fn clock_gettime(clock_id: u32, tp: *mut libc::timespec) -> i32 { libc::clock_gettime(clock_id as libc::clockid_t, tp) }
 pub unsafe extern "C" fn clock_getres(clock_id: u32, tp: *mut libc::timespec) -> i32 { libc::clock_getres(clock_id as libc::clockid_t, tp) }

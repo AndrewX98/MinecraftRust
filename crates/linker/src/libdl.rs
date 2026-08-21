@@ -123,9 +123,24 @@ unsafe fn dladdr_impl(
     }
 }
 
+// bionic `Dl_phdr_info` layout — defined locally because the host libc may not
+// provide it (macOS has no ELF program headers); we emulate the Android linker
+// API over the ELF libraries we loaded ourselves.
+#[repr(C)]
+pub struct dl_phdr_info {
+    pub dlpi_addr: u64,
+    pub dlpi_name: *const c_char,
+    pub dlpi_phdr: *const std::ffi::c_void,
+    pub dlpi_phnum: u16,
+    pub dlpi_adds: u64,
+    pub dlpi_subs: u64,
+    pub dlpi_tls_modid: usize,
+    pub dlpi_tls_data: *mut std::ffi::c_void,
+}
+
 unsafe fn dl_iterate_phdr_impl(
     callback: Option<
-        unsafe extern "C" fn(info: *mut libc::dl_phdr_info, size: usize, data: *mut std::ffi::c_void) -> i32,
+        unsafe extern "C" fn(info: *mut dl_phdr_info, size: usize, data: *mut std::ffi::c_void) -> i32,
     >,
     data: *mut std::ffi::c_void,
 ) -> i32 {
@@ -136,8 +151,8 @@ unsafe fn dl_iterate_phdr_impl(
     let state = crate::STATE.read().unwrap();
     for (_handle, lib) in &state.libraries_by_handle {
         let name = CString::new(lib.soinfo.soname.clone()).unwrap_or_default();
-        let mut info = libc::dl_phdr_info {
-            dlpi_addr: lib.soinfo.base as libc::Elf64_Addr,
+        let mut info = dl_phdr_info {
+            dlpi_addr: lib.soinfo.base as u64,
             dlpi_name: name.as_ptr(),
             dlpi_phdr: ptr::null(),
             dlpi_phnum: 0,
@@ -146,7 +161,7 @@ unsafe fn dl_iterate_phdr_impl(
             dlpi_tls_modid: 0,
             dlpi_tls_data: ptr::null_mut(),
         };
-        let ret = cb(&mut info as *mut libc::dl_phdr_info, size_of::<libc::dl_phdr_info>(), data);
+        let ret = cb(&mut info as *mut dl_phdr_info, size_of::<dl_phdr_info>(), data);
         if ret != 0 {
             return ret;
         }

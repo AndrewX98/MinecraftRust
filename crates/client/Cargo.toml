@@ -16,10 +16,8 @@ minecraft-imported-symbols = { path = "../minecraft-imported-symbols" }
 util = { path = "../util" }
 apkinfo = { path = "../apkinfo" }
 libjnivm-sys = { path = "../libjnivm-sys" }
-x11 = "2.21"
 p256 = { version = "0.13", features = ["ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
-cpal = "0.15"
 reqwest = { version = "0.11", features = ["blocking"] }
 tungstenite = "0.21"
 url = "2"
@@ -30,6 +28,12 @@ msa-daemon-client = { path = "../msa-daemon-client" }
 cll-telemetry = { path = "../cll-telemetry" }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "process", "fs", "sync", "io-util", "net"] }
+
+# X11 is only used by the Linux eglut backend (macOS uses platform/macos/*);
+# cpal's macOS backend needs the Apple SDK, so it is also target-gated
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+x11 = "2.21"
+cpal = "0.15"
 
 [lints]
 workspace = true

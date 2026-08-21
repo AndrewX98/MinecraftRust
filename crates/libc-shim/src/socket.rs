@@ -33,7 +33,17 @@ pub unsafe extern "C" fn getnameinfo(addr: *const libc::sockaddr, addrlen: u32, 
 }
 pub unsafe extern "C" fn if_nametoindex(ifname: *const c_char) -> u32 { libc::if_nametoindex(ifname) }
 pub unsafe extern "C" fn if_indextoname(ifindex: u32, ifname: *mut c_char) -> *mut c_char { libc::if_indextoname(ifindex, ifname) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn sendfile(out_fd: i32, in_fd: i32, offset: *mut i64, count: usize) -> isize { libc::sendfile(out_fd, in_fd, offset, count) }
+// macOS signature: sendfile(fd, s, offset, *len, hdtr, flags) — len is in/out
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn sendfile(out_fd: i32, in_fd: i32, offset: *mut i64, count: usize) -> isize {
+    let mut len: libc::off_t = count as libc::off_t;
+    let off = if offset.is_null() { 0 } else { *offset as libc::off_t };
+    let r = libc::sendfile(in_fd, out_fd, off, &mut len, std::ptr::null_mut(), 0);
+    if !offset.is_null() && len > 0 { *offset += len; }
+    if r != 0 && len == 0 { -1 } else { len as isize }
+}
 pub unsafe extern "C" fn inet_pton(af: i32, src: *const c_char, dst: *mut std::ffi::c_void) -> i32 {
     extern "C" { fn inet_pton(af: i32, src: *const c_char, dst: *mut std::ffi::c_void) -> i32; }
     inet_pton(af, src, dst)

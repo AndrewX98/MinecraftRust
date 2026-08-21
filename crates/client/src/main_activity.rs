@@ -292,14 +292,14 @@ fn statvfs_space(path: &str, field_fn: fn(&libc::statvfs) -> u64) -> jlong {
 
 unsafe extern "C" fn get_total_space(env: *mut JNIEnv, _self: jobject, path: jstring) -> jlong {
     let path_str = get_jstring_content(env, path).unwrap_or_default();
-    let val = statvfs_space(&path_str, |s| s.f_blocks);
+    let val = statvfs_space(&path_str, |s| s.f_blocks as u64);
     log::info!("MainActivity: getTotalSpace({}) -> {}", path_str, val);
     val
 }
 
 unsafe extern "C" fn get_usable_space(env: *mut JNIEnv, _self: jobject, path: jstring) -> jlong {
     let path_str = get_jstring_content(env, path).unwrap_or_default();
-    let val = statvfs_space(&path_str, |s| s.f_bavail);
+    let val = statvfs_space(&path_str, |s| s.f_bavail as u64);
     log::info!("MainActivity: getUsableSpace({}) -> {}", path_str, val);
     val
 }

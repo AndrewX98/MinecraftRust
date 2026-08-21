@@ -135,9 +135,28 @@ pub unsafe extern "C" fn __cxa_thread_finalize() {
 }
 
 // thread ID
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn gettid() -> i32 { libc::syscall(libc::SYS_gettid) as i32 }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn gettid() -> i32 {
+    let mut tid: u64 = 0;
+    if libc::pthread_threadid_np(libc::pthread_self(), &mut tid) == 0 { tid as i32 } else { -1 }
+}
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn getrandom(buf: *mut std::ffi::c_void, len: usize, _flags: u32) -> isize {
     libc::syscall(libc::SYS_getrandom, buf, len, 0u32) as isize
+}
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn getrandom(buf: *mut std::ffi::c_void, len: usize, _flags: u32) -> isize {
+    let mut remaining = len;
+    let mut ptr = buf as *mut u8;
+    while remaining > 0 {
+        let chunk = remaining.min(256);
+        if libc::getentropy(ptr as *mut std::ffi::c_void, chunk) != 0 { return -1; }
+        ptr = ptr.add(chunk);
+        remaining -= chunk;
+    }
+    len as isize
 }
 pub unsafe extern "C" fn arc4random_buf(buf: *mut std::ffi::c_void, len: usize) {
     getrandom(buf, len, 0);
@@ -172,19 +191,56 @@ pub unsafe extern "C" fn dladdr(addr: *const std::ffi::c_void, info: *mut libc::
 pub unsafe extern "C" fn fnmatch(pattern: *const c_char, string: *const c_char, flags: i32) -> i32 { libc::fnmatch(pattern, string, flags) }
 
 // epoll
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn epoll_create(size: i32) -> i32 { libc::epoll_create(size) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn epoll_create1(flags: i32) -> i32 { libc::epoll_create1(flags) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *mut libc::epoll_event) -> i32 { libc::epoll_ctl(epfd, op, fd, event) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn epoll_wait(epfd: i32, events: *mut libc::epoll_event, maxevents: i32, timeout: i32) -> i32 { libc::epoll_wait(epfd, events, maxevents, timeout) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn epoll_create(size: i32) -> i32 { crate::epoll_kqueue::epoll_create_impl(size) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn epoll_create1(flags: i32) -> i32 { crate::epoll_kqueue::epoll_create1_impl(flags) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *mut crate::epoll_kqueue::epoll_event) -> i32 { crate::epoll_kqueue::epoll_ctl_impl(epfd, op, fd, event) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn epoll_wait(epfd: i32, events: *mut crate::epoll_kqueue::epoll_event, maxevents: i32, timeout: i32) -> i32 { crate::epoll_kqueue::epoll_wait_impl(epfd, events, maxevents, timeout) }
 
-// eventfd
+// eventfd (upstream epoll-shim stubs this as -1 on macOS)
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn eventfd(initval: u32, flags: i32) -> i32 { libc::eventfd(initval, flags) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn eventfd(_initval: u32, _flags: i32) -> i32 {
+    crate::errno::__set_errno(libc::ENOSYS);
+    -1
+}
 
 // semaphore
 pub unsafe extern "C" fn sem_init(sem: *mut libc::sem_t, pshared: i32, value: u32) -> i32 { libc::sem_init(sem, pshared, value) }
 pub unsafe extern "C" fn sem_destroy(sem: *mut libc::sem_t) -> i32 { libc::sem_destroy(sem) }
 pub unsafe extern "C" fn sem_wait(sem: *mut libc::sem_t) -> i32 { libc::sem_wait(sem) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn sem_timedwait(sem: *mut libc::sem_t, abs_timeout: *const libc::timespec) -> i32 { libc::sem_timedwait(sem, abs_timeout) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn sem_timedwait(sem: *mut libc::sem_t, abs_timeout: *const libc::timespec) -> i32 {
+    let mut now: libc::timespec = std::mem::zeroed();
+    if libc::clock_gettime(libc::CLOCK_REALTIME, &mut now) != 0 { return -1; }
+    let deadline_ns = (*abs_timeout).tv_sec as i128 * 1_000_000_000 + (*abs_timeout).tv_nsec as i128;
+    let now_ns = now.tv_sec as i128 * 1_000_000_000 + now.tv_nsec as i128;
+    loop {
+        if libc::sem_trywait(sem) == 0 { return 0; }
+        if *crate::errno::host_errno_location() != libc::EAGAIN { return -1; }
+        let mut cur: libc::timespec = std::mem::zeroed();
+        if libc::clock_gettime(libc::CLOCK_REALTIME, &mut cur) != 0 { return -1; }
+        let cur_ns = cur.tv_sec as i128 * 1_000_000_000 + cur.tv_nsec as i128;
+        if cur_ns >= deadline_ns { return -1; }
+        let sleep = ((deadline_ns - cur_ns).min(2_000_000) as u64).max(50_000);
+        let req = libc::timespec { tv_sec: (sleep / 1_000_000_000) as _, tv_nsec: (sleep % 1_000_000_000) as _ };
+        libc::nanosleep(&req, std::ptr::null_mut());
+    }
+}
 pub unsafe extern "C" fn sem_post(sem: *mut libc::sem_t) -> i32 { libc::sem_post(sem) }
 
 // sysconf
@@ -220,8 +276,12 @@ pub unsafe extern "C" fn sysconf(name: i32) -> i64 {
         0x004f => libc::_SC_THREADS, 0x0050 => libc::_SC_THREAD_ATTR_STACKADDR,
         0x0051 => libc::_SC_THREAD_ATTR_STACKSIZE, 0x0052 => libc::_SC_THREAD_PRIORITY_SCHEDULING,
         0x0053 => libc::_SC_THREAD_PRIO_INHERIT, 0x0054 => libc::_SC_THREAD_PRIO_PROTECT,
-        0x0055 => libc::_SC_THREAD_SAFE_FUNCTIONS, 0x0060 => libc::_SC_NPROCESSORS_CONF,
-        0x0061 => libc::_SC_NPROCESSORS_ONLN, 0x0062 => libc::_SC_PHYS_PAGES, 0x0063 => libc::_SC_AVPHYS_PAGES,
+        0x0055 => libc::_SC_THREAD_SAFE_FUNCTIONS,         0x0060 => libc::_SC_NPROCESSORS_CONF,
+        0x0061 => libc::_SC_NPROCESSORS_ONLN, 0x0062 => libc::_SC_PHYS_PAGES,
+        #[cfg(not(target_os = "macos"))]
+        0x0063 => libc::_SC_AVPHYS_PAGES,
+        #[cfg(target_os = "macos")]
+        0x0063 => { return 0; }
         0x0064 => libc::_SC_MONOTONIC_CLOCK, _ => return -1,
     };
     libc::sysconf(host_id)
@@ -239,36 +299,51 @@ pub unsafe extern "C" fn __system_property_read_callback(_pi: *const std::ffi::c
 
 // misc forwards
 pub unsafe extern "C" fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32 { libc::waitpid(pid, status, options) }
-pub unsafe extern "C" fn chmod(path: *const c_char, mode: u32) -> i32 { libc::chmod(path, mode) }
-pub unsafe extern "C" fn fchmod(fd: i32, mode: u32) -> i32 { libc::fchmod(fd, mode) }
-pub unsafe extern "C" fn fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: i32) -> i32 { libc::fchmodat(dirfd, path, mode, flags) }
-pub unsafe extern "C" fn umask(mask: u32) -> u32 { libc::umask(mask) }
+pub unsafe extern "C" fn chmod(path: *const c_char, mode: u32) -> i32 { libc::chmod(path, mode as libc::mode_t) }
+pub unsafe extern "C" fn fchmod(fd: i32, mode: u32) -> i32 { libc::fchmod(fd, mode as libc::mode_t) }
+pub unsafe extern "C" fn fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: i32) -> i32 { libc::fchmodat(dirfd, path, mode as libc::mode_t, flags) }
+pub unsafe extern "C" fn umask(mask: u32) -> u32 { libc::umask(mask as libc::mode_t) as u32 }
 pub unsafe extern "C" fn select(nfds: i32, readfds: *mut libc::fd_set, writefds: *mut libc::fd_set, exceptfds: *mut libc::fd_set, timeout: *mut libc::timeval) -> i32 { libc::select(nfds, readfds, writefds, exceptfds, timeout) }
 pub unsafe extern "C" fn ioctl(fd: i32, request: u64) -> i32 { libc::ioctl(fd, request) }
 pub unsafe extern "C" fn fcntl(fd: i32, cmd: i32) -> i32 { libc::fcntl(fd, cmd) }
 pub unsafe extern "C" fn poll(fds: *mut libc::pollfd, nfds: u64, timeout: i32) -> i32 { libc::poll(fds, nfds as libc::nfds_t, timeout) }
-pub unsafe extern "C" fn getrlimit(resource: u32, rlim: *mut libc::rlimit) -> i32 { libc::getrlimit(resource, rlim) }
-pub unsafe extern "C" fn setrlimit(resource: u32, rlim: *const libc::rlimit) -> i32 { libc::setrlimit(resource, rlim) }
+pub unsafe extern "C" fn getrlimit(resource: u32, rlim: *mut libc::rlimit) -> i32 { libc::getrlimit(resource as _, rlim) }
+pub unsafe extern "C" fn setrlimit(resource: u32, rlim: *const libc::rlimit) -> i32 { libc::setrlimit(resource as _, rlim) }
 pub unsafe extern "C" fn getrusage(who: i32, usage: *mut libc::rusage) -> i32 { libc::getrusage(who, usage) }
-pub unsafe extern "C" fn getpriority(which: u32, who: u32) -> i32 { libc::getpriority(which, who) }
-pub unsafe extern "C" fn setpriority(which: u32, who: u32, prio: i32) -> i32 { libc::setpriority(which, who, prio) }
+pub unsafe extern "C" fn getpriority(which: u32, who: u32) -> i32 { libc::getpriority(which as _, who as _) }
+pub unsafe extern "C" fn setpriority(which: u32, who: u32, prio: i32) -> i32 { libc::setpriority(which as _, who as _, prio) }
 pub unsafe extern "C" fn sched_yield() -> i32 { libc::sched_yield() }
 pub unsafe extern "C" fn sched_get_priority_min(policy: i32) -> i32 { libc::sched_get_priority_min(policy) }
 pub unsafe extern "C" fn sched_get_priority_max(policy: i32) -> i32 { libc::sched_get_priority_max(policy) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn sched_setaffinity(pid: i32, cpusetsize: usize, mask: *const libc::cpu_set_t) -> i32 { libc::sched_setaffinity(pid, cpusetsize, mask) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn sched_getaffinity(pid: i32, cpusetsize: usize, mask: *mut libc::cpu_set_t) -> i32 { libc::sched_getaffinity(pid, cpusetsize, mask) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn sched_setaffinity(_pid: i32, _cpusetsize: usize, _mask: *const std::ffi::c_void) -> i32 { 0 }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn sched_getaffinity(_pid: i32, cpusetsize: usize, mask: *mut std::ffi::c_void) -> i32 {
+    if !mask.is_null() && cpusetsize > 0 { std::ptr::write_bytes(mask as *mut u8, 0xff, cpusetsize); }
+    cpusetsize as i32
+}
 pub unsafe extern "C" fn openlog(ident: *const c_char, option: i32, facility: i32) { libc::openlog(ident, option, facility); }
 pub unsafe extern "C" fn closelog() { libc::closelog(); }
 pub unsafe extern "C" fn syslog(priority: i32, fmt: *const c_char) { libc::syslog(priority, fmt); }
 pub unsafe extern "C" fn uname(buf: *mut libc::utsname) -> i32 { libc::uname(buf) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn prctl(option: i32, a2: usize, a3: usize, a4: usize, a5: usize) -> i32 { libc::prctl(option, a2, a3, a4, a5) }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn prctl(_option: i32, _a2: usize, _a3: usize, _a4: usize, _a5: usize) -> i32 { 0 }
 pub unsafe extern "C" fn lockf(fd: i32, cmd: i32, len: i64) -> i32 { libc::lockf(fd, cmd, len) }
 pub unsafe extern "C" fn swab(src: *const std::ffi::c_void, dst: *mut std::ffi::c_void, nbytes: isize) {
     extern "C" { fn swab(src: *const std::ffi::c_void, dst: *mut std::ffi::c_void, nbytes: isize); }
     swab(src, dst, nbytes)
 }
 pub unsafe extern "C" fn pathconf(path: *const c_char, name: i32) -> i64 { libc::pathconf(path, name) }
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn getauxval(type_: u64) -> usize { libc::getauxval(type_) as usize }
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn getauxval(_type_: u64) -> usize { 0 }
 pub unsafe extern "C" fn tcgetattr(fd: i32, termios: *mut libc::termios) -> i32 { libc::tcgetattr(fd, termios) }
 pub unsafe extern "C" fn tcsetattr(fd: i32, opt: i32, termios: *const libc::termios) -> i32 { libc::tcsetattr(fd, opt, termios) }
 pub unsafe extern "C" fn getpwuid_r(uid: u32, pwd: *mut libc::passwd, buf: *mut c_char, buflen: usize, result: *mut *mut libc::passwd) -> i32 { libc::getpwuid_r(uid, pwd, buf, buflen, result) }
@@ -334,7 +409,16 @@ pub unsafe extern "C" fn __udivdi3(a: u64, b: u64) -> u64 { a / b }
 pub unsafe extern "C" fn __umoddi3(a: u64, b: u64) -> u64 { a % b }
 
 // mallinfo
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn mallinfo() -> libc::mallinfo { std::mem::zeroed() }
+#[cfg(target_os = "macos")]
+#[repr(C)]
+pub struct mallinfo {
+    pub arena: i32, pub ordblks: i32, pub smblks: i32, pub hblks: i32, pub hblkhd: i32,
+    pub usmblks: i32, pub fsmblks: i32, pub uordblks: i32, pub fordblks: i32, pub keepcost: i32,
+}
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn mallinfo() -> mallinfo { std::mem::zeroed() }
 
 // FD_CHK
 pub unsafe extern "C" fn __FD_CLR_chk(fd: i32, set: *mut libc::fd_set, _nfds: usize) { libc::FD_CLR(fd, set); }

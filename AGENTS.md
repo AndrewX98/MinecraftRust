@@ -95,6 +95,7 @@ All in `docs/`:
 - `PORT_FAKE_LOOPER.md` — phased plan (FakeLooper + WindowCallbacks + FakeInputQueue + CorePatches → Rust)
 - `PORT_JNI_SUPPORT.md` — 5-phase plan to delete the FakeJni/Baron chain (run game on the Rust `libjnivm-sys` VM, ~5,500 lines)
 - `ROADMAP_TO_FULL_RUST.md` — milestones 1–6 to zero C++ compilation (jni_support → http → dead stubs → live shims → variadic.c → drop cc)
+- `PORT_MACOS.md` — phased plan for macOS support (Cocoa/GLFW windowing, kqueue shim, CI matrix, testing from Linux)
 
 ## Porting (if adding Rust code)
 

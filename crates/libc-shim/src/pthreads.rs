@@ -121,7 +121,11 @@ pub fn to_host_clock_type(ct: clock_type) -> libc::clockid_t {
     match ct {
         clock_type::REALTIME => libc::CLOCK_REALTIME,
         clock_type::MONOTONIC => libc::CLOCK_MONOTONIC,
+        // macOS has no CLOCK_BOOTTIME; CLOCK_MONOTONIC is the closest match
+        #[cfg(not(target_os = "macos"))]
         clock_type::BOOTTIME => libc::CLOCK_BOOTTIME,
+        #[cfg(target_os = "macos")]
+        clock_type::BOOTTIME => libc::CLOCK_MONOTONIC,
     }
 }
 
@@ -226,6 +230,7 @@ pub unsafe extern "C" fn pthread_getschedparam(
     ret as i32
 }
 
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn pthread_getattr_np(thread: libc::pthread_t, attr: *mut bionic_pthread_attr_t) -> i32 {
     let mut host_attr: libc::pthread_attr_t = std::mem::zeroed();
     let ret = libc::pthread_getattr_np(thread, &mut host_attr);
@@ -243,6 +248,27 @@ pub unsafe extern "C" fn pthread_getattr_np(thread: libc::pthread_t, attr: *mut 
     (*attr).stack_base = stackaddr;
     (*attr).stack_size = stacksize;
     libc::pthread_attr_destroy(&mut host_attr);
+    0
+}
+
+// macOS has no pthread_getattr_np; query the thread directly instead
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn pthread_getattr_np(thread: libc::pthread_t, attr: *mut bionic_pthread_attr_t) -> i32 {
+    if thread == 0 { return libc::ESRCH; }
+    std::ptr::write(attr, bionic_pthread_attr_t {
+        flags: 0,
+        stack_base: libc::pthread_get_stackaddr_np(thread),
+        stack_size: libc::pthread_get_stacksize_np(thread),
+        guard_size: 0,
+        sched_policy: 0,
+        sched_priority: 0,
+        __padding: [0; 4],
+    });
+    let mut hpolicy: i32 = 0;
+    let mut hparam: libc::sched_param = std::mem::zeroed();
+    if libc::pthread_getschedparam(thread, &mut hpolicy, &mut hparam) == 0 {
+        (*attr).sched_priority = hparam.sched_priority;
+    }
     0
 }
 
@@ -301,7 +327,13 @@ pub unsafe extern "C" fn pthread_attr_getstacksize(attr: *const bionic_pthread_a
 }
 
 pub unsafe extern "C" fn pthread_setname_np(thread: libc::pthread_t, name: *const std::ffi::c_char) -> i32 {
-    libc::pthread_setname_np(thread, name)
+    #[cfg(not(target_os = "macos"))]
+    { libc::pthread_setname_np(thread, name) }
+    // macOS can only rename the calling thread
+    #[cfg(target_os = "macos")]
+    {
+        if thread == libc::pthread_self() { libc::pthread_setname_np(name) } else { 0 }
+    }
 }
 
 // ── mutex ──
@@ -370,10 +402,13 @@ pub unsafe extern "C" fn pthread_mutexattr_gettype(attr: *const bionic_pthread_m
 pub unsafe extern "C" fn pthread_cond_init(c: *mut bionic_pthread_cond_t, attr: *const bionic_pthread_condattr_t) -> i32 {
     let host = libc::malloc(std::mem::size_of::<libc::pthread_cond_t>()) as *mut libc::pthread_cond_t;
     if host.is_null() { return libc::ENOMEM; }
+    // bionic clock values: 0=REALTIME, 1=MONOTONIC, 7=BOOTTIME; macOS has no
+    // pthread_condattr_setclock so the clock attribute is ignored there
+    #[cfg(not(target_os = "macos"))]
     let ret = if !attr.is_null() && attr.read().clock != 0 {
+        let ct = if attr.read().clock == 7 { libc::CLOCK_BOOTTIME } else if attr.read().clock == 1 { libc::CLOCK_MONOTONIC } else { libc::CLOCK_REALTIME };
         let mut host_attr: libc::pthread_condattr_t = std::mem::zeroed();
         libc::pthread_condattr_init(&mut host_attr);
-        let ct = if attr.read().clock == 7 { libc::CLOCK_BOOTTIME } else if attr.read().clock == 1 { libc::CLOCK_MONOTONIC } else { libc::CLOCK_REALTIME };
         libc::pthread_condattr_setclock(&mut host_attr, ct);
         let r = libc::pthread_cond_init(host, &host_attr);
         libc::pthread_condattr_destroy(&mut host_attr);
@@ -381,6 +416,8 @@ pub unsafe extern "C" fn pthread_cond_init(c: *mut bionic_pthread_cond_t, attr: 
     } else {
         libc::pthread_cond_init(host, std::ptr::null())
     };
+    #[cfg(target_os = "macos")]
+    let ret = libc::pthread_cond_init(host, std::ptr::null());
     if ret != 0 { libc::free(host as *mut c_void); return ret as i32; }
     store_payload(c, host as usize);
     0

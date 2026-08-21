@@ -83,7 +83,7 @@ pub unsafe extern "C" fn shim_syscall(number: c_long, mut args: ...) -> c_long {
     let a4 = unsafe { args.next_arg::<c_long>() };
     let a5 = unsafe { args.next_arg::<c_long>() };
     let a6 = unsafe { args.next_arg::<c_long>() };
-    libc::syscall(number, a1, a2, a3, a4, a5, a6)
+    libc::syscall(number as _, a1, a2, a3, a4, a5, a6) as c_long
 }
 
 pub unsafe extern "C" fn shim_fprintf(fp: *mut BionicFile, fmt: *const c_char, mut args: ...) -> c_int {

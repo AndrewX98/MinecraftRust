@@ -21,6 +21,8 @@ pub mod dir;
 pub mod data;
 pub mod file;
 pub mod misc;
+#[cfg(target_os = "macos")]
+pub mod epoll_kqueue;
 pub mod path_rewrite;
 pub mod variadic;
 

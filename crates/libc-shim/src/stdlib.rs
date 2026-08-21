@@ -2,6 +2,7 @@
 
 use std::ffi::{c_char, c_void};
 use crate::errno::__errno;
+use crate::errno::host_errno_location;
 
 pub unsafe extern "C" fn atexit(func: Option<extern "C" fn()>) -> i32 {
     match func {
@@ -28,19 +29,19 @@ pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
 
 pub unsafe extern "C" fn putenv(string: *mut c_char) -> i32 {
     let r = libc::putenv(string);
-    if r != 0 { *__errno() = *libc::__errno_location(); }
+    if r != 0 { *__errno() = *host_errno_location(); }
     r
 }
 
 pub unsafe extern "C" fn setenv(name: *const c_char, value: *const c_char, overwrite: i32) -> i32 {
     let r = libc::setenv(name, value, overwrite);
-    if r != 0 { *__errno() = *libc::__errno_location(); }
+    if r != 0 { *__errno() = *host_errno_location(); }
     r
 }
 
 pub unsafe extern "C" fn unsetenv(name: *const c_char) -> i32 {
     let r = libc::unsetenv(name);
-    if r != 0 { *__errno() = *libc::__errno_location(); }
+    if r != 0 { *__errno() = *host_errno_location(); }
     r
 }
 
@@ -74,8 +75,19 @@ pub unsafe extern "C" fn posix_memalign(memptr: *mut *mut c_void, alignment: usi
     libc::posix_memalign(memptr, alignment, size)
 }
 
+#[cfg(not(target_os = "macos"))]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
     libc::malloc_usable_size(ptr)
+}
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
+    unsafe { malloc_size(ptr) }
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    #[link_name = "malloc_size"]
+    fn malloc_size(ptr: *mut c_void) -> usize;
 }
 
 pub unsafe extern "C" fn valloc(size: usize) -> *mut c_void {

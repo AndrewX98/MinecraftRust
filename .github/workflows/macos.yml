@@ -1,0 +1,58 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon (M1) — primary target
+          - os: macos-15
+            arch: aarch64-apple-darwin
+          # Intel — x86_64-apple-darwin
+          - os: macos-13
+            arch: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    name: build (${{ matrix.arch }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch }}
+
+      - name: Build (debug)
+        run: cargo build -p client --target ${{ matrix.arch }}
+
+      - name: Build (release)
+        run: cargo build -p client --release --target ${{ matrix.arch }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-${{ matrix.arch }}
+          path: target/${{ matrix.arch }}/release/client
+          if-no-files-found: error
+
+  linux-regression:
+    # Guard: darwin cfg-gates must never break the primary Linux build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libstdc++-12-dev libpulse-dev libx11-dev \
+            libegl1-mesa-dev libcurl4-openssl-dev libssl-dev libsdl2-dev \
+            libudev-dev libpng-dev libevdev-dev
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build (debug)
+        run: cargo build -p client

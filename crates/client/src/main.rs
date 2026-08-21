@@ -4,12 +4,18 @@ mod startup;
 mod core_patches;
 mod window_callbacks;
 mod fake_audio;
+#[cfg_attr(target_os = "macos", path = "platform/macos/game_window.rs")]
+#[cfg_attr(not(target_os = "macos"), path = "game_window.rs")]
 mod game_window;
 mod rust_bridge;
 mod jni_support;
 mod file_picker;
 mod settings;
+#[cfg_attr(target_os = "macos", path = "platform/macos/gamepad.rs")]
+#[cfg_attr(not(target_os = "macos"), path = "gamepad/mod.rs")]
 mod gamepad;
+#[cfg_attr(target_os = "macos", path = "platform/macos/eglut.rs")]
+#[cfg_attr(not(target_os = "macos"), path = "eglut/mod.rs")]
 mod eglut;
 mod fake_looper;
 mod fake_inputqueue;

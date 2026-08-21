@@ -148,7 +148,7 @@ unsafe fn google_credentials_impl(
             libc::close(p);
         }
         let r = libc::execvp(argv_ptrs[0], argv_ptrs.as_ptr());
-        let err = CStr::from_ptr(libc::strerror(*libc::__errno_location()))
+        let err = CStr::from_ptr(libc::strerror(*libc_shim::errno::host_errno_location()))
             .to_string_lossy()
             .into_owned();
         eprintln!("Show: execvp() error {} {}", r, err);
@@ -184,12 +184,12 @@ unsafe fn google_credentials_impl(
         loop {
             let err = libc::waitpid(pid, &mut status, 0);
             if err == -1 {
-                if *libc::__errno_location() == libc::EINTR {
+                if *libc_shim::errno::host_errno_location() == libc::EINTR {
                     continue;
                 }
                 let msg = format!(
                     "Failed to wait for Google credentials process: {}",
-                    CStr::from_ptr(libc::strerror(*libc::__errno_location())).to_string_lossy()
+                    CStr::from_ptr(libc::strerror(*libc_shim::errno::host_errno_location())).to_string_lossy()
                 );
                 let cs = CString::new(msg).unwrap_or_default();
                 onfailure(cs.as_ptr());

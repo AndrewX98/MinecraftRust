@@ -99,17 +99,17 @@ fn statvfs_space(path: *const i8, field_fn: fn(&libc::statvfs) -> u64) -> jlong 
 
 unsafe extern "C" fn File_getTotalSpace(_env: *mut JNIEnv, self_: jobject) -> jlong {
     let f = self_ as *const FileObject;
-    statvfs_space((*f).path.as_ptr(), |s| s.f_blocks)
+    statvfs_space((*f).path.as_ptr(), |s| s.f_blocks as u64)
 }
 
 unsafe extern "C" fn File_getUsableSpace(_env: *mut JNIEnv, self_: jobject) -> jlong {
     let f = self_ as *const FileObject;
-    statvfs_space((*f).path.as_ptr(), |s| s.f_bavail)
+    statvfs_space((*f).path.as_ptr(), |s| s.f_bavail as u64)
 }
 
 unsafe extern "C" fn File_getFreeSpace(_env: *mut JNIEnv, self_: jobject) -> jlong {
     let f = self_ as *const FileObject;
-    statvfs_space((*f).path.as_ptr(), |s| s.f_bfree)
+    statvfs_space((*f).path.as_ptr(), |s| s.f_bfree as u64)
 }
 
 fn register_file_class(env: *mut JNIEnv) {

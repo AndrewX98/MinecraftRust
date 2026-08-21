@@ -1,5 +1,10 @@
 fn main() {
-    // System libraries (dylib)
+    // System libraries (dylib). The list is Linux-only: on macOS the needed
+    // frameworks (AudioUnit, Security, …) are pulled in by cpal/reqwest build
+    // scripts, and X11/EGL/pulse/evdev/udev do not exist there.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        return;
+    }
     // Emit both `rustc-link-lib` (for lib target) and `rustc-link-arg-bins`
     // (for bin target — same-package lib+bin doesn't propagate native deps).
     static DYLIB_NAMES: &[&str] = &[
