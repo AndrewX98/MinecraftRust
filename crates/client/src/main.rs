@@ -190,6 +190,8 @@ fn main() {
         let start = std::time::Instant::now();
         while start.elapsed().as_secs() < secs {
             unsafe { crate::game_window::fake_looper_window_poll_events(std::ptr::null_mut()) };
+            #[cfg(target_os = "macos")]
+            crate::game_window::smoke_frame(1.0, 0.0, 0.0);
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
         log::info!("SMOKE: done");

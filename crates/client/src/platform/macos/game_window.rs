@@ -606,6 +606,28 @@ pub fn pump_events() {
     drop(lock);
 }
 
+/// CI smoke helper: clear the framebuffer to a solid color and swap, proving
+/// the GL context renders visible pixels on Apple hardware.
+pub fn smoke_frame(r: f32, g: f32, b: f32) {
+    unsafe {
+        let _lock = GLFW_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(st) = state() else { return };
+        type GlClear = unsafe extern "C" fn(u32, f32, f32, f32, f32);
+        let clear_fn = st
+            .win
+            .get_proc_address("glClear")
+            .map_or(std::ptr::null_mut(), |p| p as usize as *mut c_void);
+        if clear_fn.is_null() {
+            return;
+        }
+        st.win.make_current();
+        let clear: GlClear = std::mem::transmute(clear_fn);
+        const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
+        clear(GL_COLOR_BUFFER_BIT, r, g, b, 1.0);
+        st.win.swap_buffers();
+    }
+}
+
 // ============================================================
 // Window creation + GL setup
 // ============================================================

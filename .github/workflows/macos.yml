@@ -54,8 +54,10 @@ jobs:
       - name: Smoke run + screenshot
         if: matrix.march == 'arm64'
         run: |
-          DYLD_LIBRARY_PATH=/usr/local/lib MCPELAUNCHER_SMOKE_SECS=12 \
-            ./target/aarch64-apple-darwin/release/client -dg /tmp/no-game-dir &
+          DYLD_LIBRARY_PATH=/usr/local/lib RUST_LOG=info \
+            MCPELAUNCHER_SMOKE_SECS=12 \
+            ./target/aarch64-apple-darwin/release/client -dg /tmp/no-game-dir \
+            2>&1 | tee $RUNNER_TEMP/client.log &
           APP_PID=$!
           sleep 6
           screencapture -x "$RUNNER_TEMP/smoke.png" || true
@@ -68,6 +70,14 @@ jobs:
         with:
           name: smoke-screenshot-arm64
           path: ${{ runner.temp }}/smoke.png
+          if-no-files-found: warn
+
+      - name: Upload client log
+        if: matrix.march == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-client-log-arm64
+          path: ${{ runner.temp }}/client.log
           if-no-files-found: warn
 
       - name: Upload binary
