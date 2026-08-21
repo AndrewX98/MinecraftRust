@@ -67,8 +67,17 @@ pub unsafe extern "C" fn strsignal(sig: i32) -> *mut c_char { libc::strsignal(si
 
 pub unsafe extern "C" fn memccpy(dst: *mut c_void, src: *const c_void, c: i32, n: usize) -> *mut c_void { libc::memccpy(dst, src, c, n) }
 pub unsafe extern "C" fn basename(path: *const c_char) -> *mut c_char {
-    extern "C" { fn __xpg_basename(path: *const c_char) -> *mut c_char; }
-    __xpg_basename(path)
+    #[cfg(not(target_os = "macos"))]
+    {
+        extern "C" { fn __xpg_basename(path: *const c_char) -> *mut c_char; }
+        __xpg_basename(path)
+    }
+    // macOS has POSIX basename (no __xpg_ variant)
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" { fn basename(path: *const c_char) -> *mut c_char; }
+        basename(path)
+    }
 }
 
 pub unsafe extern "C" fn __strchr_chk(s: *mut c_char, c: i32, _len: usize) -> *mut c_char { libc::strchr(s, c) }

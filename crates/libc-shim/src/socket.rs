@@ -102,6 +102,20 @@ pub unsafe extern "C" fn inet_netof(in_: libc::in_addr) -> u32 {
     inet_netof(in_)
 }
 pub unsafe extern "C" fn __cmsg_nxthdr(hdr: *mut libc::msghdr, cmsg: *mut libc::cmsghdr) -> *mut libc::cmsghdr {
-    extern "C" { fn __cmsg_nxthdr(hdr: *mut libc::msghdr, cmsg: *mut libc::cmsghdr) -> *mut libc::cmsghdr; }
-    __cmsg_nxthdr(hdr, cmsg)
+    #[cfg(not(target_os = "macos"))]
+    {
+        extern "C" { fn __cmsg_nxthdr(hdr: *mut libc::msghdr, cmsg: *mut libc::cmsghdr) -> *mut libc::cmsghdr; }
+        __cmsg_nxthdr(hdr, cmsg)
+    }
+    // glibc function; on macOS the CMSG_NXTHDR macro logic is inlined here
+    #[cfg(target_os = "macos")]
+    {
+        if hdr.is_null() || cmsg.is_null() { return std::ptr::null_mut(); }
+        let len = (*cmsg).cmsg_len as usize;
+        if len < std::mem::size_of::<libc::cmsghdr>() { return std::ptr::null_mut(); }
+        let next = (cmsg as *mut u8).add((len + 3) & !3) as *mut libc::cmsghdr;
+        let end = (*hdr).msg_control as usize + (*hdr).msg_controllen as usize;
+        if (next as usize) + std::mem::size_of::<libc::cmsghdr>() > end { return std::ptr::null_mut(); }
+        next
+    }
 }

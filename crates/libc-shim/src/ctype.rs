@@ -26,8 +26,14 @@ pub unsafe extern "C" fn tolower_l(c: i32, _l: *mut std::ffi::c_void) -> i32 { l
 pub unsafe extern "C" fn toupper_l(c: i32, _l: *mut std::ffi::c_void) -> i32 { libc::toupper(c) }
 
 pub unsafe extern "C" fn __ctype_get_mb_cur_max() -> usize {
-    extern "C" { fn __ctype_get_mb_cur_max() -> usize; }
-    __ctype_get_mb_cur_max()
+    #[cfg(not(target_os = "macos"))]
+    {
+        extern "C" { fn __ctype_get_mb_cur_max() -> usize; }
+        __ctype_get_mb_cur_max()
+    }
+    // bionic returns 4 (UTF-8 max); macOS has no such symbol
+    #[cfg(target_os = "macos")]
+    { 4 }
 }
 
 // Bionic ctype bitmask flags

@@ -5,11 +5,16 @@ use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 
 extern "C" {
-    #[link_name = "stdin"]
+    // glibc exports plain `stdin/stdout/stderr`; macOS headers rename them to
+    // `__stdinp/__stdoutp/__stderrp`
+    #[cfg_attr(not(target_os = "macos"), link_name = "stdin")]
+    #[cfg_attr(target_os = "macos", link_name = "__stdinp")]
     static __glibc_stdin: *mut libc::FILE;
-    #[link_name = "stdout"]
+    #[cfg_attr(not(target_os = "macos"), link_name = "stdout")]
+    #[cfg_attr(target_os = "macos", link_name = "__stdoutp")]
     static __glibc_stdout: *mut libc::FILE;
-    #[link_name = "stderr"]
+    #[cfg_attr(not(target_os = "macos"), link_name = "stderr")]
+    #[cfg_attr(target_os = "macos", link_name = "__stderrp")]
     static __glibc_stderr: *mut libc::FILE;
 }
 

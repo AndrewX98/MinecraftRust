@@ -35,7 +35,12 @@ extern "C" {
     fn libc_setjmp(env: *mut crate::jmp_buf) -> i32;
     #[link_name = "longjmp"]
     fn libc_longjmp(env: *mut crate::jmp_buf, val: i32);
+    #[cfg(not(target_os = "macos"))]
     #[link_name = "__sigsetjmp"]
+    fn libc_sigsetjmp(env: *mut crate::sigjmp_buf, savesigs: i32) -> i32;
+    // macOS exports no __sigsetjmp; plain setjmp is the closest match
+    #[cfg(target_os = "macos")]
+    #[link_name = "setjmp"]
     fn libc_sigsetjmp(env: *mut crate::sigjmp_buf, savesigs: i32) -> i32;
     #[link_name = "siglongjmp"]
     fn libc_siglongjmp(env: *mut crate::sigjmp_buf, val: i32);
