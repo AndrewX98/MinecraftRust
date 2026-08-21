@@ -58,7 +58,7 @@ jobs:
         if: matrix.march == 'arm64'
         run: |
           DYLD_LIBRARY_PATH=/usr/local/lib RUST_LOG=info \
-            ./target/aarch64-apple-darwin/release/client --smoke -dg /tmp/no-game-dir \
+            ./target/aarch64-apple-darwin/release/client -smoke \
             2>&1 | tee $RUNNER_TEMP/client.log &
           wait $! || true
           grep -q "SMOKE: done" $RUNNER_TEMP/client.log
@@ -98,7 +98,7 @@ jobs:
       - name: Smoke run (boot + window check)
         run: |
           sudo apt-get install -y xvfb libegl1 libgl1 mesa-utils
-          xvfb-run -a ./target/debug/client --smoke -dg /tmp/no-game-dir \
+          xvfb-run -a ./target/debug/client -smoke \
             2>&1 | tee client.log
           grep -q "SMOKE: done" client.log
       - name: Upload client log

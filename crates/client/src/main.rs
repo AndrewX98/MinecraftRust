@@ -95,7 +95,7 @@ fn main() {
     let data_dir = util::arg_parser::arg_string(&mut parser, "--data-dir", "-dd", "Directory to use for the data", "");
     let cache_dir = util::arg_parser::arg_string(&mut parser, "--cache-dir", "-dc", "Directory to use for cache", "");
     let print_version = util::arg_parser::arg_flag(&mut parser, "--version", "-v", "Print version info");
-    let smoke = util::arg_parser::arg_bool(&mut parser, "--smoke", "-smoke", "CI smoke mode: create the window, hold it 6s, exit (no game files needed)", false);
+    let smoke = util::arg_parser::arg_bool(&mut parser, "-smoke", "", "Smoke mode: create the window, hold it 6s, exit (no game files needed)", false);
 
     let had_help_flag = args.iter().any(|a| a == "-h" || a == "--help");
 
@@ -116,7 +116,8 @@ fn main() {
     }
 
     let minecraft_dir = game_dir.get();
-    if minecraft_dir.is_empty() {
+    // smoke mode never touches game files
+    if minecraft_dir.is_empty() && !smoke.get() {
         eprintln!("Error: --game-dir (-dg) is required");
         parser.print_help();
         std::process::exit(1);
@@ -157,18 +158,23 @@ fn main() {
         log::info!("mcpelauncher-client: chdir to data dir: {}", data_dir_real);
     }
 
-    // Get merged C++ + Rust libc symbols from the C bridge
-    let libc_syms = startup::get_libc_symbols_from_cpp();
-    log::info!("mcpelauncher-client: {} merged libc symbols from C++ bridge", libc_syms.len());
+    // Get libc symbols from the Rust libc-shim crate
+    let libc_syms = startup::get_libc_symbols();
+    log::info!("mcpelauncher-client: {} libc symbols registered (Rust libc-shim)", libc_syms.len());
 
     if !libc_syms.is_empty() {
         linker::load_library("libc.so", &libc_syms);
     }
 
     // Load core libraries (loads libm, libz, etc. via C++ linker)
-    match startup::load_core_libraries(&minecraft_dir) {
-        Ok(()) => log::info!("mcpelauncher-client: core libraries loaded successfully"),
-        Err(code) => log::error!("mcpelauncher-client: failed to load core libraries (code={})", code),
+    if smoke.get() {
+        startup::load_core_libraries_smoke();
+        log::info!("mcpelauncher-client: smoke core libraries loaded successfully");
+    } else {
+        match startup::load_core_libraries(&minecraft_dir) {
+            Ok(()) => log::info!("mcpelauncher-client: core libraries loaded successfully"),
+            Err(code) => log::error!("mcpelauncher-client: failed to load core libraries (code={})", code),
+        }
     }
 
     // Set up android hooks (FakeLooper, FakeAssetManager, FakeInputQueue, FakeWindow,
@@ -182,7 +188,7 @@ fn main() {
     startup::create_window_and_setup_graphics();
     log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
 
-    // Smoke mode (--smoke): hold the freshly created window open for a few
+    // Smoke mode (-smoke): hold the freshly created window open for a few
     // seconds so a headless runner can screencapture it, then exit. No game
     // files needed — window + GL context are live at this point.
     if smoke.get() {

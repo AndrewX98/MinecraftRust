@@ -59,9 +59,9 @@ pub fn init_version(package: &str, version_code: i32) {
     }
 }
 
-pub fn get_libc_symbols_from_cpp() -> HashMap<String, *mut c_void> {
-    // Direct call to the corelib twin (formerly mc_get_libc_symbols →
-    // core_minecraft_utils_get_libc_symbols). Returns only non-null entries.
+pub fn get_libc_symbols() -> HashMap<String, *mut c_void> {
+    // Direct call to the corelib twin (formerly mc_get_libc_symbols).
+    // Pure Rust since Phase 6 — merges only libc-shim symbols, no C++ side.
     unsafe { corelib::minecraft_utils::get_libc_symbols() }
 }
 
@@ -108,8 +108,43 @@ pub fn setup_android_hooks() {
 
 /// Rust `capi.cpp mc_load_core_libraries` (the init sequence the C++ main.cpp
 /// ran). Calls the Rust linker directly — no C++ bridge.
-pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
+/// Minimal core-library boot for `-smoke`: linker init + stub registrations
+/// only. Deliberately skips host OS library loading (libm/libz/hybris) — with
+/// no game dir the linker's fallback scan reaches `/usr/lib/libc.so`, which is
+/// a GNU ld *script* rather than an ELF, and deadlocks parsing it.
+pub fn load_core_libraries_smoke() {
     unsafe {
+        // 0) Initialize Rust linker
+        linker::init();
+
+        // 1) libc symbol stub (no disk scan)
+        corelib::minecraft_utils::core_minecraft_utils_register_libc_stub();
+
+        // 2) Stub libraries (subset of load_core_libraries step 4)
+        linker::register_stub("libOpenSLES.so", &HashMap::new());
+        linker::register_stub("libGLESv1_CM.so", &HashMap::new());
+        linker::register_stub("libstdc++.so", &HashMap::new());
+        let gl_syms: HashMap<String, *mut c_void> = GLESV2_SYMBOLS
+            .iter()
+            .map(|s| (s.to_string(), glesv2_stub as *mut c_void))
+            .collect();
+        linker::register_stub("libGLESv2.so", &gl_syms);
+        let log_syms: HashMap<String, *mut c_void> = [
+            ("__android_log_print", crate::android_log_hook::__android_log_print as *mut c_void),
+            ("__android_log_vprint", crate::android_log_hook::__android_log_vprint as *mut c_void),
+            ("__android_log_write", crate::android_log_hook::__android_log_write as *mut c_void),
+            ("__android_log_assert", crate::android_log_hook::__android_log_assert as *mut c_void),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        linker::register_stub("liblog.so", &log_syms);
+        linker::register_stub("libmcpelauncher_mod.so", &HashMap::new());
+        linker::register_stub("libmcpelauncher_gamewindow.so", &HashMap::new());
+    }
+}
+
+pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {    unsafe {
         // 0) Initialize Rust linker (single owner of all libraries).
         linker::init();
 
