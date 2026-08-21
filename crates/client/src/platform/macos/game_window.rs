@@ -240,6 +240,11 @@ pub unsafe extern "C" fn mc_get_window_size(out_w: *mut i32, out_h: *mut i32) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn eglutGetWindowSize(out_w: *mut i32, out_h: *mut i32) {
+    mc_get_window_size(out_w, out_h)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn mc_set_clipboard_text(text: *const c_char) {
     if text.is_null() { return; }
     if let Ok(s) = CStr::from_ptr(text).to_str() {
