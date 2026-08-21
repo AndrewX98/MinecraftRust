@@ -89,20 +89,50 @@ unsafe fn create_window(title: &str) -> *mut c_void {
         }
     };
 
-    // macOS caps at GL 4.1 core; forward-compat core profile is mandatory
-    glfw.window_hint(glfw::WindowHint::ContextVersion(4, 1));
-    glfw.window_hint(glfw::WindowHint::OpenGlProfile(
-        glfw::OpenGlProfileHint::Core,
-    ));
-    glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
+    // Context request ladder — upstream window_glfw.cpp uses 3.2 core +
+    // forward-compat (4.1-core trips "NSGL: Failed to find a suitable pixel
+    // format" on some virtualized GPUs); fall back progressively.
+    let attempts: [(u8, u8, bool, glfw::OpenGlProfileHint); 3] = [
+        (3, 2, true, glfw::OpenGlProfileHint::Core),
+        (4, 1, true, glfw::OpenGlProfileHint::Core),
+        (1, 0, false, glfw::OpenGlProfileHint::Any),
+    ];
 
     let title_c = CString::new(title).unwrap_or_default();
-    let (mut win, events) = match glfw.create_window(
-        DEFAULT_W as u32,
-        DEFAULT_H as u32,
-        title_c.to_str().unwrap_or("Minecraft"),
-        glfw::WindowMode::Windowed,
-    ) {
+    let mut created: Option<(glfw::PWindow, glfw::GlfwReceiver<(f64, WindowEventT)>)> = None;
+    for (major, minor, fc, profile) in attempts {
+        glfw.window_hint(glfw::WindowHint::ContextVersion(major as u32, minor as u32));
+        glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(fc));
+        glfw.window_hint(glfw::WindowHint::OpenGlProfile(profile));
+        match glfw.create_window(
+            DEFAULT_W as u32,
+            DEFAULT_H as u32,
+            title_c.to_str().unwrap_or("Minecraft"),
+            glfw::WindowMode::Windowed,
+        ) {
+            Some(pair) => {
+                log::info!(
+                    "[game_window-macos] GLFW window created with GL {}.{} core={} profile={:?}",
+                    major,
+                    minor,
+                    fc,
+                    profile
+                );
+                created = Some(pair);
+                break;
+            }
+            None => {
+                log::warn!(
+                    "[game_window-macos] GL {}.{} core={} profile={:?} unavailable",
+                    major,
+                    minor,
+                    fc,
+                    profile
+                );
+            }
+        }
+    }
+    let (mut win, events) = match created {
         Some(pair) => pair,
         None => {
             log::error!("[game_window-macos] failed to create GLFW window");
