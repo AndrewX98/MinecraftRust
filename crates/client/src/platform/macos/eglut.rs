@@ -1,14 +1,12 @@
-//! macOS placeholder for the X11/EGL `eglut` module.
+//! macOS `eglut` counterpart: callback + window-state store backing the
+//! GLFW backend in `platform/macos/game_window.rs`.
 //!
-//! The real windowing backend for macOS (Cocoa/GLFW, Phase 4 of
-//! docs/PORT_MACOS.md) is not implemented yet. This stub keeps the client
-//! compiling on darwin by exporting the same `#[no_mangle]` surface the rest
-//! of the crate links against (`window_callbacks.rs` declares these via
-//! `extern "C"`), plus the `STATE` shape `rust_bridge.rs` reads. Every entry
-//! point is a logged no-op; startup will report the missing backend instead
-//! of failing to link.
+//! The Linux module drives X11 directly; here the module only owns the state
+//! shape (`STATE`, callbacks) and the registration entry points that
+//! `window_callbacks.rs` links against. Event pumping and dispatch live in
+//! the GLFW backend.
 
-#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, unused)]
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
 use std::ffi::{c_char, c_void};
 
@@ -50,104 +48,137 @@ pub type EGLUTtouchEndCB = Option<unsafe extern "C" fn(i32, f64, f64)>;
 pub type EGLUTfocusCB = Option<unsafe extern "C" fn(i32)>;
 pub type EGLUTcloseCB = Option<unsafe extern "C" fn()>;
 
-/// Only the fields read from outside this module are kept; the macOS backend
-/// (Phase 4) will extend this to the full Linux `EglutWindow` shape if needed.
 pub struct EglutWindow {
     pub width: i32,
     pub height: i32,
     pub context: EGLContext,
     pub surface: EGLSurface,
     pub config: EGLConfig,
+    pub reshape_cb: EGLUTreshapeCB,
+    pub display_cb: EGLUTdisplayCB,
+    pub keyboard_cb: EGLUTkeyboardCB,
+    pub drop_cb: EGLUTdropCB,
+    pub special_cb: EGLUTspecialCB,
+    pub paste_cb: EGLUTpasteCB,
+    pub mouse_cb: EGLUTmouseCB,
+    pub mouse_raw_cb: EGLUTmouseRawCB,
+    pub mouse_button_cb: EGLUTmouseButtonCB,
+    pub touch_start_cb: EGLUTtouchStartCB,
+    pub touch_update_cb: EGLUTtouchUpdateCB,
+    pub touch_end_cb: EGLUTtouchEndCB,
+    pub focus_cb: EGLUTfocusCB,
+    pub close_cb: EGLUTcloseCB,
+    pub keyboardstate: i32,
+}
+
+impl EglutWindow {
+    /// Window-shaped placeholder so callbacks can register before/after the
+    /// GLFW window exists (registration order differs slightly from Linux).
+    fn new(width: i32, height: i32) -> Self {
+        EglutWindow {
+            width,
+            height,
+            context: std::ptr::null_mut(),
+            surface: std::ptr::null_mut(),
+            config: std::ptr::null_mut(),
+            reshape_cb: None,
+            display_cb: None,
+            keyboard_cb: None,
+            drop_cb: None,
+            special_cb: None,
+            paste_cb: None,
+            mouse_cb: None,
+            mouse_raw_cb: None,
+            mouse_button_cb: None,
+            touch_start_cb: None,
+            touch_update_cb: None,
+            touch_end_cb: None,
+            focus_cb: None,
+            close_cb: None,
+            keyboardstate: 0,
+        }
+    }
 }
 
 pub struct EglutState {
+    // Synthetic non-null display handle; FakeEGL saves it via
+    // fake_egl_save_current_window_handle (no real EGL on macOS).
     pub egl_dpy: EGLDisplay,
+    pub api_mask: i32,
+    pub window_fullscreen: i32,
     pub current_window: Option<Box<EglutWindow>>,
+    pub idle_cb: EGLUTidleCB,
+    pub redisplay: bool,
+    // relative-movement bookkeeping (mirrors Linux eglut)
+    pub relative_movement_enabled: bool,
+    pub relative_movement_last_x: i32,
+    pub relative_movement_last_y: i32,
 }
 
 pub static mut STATE: EglutState = EglutState {
     egl_dpy: std::ptr::null_mut(),
+    api_mask: EGLUT_OPENGL_ES2_BIT,
+    window_fullscreen: WINDOWED,
     current_window: None,
+    idle_cb: None,
+    redisplay: false,
+    relative_movement_enabled: false,
+    relative_movement_last_x: 0,
+    relative_movement_last_y: 0,
 };
 
-fn unimplemented(what: &str) {
-    log::error!("[eglut-macos] {} not implemented yet (docs/PORT_MACOS.md Phase 4)", what);
+/// Ensure a placeholder window exists (callback storage target).
+pub(crate) unsafe fn ensure_window(width: i32, height: i32) -> *mut EglutWindow {
+    if STATE.current_window.is_none() {
+        STATE.current_window = Some(Box::new(EglutWindow::new(width, height)));
+    }
+    let win = STATE.current_window.as_mut().unwrap().as_mut() as *mut EglutWindow;
+    if width > 0 { (*win).width = width; }
+    if height > 0 { (*win).height = height; }
+    win
 }
 
-// ── init / window lifecycle (compat.rs / window.rs counterparts) ──
+// ── callback registration (same surface as eglut/callbacks.rs) ──
 
-#[no_mangle]
-pub unsafe extern "C" fn eglutInit(argc: i32, _argv: *mut *mut c_char) { let _ = argc; unimplemented("eglutInit"); }
-#[no_mangle]
-pub unsafe extern "C" fn eglutInitX11ClassInstanceName(_value: *const c_char) {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutInitWindowSize(_width: i32, _height: i32) {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutInitAPIMask(_mask: i32) {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutScreenWidth() -> i32 { 1200 }
-#[no_mangle]
-pub unsafe extern "C" fn eglutScreenHeight() -> i32 { 800 }
-#[no_mangle]
-pub unsafe extern "C" fn eglutCreateWindow(_title: *const c_char) -> i32 { unimplemented("eglutCreateWindow"); -1 }
-#[no_mangle]
-pub unsafe extern "C" fn eglutGetWindowHandle() -> u64 { 0 }
-#[no_mangle]
-pub unsafe extern "C" fn eglutShowWindow() {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutMakeCurrent(_win: i32) { unimplemented("eglutMakeCurrent"); }
-#[no_mangle]
-pub unsafe extern "C" fn eglutSwapBuffers() {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutPollEvents() {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutGetWindowSize(w: *mut i32, h: *mut i32) {
-    if !w.is_null() { *w = 1200; }
-    if !h.is_null() { *h = 800; }
-}
-#[no_mangle]
-pub unsafe extern "C" fn eglutGet(_param: i32) -> i32 { 0 }
-
-// ── mouse / clipboard / fullscreen (mouse.rs counterparts) ──
-
-#[no_mangle]
-pub unsafe extern "C" fn eglutSetMousePointerLocked(_locked: i32) { unimplemented("eglutSetMousePointerLocked"); }
-#[no_mangle]
-pub unsafe extern "C" fn eglutWarpMousePointer(_x: i32, _y: i32) {}
-#[no_mangle]
-pub unsafe extern "C" fn eglutSetClipboardText(_text: *const c_char) { unimplemented("eglutSetClipboardText"); }
-#[no_mangle]
-pub unsafe extern "C" fn eglutRequestPaste() { unimplemented("eglutRequestPaste"); }
-#[no_mangle]
-pub unsafe extern "C" fn eglutToggleFullscreen() { unimplemented("eglutToggleFullscreen"); }
-
-// ── callback registration (callbacks.rs counterparts — stored nowhere yet) ──
-
-macro_rules! noop_cb_reg {
-    ($name:ident, $cb:ty) => {
+macro_rules! cb_reg {
+    ($name:ident, $cb:ty, $field:ident) => {
         #[no_mangle]
-        pub unsafe extern "C" fn $name(_func: $cb) {}
+        pub unsafe extern "C" fn $name(func: $cb) {
+            ensure_window(0, 0);
+            if let Some(win) = STATE.current_window.as_mut() {
+                win.$field = func;
+            }
+        }
     };
 }
 
-noop_cb_reg!(eglutDisplayFunc, EGLUTdisplayCB);
-noop_cb_reg!(eglutReshapeFunc, EGLUTreshapeCB);
-noop_cb_reg!(eglutKeyboardFunc, EGLUTkeyboardCB);
-noop_cb_reg!(eglutDropFunc, EGLUTdropCB);
-noop_cb_reg!(eglutSpecialFunc, EGLUTspecialCB);
-noop_cb_reg!(eglutPasteFunc, EGLUTpasteCB);
-noop_cb_reg!(eglutMouseFunc, EGLUTmouseCB);
-noop_cb_reg!(eglutMouseRawFunc, EGLUTmouseRawCB);
-noop_cb_reg!(eglutMouseButtonFunc, EGLUTmouseButtonCB);
-noop_cb_reg!(eglutTouchStartFunc, EGLUTtouchStartCB);
-noop_cb_reg!(eglutTouchUpdateFunc, EGLUTtouchUpdateCB);
-noop_cb_reg!(eglutTouchEndFunc, EGLUTtouchEndCB);
-noop_cb_reg!(eglutFocusFunc, EGLUTfocusCB);
-noop_cb_reg!(eglutCloseWindowFunc, EGLUTcloseCB);
-noop_cb_reg!(eglutIdleFunc, EGLUTidleCB);
+cb_reg!(eglutDisplayFunc, EGLUTdisplayCB, display_cb);
+cb_reg!(eglutReshapeFunc, EGLUTreshapeCB, reshape_cb);
+cb_reg!(eglutKeyboardFunc, EGLUTkeyboardCB, keyboard_cb);
+cb_reg!(eglutDropFunc, EGLUTdropCB, drop_cb);
+cb_reg!(eglutSpecialFunc, EGLUTspecialCB, special_cb);
+cb_reg!(eglutPasteFunc, EGLUTpasteCB, paste_cb);
+cb_reg!(eglutMouseFunc, EGLUTmouseCB, mouse_cb);
+cb_reg!(eglutMouseRawFunc, EGLUTmouseRawCB, mouse_raw_cb);
+cb_reg!(eglutMouseButtonFunc, EGLUTmouseButtonCB, mouse_button_cb);
+cb_reg!(eglutTouchStartFunc, EGLUTtouchStartCB, touch_start_cb);
+cb_reg!(eglutTouchUpdateFunc, EGLUTtouchUpdateCB, touch_update_cb);
+cb_reg!(eglutTouchEndFunc, EGLUTtouchEndCB, touch_end_cb);
+cb_reg!(eglutFocusFunc, EGLUTfocusCB, focus_cb);
+cb_reg!(eglutCloseWindowFunc, EGLUTcloseCB, close_cb);
 
 #[no_mangle]
-pub unsafe extern "C" fn eglutSetKeyboardState(_active: i32) {}
+pub unsafe extern "C" fn eglutIdleFunc(func: EGLUTidleCB) {
+    STATE.idle_cb = func;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglutSetKeyboardState(active: i32) {
+    ensure_window(0, 0);
+    if let Some(win) = STATE.current_window.as_mut() {
+        win.keyboardstate = active;
+    }
+}
 
 /// Path-compat shim: the Linux module is a directory (`eglut/`) with a
 /// `state.rs` child; code references `crate::eglut::state::…`.

@@ -130,7 +130,15 @@ static VAO_MAP: LazyLock<Mutex<HashMap<u32, u32>>> = LazyLock::new(|| Mutex::new
 /// Track bound buffers: [(GL_ARRAY_BUFFER, handle), (GL_ELEMENT_ARRAY_BUFFER, handle)]
 static GL_TRACKED_BUFFERS: Mutex<[(i32, u32); 2]> = Mutex::new([(0x8892, 0), (0x8893, 0)]);
 
-/// Desktop GL not needed on Linux.
+/// macOS has no GLES drivers: the game must run its desktop-GL core-profile
+/// path (upstream gl_core_patch.cpp `mustUseDesktopGL()` returns true there).
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn mc_glcorepatch_must_use_desktop_gl() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
 #[no_mangle]
 pub extern "C" fn mc_glcorepatch_must_use_desktop_gl() -> bool {
     false

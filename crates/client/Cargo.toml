@@ -35,5 +35,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "proce
 x11 = "2.21"
 cpal = "0.15"
 
+# GLFW/Cocoa window backend for macOS (docs/PORT_MACOS.md Phase 4); links the
+# system libglfw (brew install glfw)
+[target.'cfg(target_os = "macos")'.dependencies]
+glfw = "0.62"
+
 [lints]
 workspace = true

@@ -16,16 +16,30 @@ jobs:
           # Apple Silicon (M1) — primary target
           - os: macos-15
             arch: aarch64-apple-darwin
+            march: arm64
             label: arm64 (Apple Silicon)
           # Intel: cross-compiled on the M1 runner (macos-13 Intel runners
           # were retired by GitHub; Xcode SDK ships both architectures)
           - os: macos-15
             arch: x86_64-apple-darwin
+            march: x86_64
             label: x86_64 (Intel, cross-built)
     runs-on: ${{ matrix.os }}
     name: macOS ${{ matrix.label }}
     steps:
       - uses: actions/checkout@v4
+
+      # libglfw for the target arch; the Intel cross-build needs an
+      # x86_64 slice which brew (arm64-only) does not ship
+      - name: Build GLFW (${{ matrix.arch }})
+        run: |
+          git clone --depth 1 --branch 3.4 https://github.com/glfw/glfw.git $RUNNER_TEMP/glfw-src
+          cmake -S $RUNNER_TEMP/glfw-src -B $RUNNER_TEMP/glfw-build \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.march }} \
+            -DBUILD_SHARED_LIBS=ON -DGLFW_BUILD_DOCS=OFF \
+            -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_EXAMPLES=OFF
+          cmake --build $RUNNER_TEMP/glfw-build --parallel
+          sudo make -C $RUNNER_TEMP/glfw-build install
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
