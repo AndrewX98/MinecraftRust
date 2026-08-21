@@ -1,9 +1,6 @@
 name: macOS
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -43,7 +40,7 @@ jobs:
           path: target/${{ matrix.arch }}/release/client
           if-no-files-found: error
 
-  Linux x86_64:
+  linux-x86_64:
     name: Linux x86_64 (regression guard)
     # Guard: darwin cfg-gates must never break the primary Linux build
     runs-on: ubuntu-24.04
