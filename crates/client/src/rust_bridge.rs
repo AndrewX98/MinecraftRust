@@ -145,7 +145,7 @@ pub extern "C" fn mc_glcorepatch_must_use_desktop_gl() -> bool {
 }
 
 /// Called to patch the game binary's `gl::supportsImmediateMode()`.
-/// Not currently called from the Rust build (main.cpp excluded).
+/// No Rust caller yet (the old C++ main.cpp that invoked it is gone).
 #[no_mangle]
 pub extern "C" fn mc_glcorepatch_install(_handle: *mut c_void) {
     GL_CORE_ENABLED.store(true, Ordering::SeqCst);
@@ -159,8 +159,13 @@ pub extern "C" fn mc_glcorepatch_install(_handle: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn mc_glcorepatch_install_gl(
     resolver: extern "C" fn(*const c_char) -> *mut c_void,
-    add_override: extern "C" fn(*const c_char, *mut c_void),
+    add_override: unsafe extern "C" fn(*const c_char, *mut c_void),
 ) {
+    // No Rust caller invokes mc_glcorepatch_install anymore; auto-enable when
+    // running on desktop GL (macOS) so shader/VAO overrides engage.
+    if !GL_CORE_ENABLED.load(Ordering::SeqCst) && mc_glcorepatch_must_use_desktop_gl() {
+        mc_glcorepatch_install(std::ptr::null_mut());
+    }
     if !GL_CORE_ENABLED.load(Ordering::SeqCst) {
         return;
     }
@@ -285,7 +290,7 @@ pub unsafe extern "C" fn core_vtable_replace(
     }
 }
 
-/// These extern "C" thunks are defined in core_patches_stub.cpp.
+/// These extern "C" thunks are defined in core_patches.rs.
 /// Re-declared here for Rust to take their address when needed.
 extern "C" {
     fn core_patches_show_mouse_pointer();
@@ -293,7 +298,7 @@ extern "C" {
 }
 
 /// Installs vtable patches on the game library. Called from
-/// CorePatches::install() in core_patches_stub.cpp.
+/// CorePatches::install() (crate::core_patches).
 #[no_mangle]
 pub unsafe extern "C" fn core_patches_install_impl(handle: *mut c_void) {
     let vtable_sym = c"_ZTV21AppPlatform_android23";
@@ -320,7 +325,7 @@ pub unsafe extern "C" fn core_patches_install_impl(handle: *mut c_void) {
 }
 
 // === WindowCallbacks key mapping (ported from window_callbacks.cpp) ===
-// These are called from window_callbacks_stub.cpp via extern "C".
+// Consumed by crate::window_callbacks via extern "C".
 
 mod android_keycodes {
     pub const AKEYCODE_UNKNOWN: i32 = 0;
@@ -1766,7 +1771,7 @@ pub extern "C" fn jni_set_game_handle(handle: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn jni_resolve_symbol(sym: *const c_char) -> *mut c_void {
     // First try the host process (our own binary) — this finds native methods
-    // defined in C++ files like main_activity.cpp, xbox_live.cpp, etc.
+    // exported from Rust modules (main_activity.rs, jni/xbox_live.rs, …).
     let host = libc::dlsym(std::ptr::null_mut(), sym);
     if !host.is_null() {
         return host;
