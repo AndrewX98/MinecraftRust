@@ -49,6 +49,27 @@ jobs:
       - name: Build (release)
         run: cargo build -p client --release --target ${{ matrix.arch }}
 
+      # arm64 only: run the launcher with no game files — window creation
+      # happens before libminecraftpe load, so this proves Cocoa/GLFW/GL work
+      - name: Smoke run + screenshot
+        if: matrix.march == 'arm64'
+        run: |
+          DYLD_LIBRARY_PATH=/usr/local/lib MCPELAUNCHER_SMOKE_SECS=12 \
+            ./target/aarch64-apple-darwin/release/client -dg /tmp/no-game-dir &
+          APP_PID=$!
+          sleep 6
+          screencapture -x "$RUNNER_TEMP/smoke.png" || true
+          wait $APP_PID || true
+        shell: bash
+
+      - name: Upload screenshot
+        if: matrix.march == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot-arm64
+          path: ${{ runner.temp }}/smoke.png
+          if-no-files-found: warn
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:

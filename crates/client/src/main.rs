@@ -181,6 +181,21 @@ fn main() {
     startup::create_window_and_setup_graphics();
     log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
 
+    // CI smoke mode (MCPELAUNCHER_SMOKE_SECS): hold the freshly created window
+    // open for N seconds so a headless runner can screencapture it, then exit.
+    // No game files needed — window + GL context are live at this point.
+    if let Ok(secs) = std::env::var("MCPELAUNCHER_SMOKE_SECS") {
+        let secs: u64 = secs.parse().unwrap_or(10);
+        log::info!("SMOKE: holding window open for {}s", secs);
+        let start = std::time::Instant::now();
+        while start.elapsed().as_secs() < secs {
+            unsafe { crate::game_window::fake_looper_window_poll_events(std::ptr::null_mut()) };
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        log::info!("SMOKE: done");
+        return;
+    }
+
     // Try loading libminecraftpe.so
     log::info!("mcpelauncher-client: attempting to load libminecraftpe.so...");
     let game_handle = match startup::load_minecraft() {
