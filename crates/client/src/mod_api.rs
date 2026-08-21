@@ -251,22 +251,31 @@ unsafe fn google_credentials_impl(
     }
 }
 
-/// Naked trampoline: reads the caller's return address from `[rsp]` at entry
-/// (the C++ `__builtin_return_address(0)`) and forwards it to the impl. The
-/// `sub rsp, 8` keeps the stack 16-byte aligned for the `call`; the return
-/// address lives at `[rsp + 8]` after it.
+/// Naked trampoline: reads the caller's return address (the C++
+/// `__builtin_return_address(0)`) and forwards it as the third argument.
 #[unsafe(naked)]
 #[no_mangle]
 pub unsafe extern "C" fn mc_mod_request_google_credentials(
     onsuccess: *const c_void,
     onfailure: *const c_void,
 ) {
+    #[cfg(target_arch = "x86_64")]
     naked_asm!(
+        // `sub rsp, 8` keeps the stack 16-byte aligned for the `call`; the
+        // return address lives at `[rsp + 8]` after it.
         "sub rsp, 8",
         "mov rdx, [rsp + 8]",
         "call {impl}",
         "add rsp, 8",
         "ret",
+        impl = sym google_credentials_impl,
+    );
+    #[cfg(target_arch = "aarch64")]
+    naked_asm!(
+        // AAPCS64: return address is already in x30 (LR); move it to the
+        // third argument register and tail-call.
+        "mov x2, x30",
+        "b {impl}",
         impl = sym google_credentials_impl,
     );
 }

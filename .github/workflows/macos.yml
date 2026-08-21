@@ -3,6 +3,10 @@ name: build
 on:
   workflow_dispatch:
 
+env:
+  # keep CI output clean; local builds still show diagnostics
+  RUSTFLAGS: "-Awarnings"
+
 jobs:
   build:
     strategy:
