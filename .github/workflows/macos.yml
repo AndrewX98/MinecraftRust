@@ -58,8 +58,7 @@ jobs:
         if: matrix.march == 'arm64'
         run: |
           DYLD_LIBRARY_PATH=/usr/local/lib RUST_LOG=info \
-            MCPELAUNCHER_SMOKE_SECS=6 \
-            ./target/aarch64-apple-darwin/release/client -dg /tmp/no-game-dir \
+            ./target/aarch64-apple-darwin/release/client --smoke -dg /tmp/no-game-dir \
             2>&1 | tee $RUNNER_TEMP/client.log &
           wait $! || true
           grep -q "SMOKE: done" $RUNNER_TEMP/client.log
@@ -94,3 +93,17 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
       - name: Build (debug)
         run: cargo build -p client
+      # Unlike the mac runners, Linux runners CAN create GL contexts via
+      # Xvfb + Mesa llvmpipe, so this exercises the full eglut/EGL window path.
+      - name: Smoke run (boot + window check)
+        run: |
+          sudo apt-get install -y xvfb libegl1 libgl1 mesa-utils
+          xvfb-run -a ./target/debug/client --smoke -dg /tmp/no-game-dir \
+            2>&1 | tee client.log
+          grep -q "SMOKE: done" client.log
+      - name: Upload client log
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-client-log-linux
+          path: client.log
+          if-no-files-found: warn

@@ -95,6 +95,7 @@ fn main() {
     let data_dir = util::arg_parser::arg_string(&mut parser, "--data-dir", "-dd", "Directory to use for the data", "");
     let cache_dir = util::arg_parser::arg_string(&mut parser, "--cache-dir", "-dc", "Directory to use for cache", "");
     let print_version = util::arg_parser::arg_flag(&mut parser, "--version", "-v", "Print version info");
+    let smoke = util::arg_parser::arg_bool(&mut parser, "--smoke", "-smoke", "CI smoke mode: create the window, hold it 6s, exit (no game files needed)", false);
 
     let had_help_flag = args.iter().any(|a| a == "-h" || a == "--help");
 
@@ -181,14 +182,14 @@ fn main() {
     startup::create_window_and_setup_graphics();
     log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
 
-    // CI smoke mode (MCPELAUNCHER_SMOKE_SECS): hold the freshly created window
-    // open for N seconds so a headless runner can screencapture it, then exit.
-    // No game files needed — window + GL context are live at this point.
-    if let Ok(secs) = std::env::var("MCPELAUNCHER_SMOKE_SECS") {
-        let secs: u64 = secs.parse().unwrap_or(10);
-        log::info!("SMOKE: holding window open for {}s", secs);
+    // Smoke mode (--smoke): hold the freshly created window open for a few
+    // seconds so a headless runner can screencapture it, then exit. No game
+    // files needed — window + GL context are live at this point.
+    if smoke.get() {
+        const SMOKE_SECS: u64 = 6;
+        log::info!("SMOKE: holding window open for {}s", SMOKE_SECS);
         let start = std::time::Instant::now();
-        while start.elapsed().as_secs() < secs {
+        while start.elapsed().as_secs() < SMOKE_SECS {
             unsafe { crate::game_window::fake_looper_window_poll_events(std::ptr::null_mut()) };
             #[cfg(target_os = "macos")]
             crate::game_window::smoke_frame(1.0, 0.0, 0.0);
