@@ -1,9 +1,15 @@
 # Port: macOS support
 
-**Status: PLANNED** — goal is *playable on Mac* (reaches main menu, mouse/keyboard), both
-architectures (`aarch64-apple-darwin` primary, `x86_64-apple-darwin` via build matrix).
+**Status: PHASE 0 DONE ✅** — goal is *playable on Mac* (reaches main menu, mouse/keyboard), both
+architectures (`aarch64-apple-darwin` primary, `x86_64-apple-darwin` cross-built on the M1 CI
+runner since GitHub retired the macos-13 Intel image).
 Development happens on Linux; verification via cross-compile checks + GitHub Actions macOS
 runners (see [Testing from Linux](#testing-from-linux)).
+
+**Verified**: `aarch64-apple-darwin` debug build compiles *and links* on a real M1 runner
+(run 32518969187, commit e9d9891) after fixing 9 glibc-only symbols in libc-shim.
+CI workflow `.github/workflows/macos.yml` — manual dispatch only, release-only, jobs:
+macOS arm64 / macOS x86_64 (cross-built) / Linux x86_64.
 
 Upstream reference: `mcpelauncher-manifest` builds on macOS today — every item below cites
 the C++ file it was derived from.
