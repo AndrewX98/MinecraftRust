@@ -15,11 +15,13 @@ jobs:
           # Apple Silicon (M1) — primary target
           - os: macos-15
             arch: aarch64-apple-darwin
+            label: arm64 (Apple Silicon)
           # Intel — x86_64-apple-darwin
           - os: macos-13
             arch: x86_64-apple-darwin
+            label: x86_64 (Intel)
     runs-on: ${{ matrix.os }}
-    name: build (${{ matrix.arch }})
+    name: macOS ${{ matrix.label }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +44,7 @@ jobs:
           if-no-files-found: error
 
   Linux x86_64:
+    name: Linux x86_64 (regression guard)
     # Guard: darwin cfg-gates must never break the primary Linux build
     runs-on: ubuntu-24.04
     steps:
