@@ -17,10 +17,11 @@ jobs:
           - os: macos-15
             arch: aarch64-apple-darwin
             label: arm64 (Apple Silicon)
-          # Intel — x86_64-apple-darwin
-          - os: macos-13
+          # Intel: cross-compiled on the M1 runner (macos-13 Intel runners
+          # were retired by GitHub; Xcode SDK ships both architectures)
+          - os: macos-15
             arch: x86_64-apple-darwin
-            label: x86_64 (Intel)
+            label: x86_64 (Intel, cross-built)
     runs-on: ${{ matrix.os }}
     name: macOS ${{ matrix.label }}
     steps:
