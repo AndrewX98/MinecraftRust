@@ -41,7 +41,7 @@ jobs:
           path: target/${{ matrix.arch }}/release/client
           if-no-files-found: error
 
-  linux-regression:
+  Linux x86_64:
     # Guard: darwin cfg-gates must never break the primary Linux build
     runs-on: ubuntu-24.04
     steps:
