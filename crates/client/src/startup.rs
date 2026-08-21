@@ -139,12 +139,43 @@ pub fn load_core_libraries_smoke() {
         .map(|(k, v)| (k.to_string(), v))
         .collect();
         linker::register_stub("liblog.so", &log_syms);
-        linker::register_stub("libmcpelauncher_mod.so", &HashMap::new());
+        // Launcher mod API (mc_mod_log, mcpelauncher_hook*, ...) — mods link
+        // against libmcpelauncher_mod.so; imports resolve via global scope.
+        linker::register_stub("libmcpelauncher_mod.so", &corelib::minecraft_utils::get_api());
         linker::register_stub("libmcpelauncher_gamewindow.so", &HashMap::new());
     }
 }
 
-pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {    unsafe {
+/// Mod loading passes (port of the `ModLoader` calls in main.cpp:495-547).
+/// `preinit=true` runs before libminecraftpe.so is loaded; mods depending on
+/// the game library are deferred to the init pass. Extra dirs come from
+/// `-m/--mods` (comma-separated), matching upstream.
+pub fn load_mods(preinit: bool, mod_dirs: &[String]) {
+    let data_dir = primary_data_dir();
+    corelib::mod_loader::load_mods_from_directory(&format!("{}/mods/", data_dir), preinit);
+    for d in mod_dirs {
+        corelib::mod_loader::load_mods_from_directory(d, preinit);
+    }
+}
+
+pub fn primary_data_dir() -> String {
+    unsafe {
+        std::ffi::CStr::from_ptr(crate::path_helper::path_helper_get_primary_data_directory())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+/// Split the `-m/--mods` comma-separated list into dirs (main.cpp:184-194).
+pub fn split_mod_dirs(spec: &str) -> Vec<String> {
+    spec.split(',')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
+    unsafe {
         // 0) Initialize Rust linker (single owner of all libraries).
         linker::init();
 
@@ -258,8 +289,8 @@ pub fn dlsym(handle: *mut c_void, symbol: &str) -> *mut c_void {
     unsafe { linker::mcpelauncher_dispatch_dlsym(handle, sym.as_ptr()) }
 }
 
-/// Rust `capi.cpp mc_relocate_glesv2_symbols`. Called from C++
-/// (`jni_bridge_stub.cpp mc_create_window_and_setup_graphics`) with
+/// Rust `capi.cpp mc_relocate_glesv2_symbols`. Called from
+/// `crate::rust_bridge::mc_create_window_and_setup_graphics` with
 /// `fake_egl::eglGetProcAddress`; ABI matches the C `void* (*)(const char*)` type.
 #[no_mangle]
 pub extern "C" fn mc_relocate_glesv2_symbols(

@@ -132,15 +132,23 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     let mut symtab: Option<u64> = None;
     let mut gnu_hash_addr: Option<u64> = None;
     let mut sysv_hash_addr: Option<u64> = None;
-    let mut pltrel: Option<(u64, u64)> = None;
-    let mut pltrel_type = RelocType::Rela;
-    let mut rela: Option<(u64, u64)> = None;
-    let mut rel: Option<(u64, u64)> = None;
+    let mut pltrel_off: Option<u64> = None;
+    let mut pltrel_sz: Option<u64> = None;
+    let mut rela_off: Option<u64> = None;
+    let mut rela_sz: Option<u64> = None;
+    let mut rel_off: Option<u64> = None;
+    let mut rel_sz: Option<u64> = None;
+    // Order-independent offset/size pairs (DT_PLTRELSZ can precede DT_JMPREL
+    // in glibc-built objects).
+    let mut init_array_off: Option<u64> = None;
+    let mut init_array_sz: Option<u64> = None;
+    let mut fini_array_off: Option<u64> = None;
+    let mut fini_array_sz: Option<u64> = None;
+    let mut preinit_array_off: Option<u64> = None;
+    let mut preinit_array_sz: Option<u64> = None;
     let mut init_fn: Option<u64> = None;
-    let mut init_array: Option<(u64, u64)> = None;
     let mut fini_fn: Option<u64> = None;
-    let mut fini_array: Option<(u64, u64)> = None;
-    let mut preinit_array: Option<(u64, u64)> = None;
+    let mut pltrel_type = RelocType::Rela;
     let mut soname_idx: Option<u64> = None;
 
     if let Some(ref dynamic) = elf.dynamic {
@@ -156,44 +164,20 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
                         RelocType::Rela
                     };
                 }
-                elf::dynamic::DT_JMPREL => pltrel = Some((entry.d_val, 0)),
-                elf::dynamic::DT_PLTRELSZ => {
-                    if let Some((off, _)) = pltrel.take() {
-                        pltrel = Some((off, entry.d_val));
-                    }
-                }
-                elf::dynamic::DT_RELA => rela = Some((entry.d_val, 0)),
-                elf::dynamic::DT_RELASZ => {
-                    if let Some((off, _)) = rela.take() {
-                        rela = Some((off, entry.d_val));
-                    }
-                }
-                elf::dynamic::DT_REL => rel = Some((entry.d_val, 0)),
-                elf::dynamic::DT_RELSZ => {
-                    if let Some((off, _)) = rel.take() {
-                        rel = Some((off, entry.d_val));
-                    }
-                }
+                elf::dynamic::DT_JMPREL => pltrel_off = Some(entry.d_val),
+                elf::dynamic::DT_PLTRELSZ => pltrel_sz = Some(entry.d_val),
+                elf::dynamic::DT_RELA => rela_off = Some(entry.d_val),
+                elf::dynamic::DT_RELASZ => rela_sz = Some(entry.d_val as u64),
+                elf::dynamic::DT_REL => rel_off = Some(entry.d_val),
+                elf::dynamic::DT_RELSZ => rel_sz = Some(entry.d_val as u64),
                 elf::dynamic::DT_INIT => init_fn = Some(entry.d_val),
-                elf::dynamic::DT_INIT_ARRAY => init_array = Some((entry.d_val, 0)),
-                elf::dynamic::DT_INIT_ARRAYSZ => {
-                    if let Some((off, _)) = init_array.take() {
-                        init_array = Some((off, entry.d_val));
-                    }
-                }
+                elf::dynamic::DT_INIT_ARRAY => init_array_off = Some(entry.d_val),
+                elf::dynamic::DT_INIT_ARRAYSZ => init_array_sz = Some(entry.d_val as u64),
                 elf::dynamic::DT_FINI => fini_fn = Some(entry.d_val),
-                elf::dynamic::DT_FINI_ARRAY => fini_array = Some((entry.d_val, 0)),
-                elf::dynamic::DT_FINI_ARRAYSZ => {
-                    if let Some((off, _)) = fini_array.take() {
-                        fini_array = Some((off, entry.d_val));
-                    }
-                }
-                elf::dynamic::DT_PREINIT_ARRAY => preinit_array = Some((entry.d_val, 0)),
-                elf::dynamic::DT_PREINIT_ARRAYSZ => {
-                    if let Some((off, _)) = preinit_array.take() {
-                        preinit_array = Some((off, entry.d_val));
-                    }
-                }
+                elf::dynamic::DT_FINI_ARRAY => fini_array_off = Some(entry.d_val),
+                elf::dynamic::DT_FINI_ARRAYSZ => fini_array_sz = Some(entry.d_val as u64),
+                elf::dynamic::DT_PREINIT_ARRAY => preinit_array_off = Some(entry.d_val),
+                elf::dynamic::DT_PREINIT_ARRAYSZ => preinit_array_sz = Some(entry.d_val as u64),
                 elf::dynamic::DT_NEEDED => {
                     dependencies.push(entry.d_val);
                 }
@@ -242,6 +226,30 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     soinfo.strtab_size = strtab_size;
     soinfo.dependencies = resolved_deps;
     soinfo.init = init_fn.map(|v| base + v as usize);
+    let pltrel: Option<(u64, u64)> = match (pltrel_off, pltrel_sz) {
+        (Some(o), Some(s)) => Some((o, s)),
+        _ => None,
+    };
+    let rela: Option<(u64, u64)> = match (rela_off, rela_sz) {
+        (Some(o), Some(s)) => Some((o, s)),
+        _ => None,
+    };
+    let rel: Option<(u64, u64)> = match (rel_off, rel_sz) {
+        (Some(o), Some(s)) => Some((o, s)),
+        _ => None,
+    };
+    let init_array: Option<(u64, u64)> = match (init_array_off, init_array_sz) {
+        (Some(o), Some(s)) => Some((o, s)),
+        _ => None,
+    };
+    let fini_array: Option<(u64, u64)> = match (fini_array_off, fini_array_sz) {
+        (Some(o), Some(s)) => Some((o, s)),
+        _ => None,
+    };
+    let preinit_array: Option<(u64, u64)> = match (preinit_array_off, preinit_array_sz) {
+        (Some(o), Some(s)) => Some((o, s)),
+        _ => None,
+    };
     soinfo.init_array = init_array.map(|(a, s)| (base + a as usize, s as usize));
     soinfo.fini = fini_fn.map(|v| base + v as usize);
     soinfo.fini_array = fini_array.map(|(a, s)| (base + a as usize, s as usize));

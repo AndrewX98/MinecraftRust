@@ -68,6 +68,21 @@ pub enum LinkerError {
 
 static STATE: LazyLock<RwLock<LinkerState>> = LazyLock::new(|| RwLock::new(LinkerState::new()));
 
+/// Set by load_library_internal / the game-lib path: true if the most recent
+/// ELF load had unresolved relocations. ModLoader refuses to run entry points
+/// of a library whose GOT was not fully bound (calling into a lazy-PLT
+/// placeholder would jump to an unmapped address).
+static LAST_LOAD_RELOC_ERRORS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn last_load_had_reloc_errors() -> bool {
+    LAST_LOAD_RELOC_ERRORS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[no_mangle]
+pub extern "C" fn linker_last_load_had_reloc_errors() -> bool {
+    last_load_had_reloc_errors()
+}
+
 pub fn resolve_symbol(name: &str) -> Option<usize> {
     let state = STATE.read().unwrap();
     if let Some(&addr) = state.global_symbols.get(name) {
@@ -86,7 +101,17 @@ pub fn resolve_symbol(name: &str) -> Option<usize> {
             return Some(addr);
         }
     }
-    None
+    drop(state);
+    // Host fallback: mods compiled against the host toolchain import plain
+    // glibc symbols (printf, ...). Resolve them from the default namespace
+    // instead of ELF-loading the host libraries ourselves.
+    let cname = std::ffi::CString::new(name).ok()?;
+    let addr = unsafe { libc::dlsym(std::ptr::null_mut(), cname.as_ptr()) };
+    if addr.is_null() {
+        None
+    } else {
+        Some(addr as usize)
+    }
 }
 
 pub fn init() {
@@ -202,6 +227,17 @@ fn register_global_exports(state: &mut LinkerState, soinfo: &SoInfo) {
     }
 }
 
+/// Normalize a library name to its soname form. Full names pass through
+/// (`libc.so`, and versioned sonames like `libaaudio.so.2`); bare base names
+/// get the `lib{}.so` wrapper (`EGL` → `libEGL.so`).
+fn normalize_soname(name_: &str) -> String {
+    if name_.ends_with(".so") || name_.contains(".so.") {
+        name_.to_string()
+    } else {
+        format!("lib{}.so", name_)
+    }
+}
+
 pub fn load_library(name: &str, symbols: &HashMap<String, *mut std::ffi::c_void>) -> Handle {
     load_library_internal(name, symbols, false)
 }
@@ -235,11 +271,7 @@ fn load_library_internal(
     external_symbols: &HashMap<String, *mut std::ffi::c_void>,
     is_stub: bool,
 ) -> Handle {
-    let name = if name_.ends_with(".so") {
-        name_.to_string()
-    } else {
-        format!("lib{}.so", name_)
-    };
+    let name = normalize_soname(name_);
     log::info!("linker: load_library_internal '{}' (is_stub={})", name, is_stub);
     let mut state = STATE.write().unwrap();
 
@@ -284,7 +316,55 @@ fn load_library_internal(
     }
 
     // Build search paths: registered paths first (treat as directories), then defaults
-    let search_paths: Vec<String> = {
+    //
+    // Host system libraries are never ELF-loaded by us — our loader cannot
+    // relocate glibc/ld-linux properly and mods must bind them via the host
+    // dlsym fallback in resolve_symbol() instead.
+    const HOST_SYSTEM_LIBS: &[&str] = &[
+        "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+        "libresolv.so.2", "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1",
+        "libc.musl-x86_64.so.1",
+    ];
+    if HOST_SYSTEM_LIBS.contains(&name.as_str()) {
+        log::info!(
+            "linker: '{}' is a host system library — binding via host dlsym, not loading",
+            name
+        );
+        let syms: HashMap<String, usize> = external_symbols
+            .iter()
+            .map(|(k, v)| (k.clone(), *v as usize))
+            .collect();
+        let soinfo = SoInfo {
+            name: name.to_string(),
+            soname: name.to_string(),
+            is_stub: true,
+            base: 0,
+            size: 0,
+            external_symbols: syms,
+            ..Default::default()
+        };
+        let lib = LoadedLibrary {
+            soinfo,
+            ref_count: 1,
+            is_stub: true,
+            is_linked: true,
+        };
+        state.libraries_by_handle.insert(handle, lib);
+        state.libraries_by_name.insert(name.to_string(), handle);
+        return handle;
+    }
+    let mut search_paths: Vec<String> = Vec::new();
+    // Absolute path passed directly — e.g. ModLoader loads mods by full path.
+    if name.starts_with('/') {
+        search_paths.push(name.to_string());
+        if let Some((_, base)) = name.rsplit_once('/') {
+            for dir in state.search_paths.iter() {
+                let sep = if dir.ends_with('/') { "" } else { "/" };
+                search_paths.push(format!("{}{}{}", dir, sep, base));
+            }
+        }
+    }
+    {
         let mut p: Vec<String> = state
             .search_paths
             .iter()
@@ -300,8 +380,8 @@ fn load_library_internal(
         p.push(format!("/lib/x86_64-linux-gnu/{}", name));
         p.push(format!("/usr/lib/lib{}", name));
         p.push(format!("/lib/lib{}", name));
-        p
-    };
+        search_paths.extend(p);
+    }
 
     for path in &search_paths {
         log::debug!("linker: trying path: '{}'", path);
@@ -356,12 +436,28 @@ fn load_library_internal(
                                 return Some(addr);
                             }
                         }
-                        // Note: resolve_symbol acquires STATE.read(), but state (write guard) is held — deadlock.
-                        // The logic above already covers what resolve_symbol does, so fallback is None.
+                        // Host fallback: mods compiled against the host
+                        // toolchain import plain glibc symbols (printf, ...).
+                        // Resolve them from the default namespace instead of
+                        // ELF-loading host libraries (safe under the write
+                        // guard — libc::dlsym does not touch our state).
+                        match std::ffi::CString::new(sym_name) {
+                            Ok(cname) => {
+                                let addr = unsafe {
+                                    libc::dlsym(std::ptr::null_mut(), cname.as_ptr())
+                                };
+                                if !addr.is_null() {
+                                    return Some(addr as usize);
+                                }
+                            }
+                            Err(_) => {}
+                        }
                         None
                     };
 
+                    LAST_LOAD_RELOC_ERRORS.store(false, std::sync::atomic::Ordering::SeqCst);
                     let has_reloc_errs = if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
+                        LAST_LOAD_RELOC_ERRORS.store(true, std::sync::atomic::Ordering::SeqCst);
                         let sym_count = errs.iter().filter(|e| matches!(e, reloc::RelocError::SymbolNotFound(_))).count();
                         let other_count = errs.len() - sym_count;
                         if sym_count > 0 {
@@ -692,8 +788,8 @@ pub fn show_state() {
     log::info!("linker: {} global symbols", state.global_symbols.len());
 }
 
-// --- extern "C" exports for C++ link compatibility ---
-// These are called from capi.cpp's C++-mangled linker wrappers.
+// --- extern "C" exports for C-ABI compatibility ---
+// Called from the client crate's dispatch shims (was capi.cpp).
 
 /// Helper to convert parallel C arrays (keys, vals of length len) into a HashMap
 unsafe fn c_arrays_to_hashmap(
@@ -1230,11 +1326,7 @@ pub unsafe extern "C" fn linker_rust_call_init_functions(name: *const libc::c_ch
     let Ok(name_str) = unsafe { std::ffi::CStr::from_ptr(name) }.to_str() else {
         return false;
     };
-    let name = if name_str.ends_with(".so") {
-        name_str.to_string()
-    } else {
-        format!("lib{}.so", name_str)
-    };
+    let name = normalize_soname(name_str);
     let (has_init, has_init_array, relro_info) = {
         let state = match STATE.read() {
             Ok(s) => s,
@@ -1519,11 +1611,7 @@ fn load_library_internal_no_ctors(
     external_symbols: &HashMap<String, *mut std::ffi::c_void>,
     is_stub: bool,
 ) -> usize {
-    let name = if name_.ends_with(".so") {
-        name_.to_string()
-    } else {
-        format!("lib{}.so", name_)
-    };
+    let name = normalize_soname(name_);
     log::info!("linker: load_library_internal_no_ctors '{}' (is_stub={})", name, is_stub);
     let mut state = STATE.write().unwrap();
 
@@ -1661,12 +1749,23 @@ fn load_library_internal_no_ctors(
                     return Some(addr);
                 }
             }
-            // Note: resolve_symbol acquires STATE.read(), but state (write guard) is held — deadlock.
-            // The logic above already covers what resolve_symbol does, so fallback is None.
+            // Host fallback: see the twin closure in load_library_internal.
+            match std::ffi::CString::new(sym_name) {
+                Ok(cname) => {
+                    let addr =
+                        unsafe { libc::dlsym(std::ptr::null_mut(), cname.as_ptr()) };
+                    if !addr.is_null() {
+                        return Some(addr as usize);
+                    }
+                }
+                Err(_) => {}
+            }
             None
         };
 
+        LAST_LOAD_RELOC_ERRORS.store(false, std::sync::atomic::Ordering::SeqCst);
         if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
+            LAST_LOAD_RELOC_ERRORS.store(true, std::sync::atomic::Ordering::SeqCst);
             let sym_count = errs.iter().filter(|e| matches!(e, reloc::RelocError::SymbolNotFound(_))).count();
             let other_count = errs.len() - sym_count;
             if sym_count > 0 {

@@ -78,7 +78,7 @@ fn apply_rela(
                 if let Some(sv) = sym_val {
                     let val = (sv as u64).wrapping_add(rela.r_addend as u64);
                     unsafe { std::ptr::write(place as *mut u64, val); }
-                } else if r_sym != 0 {
+                } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
                     let sym_name = get_sym_name(soinfo, r_sym);
                     errors.push(RelocError::SymbolNotFound(sym_name));
                 }
@@ -87,7 +87,7 @@ fn apply_rela(
                 let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
                 if let Some(sv) = sym_val {
                     unsafe { std::ptr::write(place as *mut u64, sv as u64); }
-                } else if r_sym != 0 {
+                } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
                     let sym_name = get_sym_name(soinfo, r_sym);
                     errors.push(RelocError::SymbolNotFound(sym_name));
                 }
@@ -97,7 +97,7 @@ fn apply_rela(
                 if let Some(sv) = sym_val {
                     let val = (sv as u64).wrapping_add(rela.r_addend as u64).wrapping_sub(place as u64);
                     unsafe { std::ptr::write(place as *mut u32, val as u32); }
-                } else if r_sym != 0 {
+                } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
                     let sym_name = get_sym_name(soinfo, r_sym);
                     errors.push(RelocError::SymbolNotFound(sym_name));
                 }
@@ -132,7 +132,7 @@ fn apply_rel(
                 let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
                 if let Some(sv) = sym_val {
                     unsafe { std::ptr::write(place as *mut u64, sv as u64); }
-                } else if r_sym != 0 {
+                } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
                     let sym_name = get_sym_name(soinfo, r_sym);
                     errors.push(RelocError::SymbolNotFound(sym_name));
                 }
@@ -141,7 +141,7 @@ fn apply_rel(
                 let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
                 if let Some(sv) = sym_val {
                     unsafe { std::ptr::write(place as *mut u64, sv as u64); }
-                } else if r_sym != 0 {
+                } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
                     let sym_name = get_sym_name(soinfo, r_sym);
                     errors.push(RelocError::SymbolNotFound(sym_name));
                 }
@@ -167,6 +167,21 @@ fn resolve_sym(
     }
 
     get_symbol(&sym_name)
+}
+
+/// True if the symbol has STB_WEAK binding — unresolved weak symbols bind to
+/// null instead of being an error (gcc emits weak ITM/gmon refs in every
+/// shared object).
+fn is_weak_sym(soinfo: &SoInfo, sym_idx: u32) -> bool {
+    const STB_WEAK: u8 = 2;
+    let symtab = match soinfo.symtab {
+        Some(s) => s,
+        None => return false,
+    };
+    unsafe {
+        let sym = *(symtab as *const crate::soinfo::Elf64_Sym).add(sym_idx as usize);
+        sym.st_info >> 4 == STB_WEAK
+    }
 }
 
 fn get_sym_name(soinfo: &SoInfo, sym_idx: u32) -> String {

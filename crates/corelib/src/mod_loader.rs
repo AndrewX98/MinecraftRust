@@ -1,6 +1,160 @@
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 
+// ---- ModLoader proper (port of mod_loader.cpp loadMod/loadModMulti/
+// loadModsFromDirectory) ----
+
+use std::collections::{BTreeSet, HashMap};
+use std::ffi::c_void;
+use std::sync::Mutex;
+
+// The client binary links these from the `linker` crate; declared as extern
+// here because corelib does not depend on it directly (same pattern as
+// hook_manager.rs).
+extern "C" {
+    fn linker_rust_dlopen(name: *const c_char, flags: i32) -> usize;
+    fn linker_rust_dlsym(handle: usize, symbol: *const c_char) -> *mut c_void;
+    fn linker_rust_dlclose(handle: usize) -> i32;
+    fn linker_last_load_had_reloc_errors() -> bool;
+}
+
+/// Per-mod state, mirrors `ModLoader::ModMetaData`.
+#[derive(Default, Clone, Copy)]
+struct ModMetaData {
+    preinit: bool,
+    init: bool,
+}
+
+fn mods() -> &'static Mutex<HashMap<usize, ModMetaData>> {
+    static MODS: std::sync::OnceLock<Mutex<HashMap<usize, ModMetaData>>> =
+        std::sync::OnceLock::new();
+    MODS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+type InitFn = unsafe extern "C" fn();
+
+/// Port of `ModLoader::loadMod` (`mod_loader.cpp:11`). The upstream
+/// `dlopen_ext` + `ANDROID_DLEXT_MCPELAUNCHER_HOOKS` mechanism is not needed:
+/// the Rust linker resolves mod imports against the global scope, where
+/// `libmcpelauncher_mod.so` is registered with the full launcher API.
+///
+/// The FakeJni `attachLibrary` call is skipped — JNI method registration from
+/// mods is deferred to the libjnivm-sys port (`mc_mod_jnivm_register_method`
+/// already reports false).
+pub fn load_mod(path: &str, preinit: bool) -> Option<usize> {
+    let path_c = CString::new(path).ok()?;
+    let handle = unsafe { linker_rust_dlopen(path_c.as_ptr(), 0) };
+    if handle == 0 {
+        log::error!("ModLoader: Failed to load mod {}", path);
+        return None;
+    }
+    if unsafe { linker_last_load_had_reloc_errors() } {
+        // GOT not fully bound — entry points would jump into lazy-PLT
+        // placeholders (unmapped addresses).
+        log::error!("ModLoader: mod {} has unresolved relocations, skipping", path);
+        unsafe { linker_rust_dlclose(handle) };
+        return None;
+    }
+
+    let mut table = mods().lock().unwrap();
+    if let Some(entry) = table.get(&handle) {
+        // loaded the same mod more than once
+        unsafe { linker_rust_dlclose(handle) };
+        let already_done = if preinit { entry.preinit } else { entry.init };
+        if already_done {
+            return Some(handle);
+        }
+    }
+
+    table.entry(handle).or_default().preinit |= preinit;
+    table.entry(handle).or_default().init |= !preinit;
+    drop(table);
+
+    crate::hook_manager::hook_manager_add_library(handle as *mut _);
+
+    let initname = if preinit { "mod_preinit" } else { "mod_init" };
+    let init_name_c = CString::new(initname).unwrap();
+    let init_func = unsafe { linker_rust_dlsym(handle, init_name_c.as_ptr()) };
+    if init_func.is_null() {
+        log::warn!("ModLoader: Mod {} does not have a {} function", path, initname);
+        return Some(handle);
+    }
+    log::info!("ModLoader: calling {} for {}", initname, path);
+    unsafe {
+        let f: InitFn = std::mem::transmute(init_func);
+        f();
+    }
+
+    Some(handle)
+}
+
+/// Port of `ModLoader::loadModMulti` (`mod_loader.cpp:58`). Loads dependency
+/// mods (those present in `other`) before the mod itself; during preinit,
+/// mods depending on the game library are skipped — it is not loaded yet.
+pub fn load_mod_multi(
+    path: &str,
+    file_name: &str,
+    other: &mut BTreeSet<String>,
+    preinit: bool,
+) -> bool {
+    let deps = match get_mod_dependencies(&Path::new(path).join(file_name)) {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("ModLoader: getModDependencies: {}", e);
+            Vec::new()
+        }
+    };
+    if preinit && deps.iter().any(|d| d.contains("libminecraftpe.so")) {
+        return false;
+    }
+    for dep in &deps {
+        if other.remove(dep) {
+            let dep = dep.clone();
+            if !load_mod_multi(path, &dep, other, preinit) {
+                return false;
+            }
+        }
+    }
+
+    log::info!("ModLoader: Loading mod: {}", file_name);
+    let full = Path::new(path).join(file_name);
+    load_mod(&full.to_string_lossy(), preinit);
+    true
+}
+
+/// Port of `ModLoader::loadModsFromDirectory` (`mod_loader.cpp:83`).
+pub fn load_mods_from_directory(path: &str, preinit: bool) {
+    let dir = match std::fs::read_dir(path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    log::info!("ModLoader: Loading mods from {}", path);
+    let mut to_load: BTreeSet<String> = BTreeSet::new();
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = match name.to_str() {
+            Some(n) => n,
+            None => continue,
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let len = name.len();
+        if len < 4 || !name[len - 3..].ends_with(".so") {
+            continue;
+        }
+        to_load.insert(name.to_string());
+    }
+    while let Some(file_name) = to_load.pop_first() {
+        load_mod_multi(path, &file_name, &mut to_load, preinit);
+    }
+    log::info!(
+        "ModLoader: Loaded {} mods",
+        mods().lock().unwrap().len()
+    );
+    crate::hook_manager::hook_manager_apply_hooks();
+}
+
 /// Read the `DT_NEEDED` dependency list of a shared object from disk.
 ///
 /// Faithful port of `ModLoader::getModDependencies` (`mod_loader.cpp:133`),

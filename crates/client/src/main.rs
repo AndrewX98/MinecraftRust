@@ -96,6 +96,7 @@ fn main() {
     let cache_dir = util::arg_parser::arg_string(&mut parser, "--cache-dir", "-dc", "Directory to use for cache", "");
     let print_version = util::arg_parser::arg_flag(&mut parser, "--version", "-v", "Print version info");
     let smoke = util::arg_parser::arg_bool(&mut parser, "-smoke", "", "Smoke mode: create the window, hold it 6s, exit (no game files needed)", false);
+    let mods = util::arg_parser::arg_string(&mut parser, "--mods", "-m", "Additional directories to load mods from split by ','", "");
 
     let had_help_flag = args.iter().any(|a| a == "-h" || a == "--help");
 
@@ -205,6 +206,16 @@ fn main() {
         return;
     }
 
+    // Preinit pass: load mods that don't depend on libminecraftpe.so before
+    // the game library (main.cpp:497). Extra dirs come from -m/--mods.
+    let mod_dirs = startup::split_mod_dirs(&mods.get());
+    if !mod_dirs.is_empty() || std::path::Path::new(&format!(
+        "{}/mods/",
+        startup::primary_data_dir()
+    )).exists() {
+        startup::load_mods(true, &mod_dirs);
+    }
+
     // Try loading libminecraftpe.so
     log::info!("mcpelauncher-client: attempting to load libminecraftpe.so...");
     let game_handle = match startup::load_minecraft() {
@@ -217,6 +228,10 @@ fn main() {
             return;
         }
     };
+
+    // Init pass: load the remaining mods now that the game symbols exist
+    // (main.cpp:547).
+    startup::load_mods(false, &mod_dirs);
 
     // Set the game handle for the native symbol resolver
     unsafe { rust_bridge::jni_set_game_handle(game_handle) };
