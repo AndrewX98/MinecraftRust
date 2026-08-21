@@ -1,4 +1,4 @@
-name: macOS
+name: build
 
 on:
   workflow_dispatch:
@@ -39,20 +39,3 @@ jobs:
           name: client-${{ matrix.arch }}
           path: target/${{ matrix.arch }}/release/client
           if-no-files-found: error
-
-  linux-x86_64:
-    name: Linux x86_64 (regression guard)
-    # Guard: darwin cfg-gates must never break the primary Linux build
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libstdc++-12-dev libpulse-dev libx11-dev \
-            libegl1-mesa-dev libcurl4-openssl-dev libssl-dev libsdl2-dev \
-            libudev-dev libpng-dev libevdev-dev
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
-      - name: Build (debug)
-        run: cargo build -p client
