@@ -56,7 +56,7 @@ struct LooperState {
 
 /// Mirrors `FakeLooper::~FakeLooper`: unregister core patches, destroy the
 /// WindowCallbacks box, and free the Rust input queue. The GameWindow itself
-/// is owned by the process-lifetime `shared_ptr` in `jni_bridge_stub.cpp`.
+/// is owned by the process-global token in `crate::game_window`.
 impl Drop for LooperState {
     fn drop(&mut self) {
         unsafe {

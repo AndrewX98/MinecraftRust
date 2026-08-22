@@ -66,7 +66,7 @@ extern "C" {
         vals: *const *mut c_void,
         count: usize,
     );
-    // core_patches_stub.cpp thunks
+    // core_patches.rs thunks (was core_patches_stub.cpp)
     fn core_patches_show_mouse_pointer();
     fn core_patches_hide_mouse_pointer();
     fn core_patches_set_fullscreen(t: *mut c_void, fs: bool);

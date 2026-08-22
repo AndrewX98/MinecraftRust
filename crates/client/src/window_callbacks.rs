@@ -863,7 +863,7 @@ extern "C" {
 }
 
 // ============================================================
-// Settings + text-handler FFI (settings_stub.cpp / text_input_handler.rs)
+// Settings + text-handler FFI (settings.rs / text_input_handler.rs)
 // ============================================================
 
 extern "C" {

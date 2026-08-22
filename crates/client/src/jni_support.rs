@@ -497,13 +497,11 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
         }
     }
 
-    eprintln!("=== C++ callbacks struct: on_start={} on_native_window_created={} ===",
+    eprintln!("=== GameActivity callbacks struct: on_start={} on_native_window_created={} ===",
               fmt_ptr(cb.on_start.map(|f| f as *const c_void)), fmt_ptr(cb.on_native_window_created.map(|f| f as *const c_void)));
     eprintln!("=== GameActivity struct: vm={:p} env={:p} callbacks={:p} instance={:p} ===", 
               (*ga).vm, (*ga).env, (*ga).callbacks, (*ga).instance);
-    eprintln!("=== C++ callbacks struct: on_start={} on_native_window_created={} ===",
-              fmt_ptr(cb.on_start.map(|f| f as *const c_void)), fmt_ptr(cb.on_native_window_created.map(|f| f as *const c_void)));
-    // Match the C++ JniSupport::startGame ordering (jni_support.cpp:421-428):
+    // Match the old C++ JniSupport::startGame ordering (jni_support.cpp:421-428):
     // the game thread spawned by GameActivity_onCreate -> android_main expects
     // onStart and onNativeWindowCreated to have primed the window/lifecycle
     // state before it enters its event loop. Skipping these triggers a SEGV
@@ -527,8 +525,9 @@ pub unsafe extern "C" fn jni_support_start_game_with_baron(
 }
 
 // ================================================================
-// Event dispatch — called from window_callbacks_stub.cpp instead of
-// C++ JniSupport::sendKeyDown/sendKeyUp/sendMotionEvent
+// Event dispatch — called from crate::window_callbacks (was
+// window_callbacks_stub.cpp; replaces JniSupport::sendKeyDown/
+// sendKeyUp/sendMotionEvent)
 // ================================================================
 
 #[no_mangle]

@@ -274,7 +274,11 @@ unsafe extern "C" fn Context_getCacheDir(env: *mut JNIEnv, self_: jobject) -> jo
 }
 
 unsafe extern "C" fn Context_getClassLoader(_env: *mut JNIEnv, _self_: jobject) -> jobject {
-    std::ptr::null_mut()
+    // Must return a usable loader: the game's JNI_OnLoad JavaClassLoader init
+    // calls getClassLoader and aborts sign-in state setup if it gets null.
+    // (This signature also exists on java/lang/Class; GetMethodID's global
+    // (name, sig) search can resolve to either, so both must work.)
+    unsafe { jnivm_find_class(_env, b"java/lang/ClassLoader\0".as_ptr() as *const c_char) as jobject }
 }
 
 unsafe extern "C" fn Context_getApplicationContext(_env: *mut JNIEnv, self_: jobject) -> jobject {

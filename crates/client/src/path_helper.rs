@@ -259,8 +259,8 @@ pub fn get_abi_dir() -> &'static str {
 }
 
 // ===========================================================================
-// C FFI surface (replaces the C++ PathHelper symbols; consumed by capi.cpp,
-// jni_support.cpp, minecraft_utils.cpp, window_callbacks_stub.cpp, etc.)
+// C FFI surface (replaces the C++ PathHelper symbols; consumed by the Rust
+// jni_support, corelib minecraft_utils, window_callbacks, …)
 // ===========================================================================
 
 /// Return a pointer valid until the next call on the same thread. Mirrors the

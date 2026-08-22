@@ -66,8 +66,8 @@ pub fn load_mappings(content: &str) {
     get().borrow().load_mappings(content);
 }
 
-/// extern "C" entry points used by the C++ EGLUTWindowManager glue
-/// (window_manager_eglut.cpp).
+/// extern "C" entry points used by the EGLUT window glue
+/// (was window_manager_eglut.cpp; now crate::game_window).
 #[no_mangle]
 pub extern "C" fn gamepad_load_mappings_from_file(path: *const std::ffi::c_char) {
     if path.is_null() {

@@ -28,3 +28,12 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[profile.size-opt]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = true         # Forces debug symbols on so Bloaty can read compile units
+strip = "none"

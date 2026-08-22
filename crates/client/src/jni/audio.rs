@@ -356,7 +356,7 @@ pub unsafe extern "C" fn Java_org_fmod_AudioDevice_close(
     }
 }
 
-// C bridge used by the C++ AAudio shim (fake_audio.cpp).
+// C bridge used by the Rust AAudio shim (fake_audio.rs).
 #[no_mangle]
 pub extern "C" fn rust_audio_start(channels: i32, sample_rate: i32) -> i32 {
     start_audio_thread(channels as u16, sample_rate as u32);
