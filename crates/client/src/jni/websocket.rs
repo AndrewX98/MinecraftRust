@@ -111,6 +111,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_init(
         stream: None,
     }));
 
+    log::info!("WebSocket init owner={:#x}", _owner);
     let key = self_ as usize;
     if let Ok(mut states) = ws_states().lock() {
         states.insert(key, state);
@@ -158,6 +159,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_connect(
         None => return,
     };
 
+    log::info!("WebSocket connect url={} wst={}", url_str, wst_str);
     {
         if let Ok(mut s) = state.lock() {
             s.url = url_str.clone();
@@ -169,17 +171,70 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_connect(
     let thread_state = state.clone();
 
     std::thread::spawn(move || {
-        let url_str = {
+        // Snapshot url + headers + subprotocol up front: the game calls
+        // addHeader() before connect(), and the handshake must carry them
+        // (the signaling service rejects unauthenticated upgrades with 400).
+        let (url_str, headers, protocol) = {
             match thread_state.lock() {
-                Ok(s) => s.url.clone(),
+                Ok(s) => (s.url.clone(), s.headers.clone(), s.ws_protocol.clone()),
                 Err(_) => return,
             }
         };
+        if !headers.is_empty() {
+            log::info!(
+                "WebSocket connecting to {} with {} header(s) [{}]",
+                url_str,
+                headers.len(),
+                headers
+                    .iter()
+                    .map(|(k, _)| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
 
-        let url = match url::Url::parse(&url_str) {
-            Ok(u) => u,
-            Err(e) => {
-                log::error!("WebSocket URL parse error: {}", e);
+        let request = {
+            use tungstenite::client::IntoClientRequest;
+            let mut req = match url_str.as_str().into_client_request() {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("WebSocket request build error: {:?}", e);
+                    let vm = jnivm_create_vm();
+                    let env = jnivm_get_env(vm);
+                    if env.is_null() { return; }
+                    let mut args: [jvalue; 0] = [];
+                    call_void_method(env, self_ptr as jobject, "onFailure", "()V", &mut args);
+                    return;
+                }
+            };
+            for (k, v) in &headers {
+                let name =
+                    match tungstenite::http::HeaderName::from_bytes(k.as_bytes()) {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+                if let Ok(hv) = v.parse() {
+                    req.headers_mut().insert(name, hv);
+                }
+            }
+            if !protocol.is_empty() {
+                if let Ok(v) = protocol.parse() {
+                    req.headers_mut()
+                        .insert("Sec-WebSocket-Protocol", v);
+                }
+            }
+            req
+        };
+
+        let (ws_stream, _response) = match tungstenite::connect(request) {
+            Ok(r) => r,
+            Err(tungstenite::Error::Http(resp)) => {
+                log::error!(
+                    "WebSocket handshake rejected: {} body={:?} resp_headers={:?}",
+                    resp.status(),
+                    resp.body(),
+                    resp.headers()
+                );
                 let vm = jnivm_create_vm();
                 let env = jnivm_get_env(vm);
                 if env.is_null() { return; }
@@ -187,10 +242,6 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_connect(
                 call_void_method(env, self_ptr as jobject, "onFailure", "()V", &mut args);
                 return;
             }
-        };
-
-        let (ws_stream, _response) = match tungstenite::connect(url) {
-            Ok(r) => r,
             Err(e) => {
                 log::error!("WebSocket connection error: {}", e);
                 let vm = jnivm_create_vm();
@@ -315,6 +366,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientWebSocket_addHeader(
     if let Ok(states) = ws_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(mut s) = state.lock() {
+                log::info!("WebSocket addHeader {}={}", name_str, &value_str[..value_str.len().min(24)]);
                 s.headers.push((name_str, value_str));
             }
         }
