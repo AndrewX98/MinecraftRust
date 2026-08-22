@@ -135,11 +135,101 @@ pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_DeviceInfo_GetDevice
 /// right before this is invoked. Nothing to wire up for offline play.
 #[no_mangle]
 pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_XalInitTelemetry_initOneDS(
-    _env: *mut JNIEnv,
+    env: *mut JNIEnv,
     _clazz: jobject,
     _context: jobject,
 ) {
     log::info!("XalJava: XalInitTelemetry.initOneDS called");
+    // XAL's Java boot hook: fired on every game start. Dump the cached token
+    // store so we can correlate a "name-only/semi" main-menu state with what
+    // XAL could actually restore silently at that moment.
+    let dir = unsafe {
+        let ptr = crate::path_helper::path_helper_get_primary_data_directory();
+        if !ptr.is_null() {
+            Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    };
+    if let Some(d) = dir {
+        log_xal_store_state(&d);
+    }
+    // A "pending webview flow" marker surviving from a previous session can
+    // put the main menu into the name-loaded-but-not-signed-in state. That
+    // cleanup happens pre-launch (sanitize_xal_store) — never here: deleting
+    // store files while XAL is live races its REST thread and aborts the
+    // process with an uncaught Xal::ParseException.
+}
+
+/// Dump the contents of the XAL store directory that the game reads at
+/// startup to decide whether a user can be restored silently. Logging this at
+/// the moment XAL's Java asks for its storage path lets us correlate a
+/// "name-only/semi" main-menu state with what the store actually contained
+/// (device token, cached user tokens, remembered webview flow) at that point.
+fn log_xal_store_state(dir: &str) {
+    let store = Path::new(dir).join("xal");
+    let entries = match std::fs::read_dir(&store) {
+        Ok(e) => e.filter_map(|x| x.ok()).collect::<Vec<_>>(),
+        Err(e) => {
+            log::warn!("XalStore: cannot list {}: {}", store.display(), e);
+            return;
+        }
+    };
+    if entries.is_empty() {
+        log::warn!("XalStore: {} is empty — no cached device/user tokens", store.display());
+        return;
+    }
+    let mut summary = Vec::new();
+    for e in entries {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let (size, mtime) = match e.metadata() {
+            Ok(m) => (m.len(), m.modified().map(|t| format!("{:?}", t)).unwrap_or_default()),
+            Err(_) => (0, String::new()),
+        };
+        let kind = match std::fs::read_to_string(e.path()) {
+            Ok(s) => {
+                let mut flags = Vec::new();
+                for probe in [
+                    ("deviceId", "deviceId"),
+                    ("Dtoken", "Dtoken"),
+                    ("Ttoken", "Ttoken"),
+                    ("Xtoken", "Xtoken"),
+                    ("Utoken", "Utoken"),
+                    ("refresh_token", "refresh"),
+                    ("WebViewFlowId", "WebViewFlow"),
+                    ("WelcomeBackSisu", "welcomeBack"),
+                    ("Serialized", "corrupted"),
+                    ("user_id", "userId"),
+                ] {
+                    if s.contains(probe.0) {
+                        flags.push(probe.1.to_string());
+                    }
+                }
+                if flags.is_empty() {
+                    "other".to_string()
+                } else {
+                    flags.join(",")
+                }
+            }
+            Err(_) => "<unreadable>".to_string(),
+        };
+        summary.push(format!("{} ({}B, {}, {})", name, size, truncate_ts(&mtime), kind));
+    }
+    log::info!(
+        "XalStore: {} — {} entry(s): {}",
+        store.display(),
+        summary.len(),
+        summary.join(" | ")
+    );
+}
+
+fn truncate_ts(ts: &str) -> &str {
+    // ISO timestamp "2026-08-11T18:36:09.000Z..." -> drop sub-second noise
+    if let Some(idx) = ts.find('.') {
+        &ts[..idx]
+    } else {
+        ts
+    }
 }
 
 /// `Storage.getStoragePath(Landroid/content/Context;)Ljava/lang/String;`
@@ -155,6 +245,7 @@ pub unsafe extern "C" fn Java_com_microsoft_xal_androidjava_Storage_getStoragePa
         CStr::from_ptr(ptr).to_string_lossy().into_owned()
     };
     log::info!("XalJava: Storage.getStoragePath -> {}", dir);
+    log_xal_store_state(&dir);
     new_jstring(env, &dir)
 }
 

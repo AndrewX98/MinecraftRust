@@ -216,6 +216,10 @@ fn main() {
         startup::load_mods(true, &mod_dirs);
     }
 
+    // Repair the XAL token store before the game's auth stack reads it
+    // (corrupt ECDSA key cache / stale webview-flow markers).
+    crate::jni::xal_browser::sanitize_xal_store();
+
     // Try loading libminecraftpe.so
     log::info!("mcpelauncher-client: attempting to load libminecraftpe.so...");
     let game_handle = match startup::load_minecraft() {

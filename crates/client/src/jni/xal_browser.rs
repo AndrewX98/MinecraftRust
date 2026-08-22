@@ -79,6 +79,13 @@ unsafe extern "C" fn browser_launch_show_url(
 
     // Hand the final redirect URL back to XAL. Mimics mcpelauncher's
     // xal_webview: urlOperationSucceeded(opId, finalUrl, false, browserInfo).
+    //
+    // IMPORTANT: do NOT touch anything under <data>/xal/ here. XAL starts
+    // reading its webview-flow state file the moment this returns; deleting
+    // the "WebViewFlowId" marker underneath it makes the REST thread parse an
+    // empty read and die on an uncaught Xal::ParseException ("Token root is
+    // not an object") ~7ms later. Stale markers are cleaned up pre-launch by
+    // sanitize_xal_store() instead.
     call_url_operation_succeeded(env, op_id, &final_url);
 }
 
@@ -235,6 +242,60 @@ unsafe fn call_url_operation_succeeded(env: *mut JNIEnv, op_id: u64, final_url: 
     let info_j = new_jstring(env, "webkit-noDefault::0::none");
     f(env, std::ptr::null_mut(), op_id, url_j, 0, info_j);
     log::info!("xal_browser: sent urlOperationSucceeded(op_id={:x})", op_id);
+}
+
+/// XAL persists an interactive sign-in as a "pending webview flow" (a store
+/// file under `xal/` carrying `WebViewFlowId` + `WelcomeBackSisu`). Stale
+/// markers from a previous session can wedge the next launch into the
+/// "name loaded, not signed in" state — but they MUST only be removed while
+/// the game is not running (sanitize_xal_store(), called pre-launch).
+/// Deleting them mid-session — especially between urlOperationSucceeded and
+/// XAL's completion handler reading the file back — races the REST thread's
+/// read and aborts the process with an uncaught
+/// Xal::ParseException ("Token root is not an object").
+///
+/// Boot-time XAL store repair. Runs BEFORE the game's XAL reads the store.
+///
+/// - Files containing "Serialized to SharedPreferences" are the known-corrupt
+///   ECDSA signing-key cache (AGENTS.md): XAL feeds the junk key material to
+///   its parser on the REST thread and dies with an uncaught
+///   Xal::ParseException ("Token root is not an object"). Quarantine them so
+///   a fresh key gets generated.
+/// - Files containing WebViewFlowId describe an interrupted interactive
+///   sign-in flow; resuming them on the next boot wedges the menu in the
+///   half-signed-in state. Remove them.
+/// - Token files (refresh_token / Xtoken / ...) are NEVER touched here —
+///   deleting those is what forced repeated manual re-sign-ins.
+pub fn sanitize_xal_store() {
+    let dir = unsafe {
+        let ptr = crate::path_helper::path_helper_get_primary_data_directory();
+        if ptr.is_null() {
+            return;
+        }
+        CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    };
+    let store = std::path::Path::new(&dir).join("xal");
+    let entries = match std::fs::read_dir(&store) {
+        Ok(e) => e.filter_map(|x| x.ok()).collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+    for e in entries {
+        if !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let content = match std::fs::read_to_string(e.path()) {
+            Ok(s) => s,
+            Err(_) => continue, // binary or unreadable: leave it alone
+        };
+        let corrupt_key = content.contains("Serialized to SharedPreferences");
+        let pending_flow = content.contains("WebViewFlowId");
+        if !(corrupt_key || pending_flow) {
+            continue;
+        }
+        let action = if corrupt_key { "quarantining corrupt ECDSA key cache" } else { "clearing pending webview-flow resume state" };
+        log::warn!("xal_store: {} ({})", action, e.path().display());
+        let _ = std::fs::rename(e.path(), e.path().with_extension("bad"));
+    }
 }
 
 fn reg(env: *mut JNIEnv) {
