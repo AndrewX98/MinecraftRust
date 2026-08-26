@@ -33,6 +33,9 @@ mod cll_telemetry;
 mod minecraft_load;
 mod path_helper;
 mod xbox_auth;
+#[cfg_attr(target_os = "macos", path = "platform/macos/imgui_ui_stub.rs")]
+#[cfg_attr(not(target_os = "macos"), path = "imgui_ui/mod.rs")]
+mod imgui_ui;
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 
@@ -139,6 +142,11 @@ fn main() {
     // Init version info
     startup::init_version("com.mojang.minecraftpe", 0);
 
+    // Load launcher settings (<data dir>/mcpelauncher-client-settings.txt) —
+    // port of C++ Settings::load() (main.cpp:290). Must happen before the
+    // window is created so fullscreen/vsync/HUD anchors apply.
+    crate::settings::load();
+
     // Set up filesystem rewrite rules (matching C++ client behavior).
     // Redirects Minecraft's Android data paths to the real data dir
     // so cache files (~2GB) land in XDG dirs, not the working directory.
@@ -239,6 +247,10 @@ fn main() {
 
     // Set the game handle for the native symbol resolver
     unsafe { rust_bridge::jni_set_game_handle(game_handle) };
+
+    // Resolve the game's Mouse::feed — pointer-locked relative motion is fed
+    // directly into it (manifest SymbolsHelper::initSymbols + useDirectMouseInput).
+    window_callbacks::init_mouse_feed(game_handle);
 
     // Create Rust JniSupport with libjnivm-sys VM and register all classes
     log::info!("mcpelauncher-client: initializing Rust JNI VM...");

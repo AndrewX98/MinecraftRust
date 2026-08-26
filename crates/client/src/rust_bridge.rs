@@ -918,6 +918,8 @@ pub unsafe extern "C" fn fake_egl_make_current(
     if !draw.is_null() {
         crate::game_window::game_window_make_current(draw, 1);
         CURRENT_DRAW_SURFACE.store(draw, Ordering::SeqCst);
+        // Upstream FakeEGL: ImGuiUIInit((GameWindow*)draw) here.
+        crate::imgui_ui::init_once();
         // Track eglut's real surface for diagnostics / host path.
         let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
         if let Some(eglut_win) = win_ref.as_ref() {
@@ -1006,6 +1008,8 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
     }
 
     if !win.is_null() {
+        // Upstream FakeEGL: ImGuiUIDrawFrame((GameWindow*)surface) before swap.
+        crate::imgui_ui::draw_frame();
         crate::game_window::game_window_swap_buffers(win);
         if n < 5 || n % 300 == 0 {
             log::warn!(

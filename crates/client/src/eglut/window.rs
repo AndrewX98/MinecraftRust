@@ -152,7 +152,7 @@ pub unsafe extern "C" fn eglutNativeInitWindow(dpy: *mut Display, xwin: Window, 
     STATE.num_windows = 1;
     crate::rust_bridge::fake_window_set_size(width, height);
     eglMakeCurrent(egl_dpy, surface, surface, context);
-    eglSwapInterval(egl_dpy, 1);
+    eglSwapInterval(egl_dpy, if crate::settings::mc_settings_get_vsync() { 1 } else { 0 });
 }
 
 #[no_mangle]

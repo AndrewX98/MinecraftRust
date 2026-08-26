@@ -28,6 +28,8 @@ msa-daemon-client = { path = "../msa-daemon-client" }
 cll-telemetry = { path = "../cll-telemetry" }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "process", "fs", "sync", "io-util", "net"] }
+dear-imgui-rs = "0.17"
+dear-imgui-sys = "0.17"
 
 # X11 is only used by the Linux eglut backend (macOS uses platform/macos/*);
 # cpal's macOS backend needs the Apple SDK, so it is also target-gated

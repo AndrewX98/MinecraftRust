@@ -1016,7 +1016,6 @@ pub unsafe extern "C" fn jni_support_on_set_textbox_text(s: *mut c_void, text: *
     if cursor < text_str.len() {
         crate::main_activity::set_launcher_last_char(text_str.as_bytes()[cursor] as i32);
     }
-    log::info!("jni_support_on_set_textbox_text: text={:?} copy={} cursor={}", text_str, copy_pos, cursor_pos);
 }
 
 /// TextInputHandler caret callback (launcher caret move → game). Mirrors C++

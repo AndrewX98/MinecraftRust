@@ -6,7 +6,8 @@
 //! are not set because the game drives rendering via FakeEGL). Statistically-unreachable
 //! branches from the C++ original were dropped: `inputQueue.addEvent` paths
 //! (game is always a game activity), `emulateTouch`, and the direct
-//! mouse/keyboard feeds.
+//! keyboard feed (`init_mouse_feed` restores the direct mouse feed —
+//! the GameActivity relative-event path has much higher in-game sensitivity).
 //!
 //! The `callbacks` token stays an opaque `*mut c_void`; the Rust `FakeLooper`
 //! owns it in per-thread state and exposes it via
@@ -15,7 +16,44 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::time::{Duration, Instant};
+
+// ============================================================
+// Direct mouse input (manifest window_callbacks.cpp:17, symbols.cpp:11-16)
+// ============================================================
+
+/// `void Mouse::feed(char, char, short, short, short, short)`.
+type MouseFeedFn = unsafe extern "C" fn(i8, i8, i16, i16, i16, i16);
+
+static MOUSE_FEED: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Resolve the game's `Mouse::feed` symbol. When present, pointer-locked
+/// relative motion is fed straight into the game instead of through
+/// GameActivity HOVER_MOVE events — the game applies a different sensitivity
+/// to those two paths, so this must match upstream.
+pub fn init_mouse_feed(handle: *mut c_void) {
+    let mut sym = unsafe {
+        linker::mcpelauncher_dispatch_dlsym(
+            handle,
+            b"_ZN5Mouse4feedEccssss\0".as_ptr() as *const c_char,
+        )
+    };
+    if sym.is_null() {
+        // 1.19.60.26 Beta changed the Mouse::feed ABI (signed char variant).
+        sym = unsafe {
+            linker::mcpelauncher_dispatch_dlsym(
+                handle,
+                b"_ZN5Mouse4feedEcassss\0".as_ptr() as *const c_char,
+            )
+        };
+    }
+    MOUSE_FEED.store(sym, Ordering::SeqCst);
+    log::info!(
+        "window_callbacks: direct mouse input {}",
+        if sym.is_null() { "unavailable (GameActivity relative events)" } else { "resolved" }
+    );
+}
 
 // ============================================================
 // Android constants (android-support-headers/android/input.h)
@@ -73,7 +111,7 @@ mod action {
 // KeyCode values (key_mapping.h enum class KeyCode)
 // ============================================================
 
-mod keycode {
+pub(crate) mod keycode {
     pub const UNKNOWN: i32 = 0;
     pub const BACKSPACE: i32 = 8;
     pub const TAB: i32 = 9;
@@ -399,6 +437,9 @@ impl WindowCallbacks {
         if !self.has_input_mode(InputMode::Mouse, true) {
             return;
         }
+        if crate::imgui_ui::want_capture_mouse() {
+            return;
+        }
         let mut it = self.mouse_button_callbacks.iter();
         while let Some(e) = it.next() {
             if (e.cb)(e.user, x, y, btn, action) {
@@ -440,6 +481,9 @@ impl WindowCallbacks {
         if !self.has_input_mode(InputMode::Mouse, true) {
             return;
         }
+        if crate::imgui_ui::want_capture_mouse() {
+            return;
+        }
         let mut it = self.mouse_position_callbacks.iter();
         while let Some(e) = it.next() {
             if (e.cb)(e.user, x, y, false) {
@@ -467,6 +511,13 @@ impl WindowCallbacks {
                 return;
             }
         }
+        // Direct feed into the game's Mouse class (window_callbacks.cpp:232-233).
+        let feed = MOUSE_FEED.load(Ordering::SeqCst);
+        if !feed.is_null() {
+            let feed_fn: MouseFeedFn = unsafe { std::mem::transmute(feed) };
+            unsafe { feed_fn(0, 0, 0, 0, x as i16, y as i16) };
+            return;
+        }
         self.send_mouse_event(
             android::AINPUT_SOURCE_MOUSE_RELATIVE,
             0,
@@ -480,6 +531,9 @@ impl WindowCallbacks {
 
     fn on_mouse_scroll(&mut self, x: f64, y: f64, dx: f64, dy: f64) {
         if !self.has_input_mode(InputMode::Mouse, true) {
+            return;
+        }
+        if crate::imgui_ui::want_capture_mouse() {
             return;
         }
         let mut it = self.mouse_scroll_callbacks.iter();
@@ -560,6 +614,9 @@ impl WindowCallbacks {
 
     fn on_keyboard(&mut self, key: i32, action: i32, mods: i32) {
         if !self.has_input_mode(InputMode::Mouse, true) {
+            return;
+        }
+        if crate::imgui_ui::want_capture_keyboard() {
             return;
         }
         let mut it = self.keyboard_callbacks.iter();
@@ -1129,6 +1186,7 @@ unsafe extern "C" fn eglut_cb_mouse(x: i32, y: i32) {
     let c = &mut *cb;
     c.last_mouse_x = x;
     c.last_mouse_y = y;
+    crate::imgui_ui::record_mouse_pos(x as f64, y as f64);
     c.on_mouse_position(x as f64, y as f64);
 }
 
@@ -1147,13 +1205,16 @@ unsafe extern "C" fn eglut_cb_mouse_button(x: i32, y: i32, btn: i32, action: i32
     }
     let c = &mut *cb;
     if (btn == 4 || btn == 5) && action == 0 {
+        crate::imgui_ui::record_mouse_wheel(0.0, if btn == 5 { -1.0 } else { 1.0 });
         c.on_mouse_scroll(x as f64, y as f64, 0.0, if btn == 5 { -1.0 } else { 1.0 });
         return;
     }
     if (btn == 6 || btn == 7) && action == 0 {
+        crate::imgui_ui::record_mouse_wheel(if btn == 7 { -1.0 } else { 1.0 }, 0.0);
         c.on_mouse_scroll(x as f64, y as f64, if btn == 7 { -1.0 } else { 1.0 }, 0.0);
         return;
     }
+    crate::imgui_ui::record_mouse_button(btn, action == 0);
     let b = if btn == 2 {
         3
     } else if btn == 3 {
@@ -1206,6 +1267,7 @@ unsafe extern "C" fn eglut_cb_keyboard(buf: *mut c_char, action: i32) {
         return;
     }
     if action == 0 || action == 2 {
+        crate::imgui_ui::record_text(bytes);
         let mut data = bytes.to_vec();
         if data == b"\r" {
             data = b"\n".to_vec();
@@ -1222,6 +1284,9 @@ unsafe extern "C" fn eglut_cb_special(key: i32, action: i32, meta: u32) {
     let c = &mut *cb;
     let mods = translate_meta(meta);
     let m_key = get_key_minecraft(key);
+    if m_key != keycode::UNKNOWN {
+        crate::imgui_ui::record_key(m_key, action == 0 || action == 2);
+    }
     let enum_action = if action == 0 {
         action::KEY_PRESS
     } else if action == 2 {
