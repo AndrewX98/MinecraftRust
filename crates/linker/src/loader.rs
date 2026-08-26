@@ -351,7 +351,7 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
 
     Ok(LoadedElf {
         soinfo,
-        data: data.to_vec(),
+        data: Vec::new(),
     })
 }
 

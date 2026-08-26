@@ -159,13 +159,25 @@ fn resolve_sym(
     if sym_idx == 0 {
         return None;
     }
-
+    // Fast path: borrow strtab string without allocation (avoids 214k String allocs
+    // for libminecraftpe.so). strtab lives in the mmap'd image at soinfo.base.
+    if let Some(name) = get_sym_name_view(soinfo, sym_idx) {
+        if let Some(&addr) = soinfo.external_symbols.get(name) {
+            return Some(addr);
+        }
+        if let Some(addr) = get_symbol(name) {
+            return Some(addr);
+        }
+        return None;
+    }
+    // Fallback: bounds failure -> try allocating path (rare)
     let sym_name = get_sym_name(soinfo, sym_idx);
-
+    if sym_name.is_empty() {
+        return None;
+    }
     if let Some(&addr) = soinfo.external_symbols.get(&sym_name) {
         return Some(addr);
     }
-
     get_symbol(&sym_name)
 }
 
@@ -185,29 +197,30 @@ fn is_weak_sym(soinfo: &SoInfo, sym_idx: u32) -> bool {
 }
 
 fn get_sym_name(soinfo: &SoInfo, sym_idx: u32) -> String {
-    let symtab = match soinfo.symtab {
-        Some(s) => s,
-        None => return String::new(),
-    };
-    let strtab = match soinfo.strtab {
-        Some(s) => s,
-        None => return String::new(),
-    };
+    get_sym_name_view(soinfo, sym_idx).unwrap_or("").to_string()
+}
+
+/// Borrowed view into strtab — zero allocation. `strtab`/`symtab` point into the
+/// mmap'd image at `soinfo.base`, which lives for the process lifetime.
+fn get_sym_name_view(soinfo: &SoInfo, sym_idx: u32) -> Option<&'static str> {
+    let symtab = soinfo.symtab?;
+    let strtab = soinfo.strtab?;
     let sym_size = 24usize;
     let sym_offset = sym_idx as usize * sym_size;
-    // Bounds check: symbol entry must be within the segment
     if sym_offset + sym_size > soinfo.size {
-        return String::new();
+        return None;
     }
     unsafe {
         let sym_ptr = (symtab as *const u8).add(sym_offset) as *const u32;
         let st_name = sym_ptr.read() as usize;
-        // Bounds check: string must be within the segment
         if st_name >= soinfo.strtab_size {
-            return String::new();
+            return None;
         }
-        let name_ptr = (strtab as *const u8).add(st_name);
-        let cstr = std::ffi::CStr::from_ptr(name_ptr as *const i8);
-        cstr.to_str().unwrap_or("").to_string()
+        let name_ptr = (strtab as *const u8).add(st_name) as *const i8;
+        let cstr = std::ffi::CStr::from_ptr(name_ptr);
+        // SAFETY: strtab is NUL-terminated and lives in executable mmap.
+        // Extend lifetime to 'static — caller uses it only during relocation.
+        let s = cstr.to_str().ok()?;
+        Some(std::mem::transmute::<&str, &'static str>(s))
     }
 }
