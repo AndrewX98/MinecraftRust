@@ -24,6 +24,7 @@ pub mod utils;
 
 use soinfo::SoInfo;
 use std::collections::{HashMap, HashSet};
+use std::os::unix::io::AsRawFd;
 use std::sync::{LazyLock, RwLock};
 
 pub type Handle = usize;
@@ -385,9 +386,59 @@ fn load_library_internal(
 
     for path in &search_paths {
         log::debug!("linker: trying path: '{}'", path);
-        if let Ok(data) = std::fs::read(path) {
-            match loader::load_elf(&data, &name) {
+        // Large-file fast path: header mmap + demand-paged segment mmap via fd (avoids 371 MB copy).
+        // Small files (<1 MB) use std::fs::read + anonymous mapping (keeps host-lib path simple).
+        let file_opt = std::fs::File::open(path).ok();
+        let (data_owned, mmap_ptr, mmap_len, file_keep): (Vec<u8>, *mut libc::c_void, usize, Option<std::fs::File>) =
+            if let Some(f) = file_opt {
+                if let Ok(meta) = f.metadata() {
+                    if meta.len() > 1024 * 1024 * 1024 {
+                        let pg = 4096usize;
+                        let hlen = (meta.len() as usize).min(pg * 4);
+                        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), hlen, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
+                        if ptr != libc::MAP_FAILED {
+                            // Header slice for Elf::parse only; segments are demand-paged from fd.
+                            (Vec::new(), ptr, hlen, Some(f))
+                        } else {
+                            // mmap failed — fallback to read
+                            match std::fs::read(path) {
+                                Ok(d) => (d, std::ptr::null_mut(), 0, None),
+                                Err(_) => continue,
+                            }
+                        }
+                    } else {
+                        match std::fs::read(path) {
+                            Ok(d) => (d, std::ptr::null_mut(), 0, None),
+                            Err(_) => continue,
+                        }
+                    }
+                } else {
+                    match std::fs::read(path) {
+                        Ok(d) => (d, std::ptr::null_mut(), 0, None),
+                        Err(_) => continue,
+                    }
+                }
+            } else {
+                continue;
+            };
+        // Build a temporary slice for the loader: either the header mmap or the owned Vec.
+        let data_slice: &[u8] = if !mmap_ptr.is_null() {
+            unsafe { std::slice::from_raw_parts(mmap_ptr as *const u8, mmap_len) }
+        } else {
+            &data_owned
+        };
+        let fd_opt = file_keep.as_ref().map(|f| f.as_raw_fd());
+        let load_result = if let Some(fd) = fd_opt {
+            loader::load_elf_with_fd(fd, data_slice, &name)
+        } else {
+            loader::load_elf(data_slice, &name)
+        };
+        match load_result {
                 Ok(mut loaded) => {
+                    // Unmap header after segments are mapped; keep File open for demand paging.
+                    if !mmap_ptr.is_null() {
+                        unsafe { libc::munmap(mmap_ptr, mmap_len); }
+                    }
                     log::info!("linker: found ELF at '{}'", path);
                     // Add external symbols
                     for (k, v) in external_symbols {
@@ -401,7 +452,7 @@ fn load_library_internal(
                     drop(state);
 
                     // Recursively load DT_NEEDED dependencies
-                    load_dependencies(&mut loaded.soinfo, &data, &name, external_symbols);
+                    load_dependencies(&mut loaded.soinfo, data_slice, &name, external_symbols);
 
                     // Re-acquire lock for remainder
                     let mut state = STATE.write().unwrap();
@@ -572,10 +623,13 @@ fn load_library_internal(
                     return handle;
                 }
                 Err(e) => {
+                    if !mmap_ptr.is_null() {
+                        unsafe { libc::munmap(mmap_ptr, mmap_len); }
+                    }
                     log::debug!("linker: failed to load {} from {}: {:?}", name, path, e);
                 }
             }
-        }
+            // file_keep (and mapping) dropped here; MAP_PRIVATE mappings survive close.
     }
 
     // Not found — register as stub
@@ -1677,22 +1731,53 @@ fn load_library_internal_no_ctors(
 
     'search: for path in &search_paths {
         log::debug!("linker: trying path: '{}'", path);
-        let data = match std::fs::read(path) {
-            Ok(d) => {
-                log::info!("linker: read {} bytes from '{}'", d.len(), path);
-                d
-            }
-            Err(e) => {
-                log::info!("linker: failed to read {}: {:?}", path, e);
+        let file_opt = std::fs::File::open(path).ok();
+        let (data_owned, mmap_ptr, mmap_len, file_keep): (Vec<u8>, *mut libc::c_void, usize, Option<std::fs::File>) =
+            if let Some(f) = file_opt {
+                if let Ok(meta) = f.metadata() {
+                    if meta.len() > 1024 * 1024 * 1024 {
+                        let pg = 4096usize;
+                        let hlen = (meta.len() as usize).min(pg * 4);
+                        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), hlen, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
+                        if ptr != libc::MAP_FAILED {
+                            (Vec::new(), ptr, hlen, Some(f))
+                        } else {
+                            match std::fs::read(path) {
+                                Ok(d) => { log::info!("linker: read {} bytes from '{}'", d.len(), path); (d, std::ptr::null_mut(), 0, None) }
+                                Err(e) => { log::info!("linker: failed to read {}: {:?}", path, e); continue; }
+                            }
+                        }
+                    } else {
+                        match std::fs::read(path) {
+                            Ok(d) => { log::info!("linker: read {} bytes from '{}'", d.len(), path); (d, std::ptr::null_mut(), 0, None) }
+                            Err(e) => { log::info!("linker: failed to read {}: {:?}", path, e); continue; }
+                        }
+                    }
+                } else {
+                    match std::fs::read(path) {
+                        Ok(d) => { log::info!("linker: read {} bytes from '{}'", d.len(), path); (d, std::ptr::null_mut(), 0, None) }
+                        Err(e) => { log::info!("linker: failed to read {}: {:?}", path, e); continue; }
+                    }
+                }
+            } else {
+                log::info!("linker: failed to read {}: not found", path);
                 continue;
-            }
+            };
+        let data_slice: &[u8] = if !mmap_ptr.is_null() {
+            unsafe { std::slice::from_raw_parts(mmap_ptr as *const u8, mmap_len) }
+        } else {
+            &data_owned
         };
-        let mut loaded = match loader::load_elf(&data, &name) {
+        let fd_opt = file_keep.as_ref().map(|f| f.as_raw_fd());
+        let load_result = if let Some(fd) = fd_opt { loader::load_elf_with_fd(fd, data_slice, &name) } else { loader::load_elf(data_slice, &name) };
+        let mut loaded = match load_result {
             Ok(l) => {
+                if !mmap_ptr.is_null() { unsafe { libc::munmap(mmap_ptr, mmap_len); } }
                 log::info!("linker: found ELF at '{}' -> base=0x{:x} size={}", path, l.soinfo.base, l.soinfo.size);
                 l
             }
             Err(e) => {
+                if !mmap_ptr.is_null() { unsafe { libc::munmap(mmap_ptr, mmap_len); } }
                 log::debug!("linker: failed to load {} from {}: {:?}", name, path, e);
                 continue;
             }
@@ -1709,7 +1794,7 @@ fn load_library_internal_no_ctors(
         // Drop lock before loading deps (load_library_internal needs it)
         drop(state);
 
-        load_dependencies(&mut loaded.soinfo, &data, &name, external_symbols);
+        load_dependencies(&mut loaded.soinfo, data_slice, &name, external_symbols);
 
         // Re-acquire lock for relocation + registration
         let mut state = STATE.write().unwrap();

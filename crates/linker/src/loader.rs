@@ -20,6 +20,14 @@ pub enum LoadError {
 }
 
 pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
+    load_elf_inner(data, None, name)
+}
+
+pub fn load_elf_with_fd(fd: i32, data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
+    load_elf_inner(data, Some(fd), name)
+}
+
+fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf, LoadError> {
     let elf = Elf::parse(data).map_err(|e| LoadError::Parse(format!("{:?}", e)))?;
 
     let is_lib = elf.header.e_type == elf::header::ET_DYN;
@@ -76,11 +84,58 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
     for phdr in &phdrs {
         let seg_start = base + phdr.p_vaddr as usize;
         let seg_memsz = phdr.p_memsz as usize;
+        let seg_filesz = phdr.p_filesz as usize;
+        let file_off = phdr.p_offset as usize;
         let final_prot = phdr_flags_to_prot(phdr.p_flags);
         load_segments.push((seg_start, seg_memsz, final_prot));
-        // Map RW initially to allow copying data; caller sets final prot
         let map_prot = final_prot | libc::PROT_WRITE;
 
+        let use_file_mmap = fd.is_some() && seg_filesz > 0 && data.len() > 1024 * 1024;
+        if use_file_mmap {
+            let fd_val = fd.unwrap();
+            let seg_page_start = seg_start & !(page_size - 1);
+            let seg_page_end = (seg_start + seg_memsz + page_size - 1) & !(page_size - 1);
+            let seg_file_end = seg_start + seg_filesz;
+            let file_page_start = file_off & !(page_size - 1);
+            let file_length = (file_off + seg_filesz) - file_page_start;
+            if file_length > 0 {
+                let r = unsafe {
+                    libc::mmap(
+                        seg_page_start as *mut libc::c_void,
+                        file_length,
+                        map_prot,
+                        libc::MAP_PRIVATE | libc::MAP_FIXED,
+                        fd_val,
+                        file_page_start as i64,
+                    )
+                };
+                if r != libc::MAP_FAILED {
+                    if (phdr.p_flags & 0x2) != 0 && (seg_file_end & (page_size - 1)) != 0 {
+                        unsafe {
+                            let tail = seg_file_end as *mut u8;
+                            let len = page_size - (seg_file_end & (page_size - 1));
+                            std::ptr::write_bytes(tail, 0, len);
+                        }
+                    }
+                    let seg_file_end_page = (seg_file_end + page_size - 1) & !(page_size - 1);
+                    if seg_page_end > seg_file_end_page {
+                        let anon_size = seg_page_end - seg_file_end_page;
+                        unsafe {
+                            libc::mmap(
+                                seg_file_end_page as *mut libc::c_void,
+                                anon_size,
+                                map_prot,
+                                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
+                                -1,
+                                0,
+                            );
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        // Fallback: anonymous + copy
         let aligned_start = seg_start & !(page_size - 1);
         let offset_in_page = seg_start - aligned_start;
         let aligned_size = seg_memsz + offset_in_page;
@@ -99,14 +154,13 @@ pub fn load_elf(data: &[u8], name: &str) -> Result<LoadedElf, LoadError> {
             }
         }
 
-        let file_start = phdr.p_offset as usize;
-        let file_end = file_start + phdr.p_filesz as usize;
+        let file_end = file_off + seg_filesz;
         if file_end <= data.len() {
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(file_start),
+                    data.as_ptr().add(file_off),
                     seg_start as *mut u8,
-                    phdr.p_filesz as usize,
+                    seg_filesz,
                 );
             }
         }
