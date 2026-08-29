@@ -1,4 +1,5 @@
 #![feature(c_variadic)]
+#![allow(warnings)]
 
 mod startup;
 mod core_patches;
@@ -36,6 +37,7 @@ mod xbox_auth;
 #[cfg_attr(target_os = "macos", path = "platform/macos/imgui_ui_stub.rs")]
 #[cfg_attr(not(target_os = "macos"), path = "imgui_ui/mod.rs")]
 mod imgui_ui;
+mod perf;
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 
@@ -74,6 +76,8 @@ pub static options: LauncherOptions = LauncherOptions {
 };
 
 fn main() {
+    perf::init();
+    let t_main = std::time::Instant::now();
     // MinecraftUtils::workaroundLocaleBug — force a locale that MCPE's libc++
     // can construct. Without this, collate_byname throws on Android-style
     // names like "en.UTF-8" (from getLocale() "en" + ".UTF-8") on Linux hosts
@@ -133,19 +137,19 @@ fn main() {
     // C++ PathHelper defaults to XDG dirs (~/.local/share/mcpelauncher/, ~/.cache/mcpelauncher/).
     let data_dir_str = data_dir.get();
     let cache_dir_str = cache_dir.get();
-    startup::setup_paths(
-        Some(&minecraft_dir),
-        if data_dir_str.is_empty() { None } else { Some(&data_dir_str) },
-        if cache_dir_str.is_empty() { None } else { Some(&cache_dir_str) },
-    );
-
-    // Init version info
-    startup::init_version("com.mojang.minecraftpe", 0);
+    perf::span("paths_version", || {
+        startup::setup_paths(
+            Some(&minecraft_dir),
+            if data_dir_str.is_empty() { None } else { Some(&data_dir_str) },
+            if cache_dir_str.is_empty() { None } else { Some(&cache_dir_str) },
+        );
+        startup::init_version("com.mojang.minecraftpe", 0);
+    });
 
     // Load launcher settings (<data dir>/mcpelauncher-client-settings.txt) —
     // port of C++ Settings::load() (main.cpp:290). Must happen before the
     // window is created so fullscreen/vsync/HUD anchors apply.
-    crate::settings::load();
+    perf::span("settings_load", || crate::settings::load());
 
     // Set up filesystem rewrite rules (matching C++ client behavior).
     // Redirects Minecraft's Android data paths to the real data dir
@@ -168,33 +172,35 @@ fn main() {
     }
 
     // Get libc symbols from the Rust libc-shim crate
-    let libc_syms = startup::get_libc_symbols();
+    let libc_syms = perf::span("libc_shim", || startup::get_libc_symbols());
     log::info!("mcpelauncher-client: {} libc symbols registered (Rust libc-shim)", libc_syms.len());
 
     if !libc_syms.is_empty() {
-        linker::load_library("libc.so", &libc_syms);
+        perf::span("linker_register_libc", || linker::load_library("libc.so", &libc_syms));
     }
 
     // Load core libraries (loads libm, libz, etc. via C++ linker)
-    if smoke.get() {
-        startup::load_core_libraries_smoke();
-        log::info!("mcpelauncher-client: smoke core libraries loaded successfully");
-    } else {
-        match startup::load_core_libraries(&minecraft_dir) {
-            Ok(()) => log::info!("mcpelauncher-client: core libraries loaded successfully"),
-            Err(code) => log::error!("mcpelauncher-client: failed to load core libraries (code={})", code),
+    perf::span("core_libs", || {
+        if smoke.get() {
+            startup::load_core_libraries_smoke();
+            log::info!("mcpelauncher-client: smoke core libraries loaded successfully");
+        } else {
+            match startup::load_core_libraries(&minecraft_dir) {
+                Ok(()) => log::info!("mcpelauncher-client: core libraries loaded successfully"),
+                Err(code) => log::error!("mcpelauncher-client: failed to load core libraries (code={})", code),
+            }
         }
-    }
+    });
 
     // Set up android hooks (FakeLooper, FakeAssetManager, FakeInputQueue, FakeWindow,
     // CorePatches) — MUST happen before loading the game library so its relocations
     // resolve to real implementations.
-    startup::setup_android_hooks();
+    perf::span("android_hooks", || startup::setup_android_hooks());
     log::info!("mcpelauncher-client: android hooks registered successfully");
 
     // Create the Rust eglut window and register GLES2 symbols from real GL driver
     // (replaces the deleted C++ GameWindowManager path).
-    startup::create_window_and_setup_graphics();
+    perf::span("eglut_window", || startup::create_window_and_setup_graphics());
     log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
 
     // Smoke mode (-smoke): hold the freshly created window open for a few
@@ -217,20 +223,22 @@ fn main() {
     // Preinit pass: load mods that don't depend on libminecraftpe.so before
     // the game library (main.cpp:497). Extra dirs come from -m/--mods.
     let mod_dirs = startup::split_mod_dirs(&mods.get());
-    if !mod_dirs.is_empty() || std::path::Path::new(&format!(
-        "{}/mods/",
-        startup::primary_data_dir()
-    )).exists() {
-        startup::load_mods(true, &mod_dirs);
-    }
+    perf::span("mods_preinit", || {
+        if !mod_dirs.is_empty() || std::path::Path::new(&format!(
+            "{}/mods/",
+            startup::primary_data_dir()
+        )).exists() {
+            startup::load_mods(true, &mod_dirs);
+        }
+    });
 
     // Repair the XAL token store before the game's auth stack reads it
     // (corrupt ECDSA key cache / stale webview-flow markers).
-    crate::jni::xal_browser::sanitize_xal_store();
+    perf::span("xal_sanitize", || crate::jni::xal_browser::sanitize_xal_store());
 
     // Try loading libminecraftpe.so
     log::info!("mcpelauncher-client: attempting to load libminecraftpe.so...");
-    let game_handle = match startup::load_minecraft() {
+    let game_handle = match perf::span("linker_load_game", || startup::load_minecraft()) {
         Ok(handle) => {
             log::info!("mcpelauncher-client: libminecraftpe.so loaded at {:p}", handle);
             handle
@@ -243,7 +251,7 @@ fn main() {
 
     // Init pass: load the remaining mods now that the game symbols exist
     // (main.cpp:547).
-    startup::load_mods(false, &mod_dirs);
+    perf::span("mods_init", || startup::load_mods(false, &mod_dirs));
 
     // Set the game handle for the native symbol resolver
     unsafe { rust_bridge::jni_set_game_handle(game_handle) };
@@ -253,21 +261,26 @@ fn main() {
     window_callbacks::init_mouse_feed(game_handle);
 
     // Create Rust JniSupport with libjnivm-sys VM and register all classes
-    log::info!("mcpelauncher-client: initializing Rust JNI VM...");
-    let rust_support = unsafe { jni_support::jni_support_new() };
-    log::info!("mcpelauncher-client: Rust JNI VM created and classes registered");
+    let rust_support = perf::span("jni_vm", || {
+        log::info!("mcpelauncher-client: initializing Rust JNI VM...");
+        let s = unsafe { jni_support::jni_support_new() };
+        log::info!("mcpelauncher-client: Rust JNI VM created and classes registered");
+        s
+    });
 
     // Tell FakeLooper about the Rust JniSupport so it can forward the window
     startup::set_fake_looper_rust_jni_support(rust_support);
 
     // Register native methods from the game library
-    log::info!("mcpelauncher-client: registering native methods...");
-    unsafe { jni_support::jni_support_register_natives(rust_support, Some(jni_resolve_symbol)) };
-    log::info!("mcpelauncher-client: native methods registered");
+    perf::span("jni_natives", || {
+        log::info!("mcpelauncher-client: registering native methods...");
+        unsafe { jni_support::jni_support_register_natives(rust_support, Some(jni_resolve_symbol)) };
+        log::info!("mcpelauncher-client: native methods registered");
+    });
 
     // Create FakeAssetManager for game asset loading
     let assets_dir = format!("{}/assets", minecraft_dir);
-    startup::create_and_set_global_asset_manager(&assets_dir);
+    perf::span("asset_manager", || startup::create_and_set_global_asset_manager(&assets_dir));
     log::info!("mcpelauncher-client: FakeAssetManager created with root: {}", assets_dir);
 
     // Resolve game startup symbols
@@ -276,12 +289,15 @@ fn main() {
     let stbi_free = startup::dlsym(game_handle, "stbi_image_free");
 
     // Start the game via Rust JniSupport (libjnivm-sys VM)
-    log::info!("mcpelauncher-client: starting game via Rust JniSupport...");
-    unsafe {
-        fake_thread_mover_store_start_thread_id();
-        jni_support::jni_support_start_game(rust_support, std::ptr::null_mut(), game_create, stbi_load, stbi_free);
-    }
-    log::info!("mcpelauncher-client: game started, entering event loop...");
+    perf::span("game_start", || {
+        log::info!("mcpelauncher-client: starting game via Rust JniSupport...");
+        unsafe {
+            fake_thread_mover_store_start_thread_id();
+            jni_support::jni_support_start_game(rust_support, std::ptr::null_mut(), game_create, stbi_load, stbi_free);
+        }
+        log::info!("mcpelauncher-client: game started, entering event loop...");
+    });
+    perf::span_ms("total_to_game_start", t_main.elapsed().as_millis());
 
     // Block the main thread forever (game thread runs independently)
     unsafe { fake_thread_mover_execute_main_thread() };

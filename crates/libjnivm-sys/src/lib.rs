@@ -1,4 +1,4 @@
-#![allow(non_camel_case_types, dead_code)]
+#![allow(non_camel_case_types, dead_code, warnings)]
 
 pub mod types;
 pub mod vm;

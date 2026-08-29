@@ -63,6 +63,11 @@ fn apply_rela(
 ) {
     let _count = size / std::mem::size_of::<Rela>();
     let relas = unsafe { std::slice::from_raw_parts(addr as *const Rela, _count) };
+    // Cache resolved symbols by sym idx (900k relocs -> ~20k unique symbols for libminecraftpe).
+    let mut cache: std::collections::HashMap<u32, Option<usize>> = std::collections::HashMap::with_capacity(4096);
+    // 1-entry fast cache for consecutive same symbol (mirrors bionic's cache_sym_val).
+    let mut last_sym: u32 = u32::MAX;
+    let mut last_val: Option<usize> = None;
 
     for (_, rela) in relas.iter().enumerate() {
         let r_type = (rela.r_info & 0xffffffff) as u32;
@@ -74,7 +79,10 @@ fn apply_rela(
                 unsafe { std::ptr::write(place as *mut u64, val); }
             }
             R_X86_64_64 | R_X86_64_GLOB_DAT | R_AARCH64_ABS64 | R_AARCH64_GLOB_DAT => {
-                let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
+                let sym_val = if r_sym == last_sym { last_val } else {
+                    let v = *cache.entry(r_sym).or_insert_with(|| resolve_sym(soinfo, r_sym, get_symbol));
+                    last_sym = r_sym; last_val = v; v
+                };
                 if let Some(sv) = sym_val {
                     let val = (sv as u64).wrapping_add(rela.r_addend as u64);
                     unsafe { std::ptr::write(place as *mut u64, val); }
@@ -84,7 +92,10 @@ fn apply_rela(
                 }
             }
             R_X86_64_JUMP_SLOT | R_AARCH64_JUMP_SLOT => {
-                let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
+                let sym_val = if r_sym == last_sym { last_val } else {
+                    let v = *cache.entry(r_sym).or_insert_with(|| resolve_sym(soinfo, r_sym, get_symbol));
+                    last_sym = r_sym; last_val = v; v
+                };
                 if let Some(sv) = sym_val {
                     unsafe { std::ptr::write(place as *mut u64, sv as u64); }
                 } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
@@ -93,7 +104,10 @@ fn apply_rela(
                 }
             }
             R_X86_64_PC32 => {
-                let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
+                let sym_val = if r_sym == last_sym { last_val } else {
+                    let v = *cache.entry(r_sym).or_insert_with(|| resolve_sym(soinfo, r_sym, get_symbol));
+                    last_sym = r_sym; last_val = v; v
+                };
                 if let Some(sv) = sym_val {
                     let val = (sv as u64).wrapping_add(rela.r_addend as u64).wrapping_sub(place as u64);
                     unsafe { std::ptr::write(place as *mut u32, val as u32); }
@@ -116,6 +130,9 @@ fn apply_rel(
 ) {
     let count = size / std::mem::size_of::<Rel>();
     let rels = unsafe { std::slice::from_raw_parts(addr as *const Rel, count) };
+    let mut cache: std::collections::HashMap<u32, Option<usize>> = std::collections::HashMap::with_capacity(1024);
+    let mut last_sym: u32 = u32::MAX;
+    let mut last_val: Option<usize> = None;
 
     for (_, rel) in rels.iter().enumerate() {
         let r_type = (rel.r_info & 0xffffffff) as u32;
@@ -129,7 +146,10 @@ fn apply_rel(
                 unsafe { std::ptr::write(place as *mut u64, val); }
             }
             R_X86_64_64 | R_X86_64_GLOB_DAT | R_AARCH64_ABS64 | R_AARCH64_GLOB_DAT => {
-                let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
+                let sym_val = if r_sym == last_sym { last_val } else {
+                    let v = *cache.entry(r_sym).or_insert_with(|| resolve_sym(soinfo, r_sym, get_symbol));
+                    last_sym = r_sym; last_val = v; v
+                };
                 if let Some(sv) = sym_val {
                     unsafe { std::ptr::write(place as *mut u64, sv as u64); }
                 } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {
@@ -138,7 +158,10 @@ fn apply_rel(
                 }
             }
             R_X86_64_JUMP_SLOT | R_AARCH64_JUMP_SLOT => {
-                let sym_val = resolve_sym(soinfo, r_sym, get_symbol);
+                let sym_val = if r_sym == last_sym { last_val } else {
+                    let v = *cache.entry(r_sym).or_insert_with(|| resolve_sym(soinfo, r_sym, get_symbol));
+                    last_sym = r_sym; last_val = v; v
+                };
                 if let Some(sv) = sym_val {
                     unsafe { std::ptr::write(place as *mut u64, sv as u64); }
                 } else if r_sym != 0 && !is_weak_sym(soinfo, r_sym) {

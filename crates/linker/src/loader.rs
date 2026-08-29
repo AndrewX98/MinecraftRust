@@ -28,7 +28,16 @@ pub fn load_elf_with_fd(fd: i32, data: &[u8], name: &str) -> Result<LoadedElf, L
 }
 
 fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf, LoadError> {
+    #[cfg(feature = "perf")]
+    let t0 = std::time::Instant::now();
     let elf = Elf::parse(data).map_err(|e| LoadError::Parse(format!("{:?}", e)))?;
+    #[cfg(feature = "perf")]
+    {
+        let dt = t0.elapsed();
+        if data.len() > 5 * 1024 * 1024 || name.contains("minecraftpe") {
+            eprintln!("[PERF] span label=goblin_parse:{} ms={} us={}", name, dt.as_millis(), dt.as_micros());
+        }
+    }
 
     let is_lib = elf.header.e_type == elf::header::ET_DYN;
     if !is_lib {
@@ -90,7 +99,7 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
         load_segments.push((seg_start, seg_memsz, final_prot));
         let map_prot = final_prot | libc::PROT_WRITE;
 
-        let use_file_mmap = fd.is_some() && seg_filesz > 0 && data.len() > 1024 * 1024;
+        let use_file_mmap = fd.is_some() && seg_filesz > 0;
         if use_file_mmap {
             let fd_val = fd.unwrap();
             let seg_page_start = seg_start & !(page_size - 1);

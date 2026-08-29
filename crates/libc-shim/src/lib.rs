@@ -1,4 +1,5 @@
 #![feature(c_variadic)]
+#![allow(warnings)]
 
 pub mod types;
 pub mod bionic_conv;

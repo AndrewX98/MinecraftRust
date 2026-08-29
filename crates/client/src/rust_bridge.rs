@@ -956,6 +956,10 @@ pub unsafe extern "C" fn fake_egl_make_current(
     }
 }
 
+// Process-wide swap counters — moved out of function-local statics so tests can read them.
+static SWAP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FIRST_FRAME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 #[no_mangle]
 pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *mut c_void) -> i32 {
     {
@@ -967,9 +971,10 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
         }
     }
 
-    // Upstream FakeEGL: ((GameWindow*)surface)->swapBuffers() -> Rust eglut.
-    static SWAP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SWAP_COUNT.fetch_add(1, Ordering::Relaxed);
+    if n == 0 {
+        let _ = FIRST_FRAME.set(std::time::Instant::now());
+    }
 
     let win = if !surface.is_null() {
         surface
@@ -1012,7 +1017,9 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
         crate::imgui_ui::draw_frame();
         crate::game_window::game_window_swap_buffers(win);
         if n < 5 || n % 300 == 0 {
-            log::warn!(
+            // Use eprintln! so the marker is visible even with RUST_LOG=error/off
+            // (harness watches stderr for n=0). Keeps log overhead low for --release.
+            eprintln!(
                 "[FakeEGL] eglSwapBuffers ok n={} win={:p} tid={:?}",
                 n,
                 win,
@@ -1022,7 +1029,7 @@ pub unsafe extern "C" fn fake_egl_swap_buffers(display: *mut c_void, surface: *m
         return EGL_TRUE;
     }
 
-    log::warn!(
+    eprintln!(
         "[FakeEGL] eglSwapBuffers with null GameWindow display={:p} surface={:p} tid={:?}",
         display,
         surface,
@@ -1441,6 +1448,16 @@ pub extern "C" fn fake_egl_add_swap_buffers_callback(
 ) {
     let mut cbs = SWAP_BUFFERS_CALLBACKS.lock().unwrap();
     cbs.push(SwapBuffersCallback { user: SendPtr(user), callback });
+}
+
+#[allow(dead_code)]
+pub fn fake_egl_swap_count() -> u64 {
+    SWAP_COUNT.load(Ordering::Relaxed)
+}
+
+#[allow(dead_code)]
+pub fn fake_egl_first_frame_instant() -> Option<std::time::Instant> {
+    FIRST_FRAME.get().copied()
 }
 
 } // mod fake_egl

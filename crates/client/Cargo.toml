@@ -42,5 +42,8 @@ cpal = "0.15"
 [target.'cfg(target_os = "macos")'.dependencies]
 glfw = "0.62"
 
+[features]
+perf = ["linker/perf"]
+
 [lints]
 workspace = true

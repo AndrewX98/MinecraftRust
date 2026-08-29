@@ -1,3 +1,4 @@
+#![allow(warnings)]
 pub mod base_strings;
 pub mod block_allocator;
 pub mod cfi;
@@ -68,6 +69,8 @@ pub enum LinkerError {
 }
 
 static STATE: LazyLock<RwLock<LinkerState>> = LazyLock::new(|| RwLock::new(LinkerState::new()));
+static HOST_DLSYM_CACHE: LazyLock<std::sync::Mutex<HashMap<String, Option<usize>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Set by load_library_internal / the game-lib path: true if the most recent
 /// ELF load had unresolved relocations. ModLoader refuses to run entry points
@@ -386,19 +389,18 @@ fn load_library_internal(
 
     for path in &search_paths {
         log::debug!("linker: trying path: '{}'", path);
-        // Large-file fast path: header mmap + demand-paged segment mmap via fd (avoids 371 MB copy).
-        // Small files (<1 MB) use std::fs::read + anonymous mapping (keeps host-lib path simple).
+        // Large-file fast path: whole-file mmap for parsing + demand-paged segment mmap via fd (avoids 371 MB Vec + copy).
+        // Small files (<=1 MB) use std::fs::read + anonymous mapping (keeps host-lib path simple).
         let file_opt = std::fs::File::open(path).ok();
         let (data_owned, mmap_ptr, mmap_len, file_keep): (Vec<u8>, *mut libc::c_void, usize, Option<std::fs::File>) =
             if let Some(f) = file_opt {
                 if let Ok(meta) = f.metadata() {
-                    if meta.len() > 1024 * 1024 * 1024 {
-                        let pg = 4096usize;
-                        let hlen = (meta.len() as usize).min(pg * 4);
-                        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), hlen, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
+                    if meta.len() > 1024 * 1024 && meta.len() <= isize::MAX as u64 && meta.len() > 0 {
+                        let len = meta.len() as usize;
+                        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
                         if ptr != libc::MAP_FAILED {
-                            // Header slice for Elf::parse only; segments are demand-paged from fd.
-                            (Vec::new(), ptr, hlen, Some(f))
+                            // Whole-file slice for Elf::parse; segments are demand-paged from fd.
+                            (Vec::new(), ptr, len, Some(f))
                         } else {
                             // mmap failed — fallback to read
                             match std::fs::read(path) {
@@ -421,7 +423,7 @@ fn load_library_internal(
             } else {
                 continue;
             };
-        // Build a temporary slice for the loader: either the header mmap or the owned Vec.
+        // Build a temporary slice for the loader: either the mmap or the owned Vec.
         let data_slice: &[u8] = if !mmap_ptr.is_null() {
             unsafe { std::slice::from_raw_parts(mmap_ptr as *const u8, mmap_len) }
         } else {
@@ -435,7 +437,7 @@ fn load_library_internal(
         };
         match load_result {
                 Ok(mut loaded) => {
-                    // Unmap header after segments are mapped; keep File open for demand paging.
+                    // Unmap file after segments are mapped; keep File open for demand paging (MAP_PRIVATE survives close).
                     if !mmap_ptr.is_null() {
                         unsafe { libc::munmap(mmap_ptr, mmap_len); }
                     }
@@ -474,9 +476,10 @@ fn load_library_internal(
                         if let Some(&addr) = state.global_symbols.get(sym_name) {
                             return Some(addr);
                         }
-                        // Search other loaded libs (include stubs: their symbols
-                        // live in external_symbols / were also published to
-                        // global_symbols at registration time).
+                        // Fallback scan over other libs: global_symbols should already
+                        // contain all exports, but some libs (e.g. libmaesdk) publish
+                        // symbols that are not yet in global_symbols due to timing or
+                        // duplicate handling, so keep the linear scan as a slow-path.
                         for (_, lib) in &state.libraries_by_handle {
                             if let Some((addr, _)) = symbol::find_symbol(&lib.soinfo, sym_name) {
                                 if addr != 0 {
@@ -487,27 +490,39 @@ fn load_library_internal(
                                 return Some(addr);
                             }
                         }
-                        // Host fallback: mods compiled against the host
-                        // toolchain import plain glibc symbols (printf, ...).
-                        // Resolve them from the default namespace instead of
-                        // ELF-loading host libraries (safe under the write
-                        // guard — libc::dlsym does not touch our state).
-                        match std::ffi::CString::new(sym_name) {
-                            Ok(cname) => {
-                                let addr = unsafe {
-                                    libc::dlsym(std::ptr::null_mut(), cname.as_ptr())
-                                };
-                                if !addr.is_null() {
-                                    return Some(addr as usize);
-                                }
-                            }
-                            Err(_) => {}
+                        // Host fallback with memoization (mods import plain glibc symbols).
+                        // Skip C++ mangled / Java symbols — host has only plain C.
+                        if sym_name.starts_with("_Z") || sym_name.starts_with("Java_") || sym_name.contains("::") {
+                            return None;
                         }
-                        None
+                        {
+                            let mut cache = HOST_DLSYM_CACHE.lock().unwrap();
+                            if let Some(cached) = cache.get(sym_name) {
+                                return *cached;
+                            }
+                            let resolved = match std::ffi::CString::new(sym_name) {
+                                Ok(cname) => {
+                                    let addr = unsafe { libc::dlsym(std::ptr::null_mut(), cname.as_ptr()) };
+                                    if addr.is_null() { None } else { Some(addr as usize) }
+                                }
+                                Err(_) => None,
+                            };
+                            cache.insert(sym_name.to_string(), resolved);
+                            return resolved;
+                        }
                     };
 
                     LAST_LOAD_RELOC_ERRORS.store(false, std::sync::atomic::Ordering::SeqCst);
+                    #[cfg(feature = "perf")]
+                    let t_reloc = std::time::Instant::now();
                     let has_reloc_errs = if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
+                        #[cfg(feature = "perf")]
+                        {
+                            let dt = t_reloc.elapsed();
+                            if dt.as_millis() > 10 || name.contains("minecraftpe") {
+                                eprintln!("[PERF] span label=reloc:{} ms={} us={}", name, dt.as_millis(), dt.as_micros());
+                            }
+                        }
                         LAST_LOAD_RELOC_ERRORS.store(true, std::sync::atomic::Ordering::SeqCst);
                         let sym_count = errs.iter().filter(|e| matches!(e, reloc::RelocError::SymbolNotFound(_))).count();
                         let other_count = errs.len() - sym_count;
@@ -530,6 +545,13 @@ fn load_library_internal(
                         }
                         !errs.is_empty()
                     } else {
+                        #[cfg(feature = "perf")]
+                        {
+                            let dt = t_reloc.elapsed();
+                            if dt.as_millis() > 10 || name.contains("minecraftpe") {
+                                eprintln!("[PERF] span label=reloc:{} ms={} us={}", name, dt.as_millis(), dt.as_micros());
+                            }
+                        }
                         false
                     };
 
@@ -1735,12 +1757,11 @@ fn load_library_internal_no_ctors(
         let (data_owned, mmap_ptr, mmap_len, file_keep): (Vec<u8>, *mut libc::c_void, usize, Option<std::fs::File>) =
             if let Some(f) = file_opt {
                 if let Ok(meta) = f.metadata() {
-                    if meta.len() > 1024 * 1024 * 1024 {
-                        let pg = 4096usize;
-                        let hlen = (meta.len() as usize).min(pg * 4);
-                        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), hlen, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
+                    if meta.len() > 1024 * 1024 && meta.len() <= isize::MAX as u64 && meta.len() > 0 {
+                        let len = meta.len() as usize;
+                        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
                         if ptr != libc::MAP_FAILED {
-                            (Vec::new(), ptr, hlen, Some(f))
+                            (Vec::new(), ptr, len, Some(f))
                         } else {
                             match std::fs::read(path) {
                                 Ok(d) => { log::info!("linker: read {} bytes from '{}'", d.len(), path); (d, std::ptr::null_mut(), 0, None) }
@@ -1821,9 +1842,6 @@ fn load_library_internal_no_ctors(
             if let Some(&addr) = state.global_symbols.get(sym_name) {
                 return Some(addr);
             }
-            // Include stubs: their exports are in external_symbols (and mirrored
-            // into global_symbols at registration). Skipping is_stub used to
-            // leave JUMP_SLOTs unbound when a stub was the only provider.
             for (_, lib) in &state.libraries_by_handle {
                 if let Some((addr, _)) = symbol::find_symbol(&lib.soinfo, sym_name) {
                     if addr != 0 {
@@ -1834,22 +1852,38 @@ fn load_library_internal_no_ctors(
                     return Some(addr);
                 }
             }
-            // Host fallback: see the twin closure in load_library_internal.
-            match std::ffi::CString::new(sym_name) {
-                Ok(cname) => {
-                    let addr =
-                        unsafe { libc::dlsym(std::ptr::null_mut(), cname.as_ptr()) };
-                    if !addr.is_null() {
-                        return Some(addr as usize);
-                    }
-                }
-                Err(_) => {}
+            if sym_name.starts_with("_Z") || sym_name.starts_with("Java_") || sym_name.contains("::") {
+                return None;
             }
-            None
+            {
+                let mut cache = HOST_DLSYM_CACHE.lock().unwrap();
+                if let Some(cached) = cache.get(sym_name) {
+                    return *cached;
+                }
+                let resolved = match std::ffi::CString::new(sym_name) {
+                    Ok(cname) => {
+                        let addr = unsafe { libc::dlsym(std::ptr::null_mut(), cname.as_ptr()) };
+                        if addr.is_null() { None } else { Some(addr as usize) }
+                    }
+                    Err(_) => None,
+                };
+                cache.insert(sym_name.to_string(), resolved);
+                return resolved;
+            }
         };
 
         LAST_LOAD_RELOC_ERRORS.store(false, std::sync::atomic::Ordering::SeqCst);
-        if let Err(errs) = reloc::apply_relocations(&loaded.soinfo, &resolve) {
+        #[cfg(feature = "perf")]
+        let t_reloc2 = std::time::Instant::now();
+        let reloc_res = reloc::apply_relocations(&loaded.soinfo, &resolve);
+        #[cfg(feature = "perf")]
+        {
+            let dt2 = t_reloc2.elapsed();
+            if dt2.as_millis() > 10 || name.contains("minecraftpe") {
+                eprintln!("[PERF] span label=reloc:{} ms={} us={}", name, dt2.as_millis(), dt2.as_micros());
+            }
+        }
+        if let Err(errs) = reloc_res {
             LAST_LOAD_RELOC_ERRORS.store(true, std::sync::atomic::Ordering::SeqCst);
             let sym_count = errs.iter().filter(|e| matches!(e, reloc::RelocError::SymbolNotFound(_))).count();
             let other_count = errs.len() - sym_count;

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 pub mod android_log_hook;
 pub mod minecraft_version;
 pub mod patch_utils;
