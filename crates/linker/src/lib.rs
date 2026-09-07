@@ -1808,11 +1808,9 @@ fn load_library_internal_no_ctors(
             loaded.soinfo.external_symbols.insert(k.clone(), *v as usize);
         }
 
-        // Register defined exports early so dependencies can resolve them.
-        // Must not publish SHN_UNDEF imports as base+0 (see register_global_exports).
-        register_global_exports(&mut state, &loaded.soinfo);
-
-        // Drop lock before loading deps (load_library_internal needs it)
+        // Exports are published once after reloc (second register_global_exports below);
+        // deps are stubs/libc and don't need game's exports at load time. Saves 18k
+        // sym walk + alloc (P1-6).
         drop(state);
 
         load_dependencies(&mut loaded.soinfo, data_slice, &name, external_symbols);

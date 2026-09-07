@@ -198,15 +198,11 @@ fn main() {
     perf::span("android_hooks", || startup::setup_android_hooks());
     log::info!("mcpelauncher-client: android hooks registered successfully");
 
-    // Create the Rust eglut window and register GLES2 symbols from real GL driver
-    // (replaces the deleted C++ GameWindowManager path).
-    perf::span("eglut_window", || startup::create_window_and_setup_graphics());
-    log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
-
-    // Smoke mode (-smoke): hold the freshly created window open for a few
-    // seconds so a headless runner can screencapture it, then exit. No game
-    // files needed — window + GL context are live at this point.
+    // Smoke needs only the window — keep it sequential and skip game load.
+    let mod_dirs = startup::split_mod_dirs(&mods.get());
     if smoke.get() {
+        perf::span("eglut_window", || startup::create_window_and_setup_graphics());
+        log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
         const SMOKE_SECS: u64 = 6;
         log::info!("SMOKE: holding window open for {}s", SMOKE_SECS);
         let start = std::time::Instant::now();
@@ -220,14 +216,21 @@ fn main() {
         return;
     }
 
+    // Create the Rust eglut window and register GLES2 symbols from real GL driver
+    // (replaces the deleted C++ GameWindowManager path).
+    perf::span("eglut_window", || startup::create_window_and_setup_graphics());
+    log::info!("mcpelauncher-client: window created and GLES2 symbols registered");
+
     // Preinit pass: load mods that don't depend on libminecraftpe.so before
     // the game library (main.cpp:497). Extra dirs come from -m/--mods.
-    let mod_dirs = startup::split_mod_dirs(&mods.get());
     perf::span("mods_preinit", || {
-        if !mod_dirs.is_empty() || std::path::Path::new(&format!(
-            "{}/mods/",
-            startup::primary_data_dir()
-        )).exists() {
+        if !mod_dirs.is_empty()
+            || std::path::Path::new(&format!(
+                "{}/mods/",
+                startup::primary_data_dir()
+            ))
+            .exists()
+        {
             startup::load_mods(true, &mod_dirs);
         }
     });

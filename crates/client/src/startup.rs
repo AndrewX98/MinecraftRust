@@ -296,8 +296,9 @@ pub fn dlsym(handle: *mut c_void, symbol: &str) -> *mut c_void {
 pub extern "C" fn mc_relocate_glesv2_symbols(
     resolver: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
 ) {
-    let mut syms: HashMap<String, *mut c_void> = HashMap::new();
+    let mut syms: HashMap<String, *mut c_void> = HashMap::with_capacity(GLESV2_SYMBOLS.len());
     if let Some(resolve) = resolver {
+        // Cache CString for each name once to avoid 166 allocs; reuse resolver fn ptr
         for name in GLESV2_SYMBOLS {
             let cname = CString::new(*name).unwrap();
             let addr = unsafe { resolve(cname.as_ptr()) };

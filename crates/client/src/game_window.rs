@@ -140,6 +140,43 @@ pub extern "C" fn mc_get_key_from_key_code(_code: i32, _meta_state: i32) -> u32 
 // Window creation + GL setup (previously C++ `mc_create_window_and_setup_graphics`)
 // ============================================================
 
+/// Window-only phase — X11/EGL window + display, no linker work.
+/// Used for parallel overlap with `linker_load_game` (P1.1). No `linker::` calls
+/// here, so it doesn't contend on `linker::STATE` RwLock with the game thread.
+pub unsafe fn mc_create_window_only() {
+    log::info!("LAUNCHER: Creating window via eglut (Rust)");
+    let _token = create_window("Minecraft");
+    log::info!("LAUNCHER: Window created successfully");
+}
+
+/// Pre-window graphics setup — registers libEGL symbols and GLES stubs.
+/// No window needed, must run **before** `load_minecraft` (BIND_NOW). No RwLock
+/// contention with the parallel linker thread if called before the scope.
+pub unsafe fn mc_setup_graphics_pre() {
+    fake_egl_set_proc_addr_function(real_egl_get_proc_address());
+    fake_egl_install_library();
+    fake_egl_setup_gl_overrides();
+    log::info!("LAUNCHER: FakeEGL pre-installed");
+    crate::startup::mc_relocate_glesv2_symbols(Some(fake_egl_get_proc_address));
+    log::info!("LAUNCHER: GLES relocate done");
+}
+/// Post-window phase — saves EGL display/config from the newly-created window.
+pub unsafe fn mc_setup_graphics_post() {
+    fake_egl_save_current_window_handle();
+    fake_egl_save_native_window(eglutGetWindowHandle());
+    log::info!("LAUNCHER: FakeEGL window handles saved");
+}
+/// Graphics-only phase — seeds FakeEGL and relocates GLESv2 symbols.
+/// Must run after the window exists (`STATE.egl_dpy`/`current_window` populated)
+/// and after `XInitThreads`. Does `linker::` work, so run outside the parallel
+/// window||linker scope to avoid RwLock contention (game thread holds STATE
+/// for 90ms during `load_minecraft`).
+pub unsafe fn mc_setup_graphics_only() {
+    mc_setup_graphics_pre();
+    mc_setup_graphics_post();
+    log::info!("LAUNCHER: FakeEGL installed");
+}
+
 /// Rust `capi.cpp/jni_bridge_stub.cpp mc_create_window_and_setup_graphics`.
 /// Creates the eglut window, then seeds FakeEGL (proc-addr, EGL library install,
 /// GL overrides, saved window/display/context, release) and relocates the real
@@ -149,21 +186,8 @@ pub unsafe extern "C" fn mc_create_window_and_setup_graphics() {
     // XInitThreads is required by Mesa EGL for multi-threaded X access.
     x11::xlib::XInitThreads();
     log::info!("LAUNCHER: XInitThreads() called successfully");
-
-    log::info!("LAUNCHER: Creating window via eglut (Rust)");
-    let _token = create_window("Minecraft");
-    log::info!("LAUNCHER: Window created successfully");
-
-    fake_egl_set_proc_addr_function(real_egl_get_proc_address());
-    fake_egl_install_library();
-    fake_egl_setup_gl_overrides();
-    fake_egl_save_current_window_handle();
-    fake_egl_save_native_window(eglutGetWindowHandle());
-    fake_egl_release_context();
-    log::info!("LAUNCHER: FakeEGL installed");
-
-    crate::startup::mc_relocate_glesv2_symbols(Some(fake_egl_get_proc_address));
-    log::info!("LAUNCHER: Graphics setup complete");
+    mc_create_window_only();
+    mc_setup_graphics_only();
 }
 
 /// Resolves the real libEGL `eglGetProcAddress` (the old C++

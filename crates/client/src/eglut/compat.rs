@@ -114,36 +114,21 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
     XSetWMProtocols(dpy, xwin, &mut wm_delete, 1);
     XMapWindow(dpy, xwin);
     XFlush(dpy);
-    // Wait briefly for MapNotify so the first game-thread eglCreateWindowSurface
-    // sees a mapped window (some Mesa paths present black until mapped).
-    // Also capture any ConfigureNotify so the actual WM-assigned size is used.
+    // No MapNotify wait — fire-and-forget. eglCreateWindowSurface does not require
+    // a mapped window per EGL spec; Mesa presents correctly after map. Drain any
+    // immediately-queued ConfigureNotify without blocking (WM often sends size
+    // synchronously). The WM's eventual ConfigureNotify is also handled in
+    // eglut/event.rs:129. Register the actual size eagerly so the game never sees 0×0.
     let (mut width, mut height) = (width, height);
-    {
-        let mut mapped = false;
-        for _ in 0..50 {
-            while XPending(dpy) != 0 {
-                let mut ev: XEvent = std::mem::zeroed();
-                XNextEvent(dpy, &mut ev);
-                match ev.get_type() {
-                    MapNotify => mapped = true,
-                    ConfigureNotify => {
-                        let ce: &XConfigureEvent = ev.as_ref();
-                        width = ce.width;
-                        height = ce.height;
-                    }
-                    _ => {}
-                }
-            }
-            if mapped {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        if !mapped {
-            eprintln!("eglutCreateWindow: MapNotify not seen yet (continuing)");
+    while XPending(dpy) != 0 {
+        let mut ev: XEvent = std::mem::zeroed();
+        XNextEvent(dpy, &mut ev);
+        if ev.get_type() == ConfigureNotify {
+            let ce: &XConfigureEvent = ev.as_ref();
+            width = ce.width;
+            height = ce.height;
         }
     }
-    // Register the actual WM-configured size before game thread starts
     crate::rust_bridge::fake_window_set_size(width, height);
 
     // Create EGL context + window surface on this (main) thread, matching upstream
@@ -167,10 +152,10 @@ pub unsafe extern "C" fn eglutCreateWindow(title: *const c_char) -> i32 {
             "eglutCreateWindow: EGL create failed ctx={:p} surf={:p}",
             context, surface
         );
-    } else {
-        eglMakeCurrent(egl_dpy, surface, surface, context);
-        eglSwapInterval(egl_dpy, 1);
     }
+    // No eglMakeCurrent/SwapInterval here — game thread binds via
+    // GameWindow::makeCurrent → eglutMakeCurrent (TLS per-thread). Avoids
+    // Mesa EGL_BAD_ACCESS on multi-thread X11 and saves 2 driver roundtrips.
 
     let win_idx = STATE.num_windows;
     STATE.num_windows += 1;

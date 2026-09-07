@@ -11,15 +11,72 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 struct FakeAssetManager {
     root_dir: String,
 }
 
+enum AssetData {
+    Vec(Vec<u8>),
+    Mmap { ptr: *mut u8, len: usize },
+}
+// SAFETY: mmap ptr is valid for len and owned by AAsset
+unsafe impl Send for AssetData {}
+
 struct AAsset {
-    buffer: Vec<u8>,
+    data: AssetData,
     offset: i64,
+}
+
+impl AAsset {
+    fn len(&self) -> usize {
+        match &self.data {
+            AssetData::Vec(v) => v.len(),
+            AssetData::Mmap { len, .. } => *len,
+        }
+    }
+    fn as_ptr(&self) -> *const u8 {
+        match &self.data {
+            AssetData::Vec(v) => v.as_ptr(),
+            AssetData::Mmap { ptr, .. } => *ptr as *const u8,
+        }
+    }
+}
+
+const MMAP_THRESHOLD: usize = 64 * 1024;
+static ASSET_CACHE: std::sync::LazyLock<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+unsafe fn try_mmap(path: &str) -> Option<(*mut u8, usize)> {
+    let c_path = CString::new(path).ok()?;
+    let fd = libc::open(c_path.as_ptr(), libc::O_RDONLY);
+    if fd < 0 {
+        return None;
+    }
+    let mut st: libc::stat = std::mem::zeroed();
+    if libc::fstat(fd, &mut st) != 0 {
+        libc::close(fd);
+        return None;
+    }
+    let len = st.st_size as usize;
+    if len == 0 {
+        libc::close(fd);
+        return None;
+    }
+    let ptr = libc::mmap(
+        std::ptr::null_mut(),
+        len,
+        libc::PROT_READ,
+        libc::MAP_PRIVATE,
+        fd,
+        0,
+    );
+    libc::close(fd);
+    if ptr == libc::MAP_FAILED {
+        return None;
+    }
+    Some((ptr as *mut u8, len))
 }
 
 struct AAssetDir {
@@ -55,18 +112,52 @@ unsafe extern "C" fn AAssetManager_open(
     if name.is_empty() || name.starts_with('/') {
         return std::ptr::null_mut();
     }
+    // dedup cache (logical name key)
+    if let Some(arc) = ASSET_CACHE.lock().unwrap().get(&name).cloned() {
+        if !arc.is_empty() {
+            return Box::into_raw(Box::new(AAsset { data: AssetData::Vec((*arc).clone()), offset: 0 }));
+        }
+    }
     let full_path = format!("{}{}", (*amgr).root_dir, name);
-    let content = match std::fs::read(&full_path) {
-        Ok(c) => c,
+    // mmap large files to avoid copy + page on demand
+    let data = match std::fs::metadata(&full_path) {
+        Ok(m) if (m.len() as usize) > MMAP_THRESHOLD => {
+            if let Some((ptr, len)) = try_mmap(&full_path) {
+                AssetData::Mmap { ptr, len }
+            } else {
+                match std::fs::read(&full_path) {
+                    Ok(c) if !c.is_empty() => AssetData::Vec(c),
+                    _ => return std::ptr::null_mut(),
+                }
+            }
+        }
+        Ok(_) => match std::fs::read(&full_path) {
+            Ok(c) if !c.is_empty() => AssetData::Vec(c),
+            _ => return std::ptr::null_mut(),
+        },
         Err(_) => return std::ptr::null_mut(),
     };
-    if content.is_empty() {
+    if data_len(&data) == 0 {
+        if let AssetData::Mmap { ptr, len } = data {
+            libc::munmap(ptr as *mut libc::c_void, len);
+        }
         return std::ptr::null_mut();
     }
-    Box::into_raw(Box::new(AAsset {
-        buffer: content,
-        offset: 0,
-    }))
+    // populate cache for small Vec assets
+    if let AssetData::Vec(ref v) = data {
+        if v.len() < 1024 * 1024 {
+            let mut cache = ASSET_CACHE.lock().unwrap();
+            if cache.len() > 128 {
+                cache.clear();
+            }
+            cache.insert(name.clone(), Arc::new(v.clone()));
+        }
+    }
+    Box::into_raw(Box::new(AAsset { data, offset: 0 }))
+}
+
+fn data_len(d: &AssetData) -> usize {
+    match d { AssetData::Vec(v) => v.len(), AssetData::Mmap { len, .. } => *len }
 }
 
 unsafe extern "C" fn AAssetManager_openDir(
@@ -94,7 +185,11 @@ unsafe extern "C" fn AAssetManager_openDir(
 
 unsafe extern "C" fn AAsset_close(asset: *mut AAsset) {
     if !asset.is_null() {
-        drop(Box::from_raw(asset));
+        let b = Box::from_raw(asset);
+        if let AssetData::Mmap { ptr, len } = b.data {
+            libc::munmap(ptr as *mut libc::c_void, len);
+        }
+        // Vec dropped normally
     }
 }
 
@@ -107,10 +202,11 @@ unsafe extern "C" fn AAsset_read(asset: *mut AAsset, buf: *mut c_void, count: us
         return 0;
     }
     let a = &mut *asset;
-    if a.offset > a.buffer.len() as i64 {
+    let total = a.len() as i64;
+    if a.offset > total {
         return 0;
     }
-    let max_len = a.buffer.len() as i64 - a.offset;
+    let max_len = total - a.offset;
     let mut count = count as i64;
     if count > max_len {
         count = max_len;
@@ -119,7 +215,7 @@ unsafe extern "C" fn AAsset_read(asset: *mut AAsset, buf: *mut c_void, count: us
         return 0;
     }
     std::ptr::copy_nonoverlapping(
-        a.buffer.as_ptr().add(a.offset as usize),
+        a.as_ptr().add(a.offset as usize),
         buf as *mut u8,
         count as usize,
     );
@@ -130,7 +226,7 @@ unsafe extern "C" fn AAsset_read(asset: *mut AAsset, buf: *mut c_void, count: us
 unsafe extern "C" fn AAsset_seek64(asset: *mut AAsset, offset: i64, whence: c_int) -> i64 {
     let a = &mut *asset;
     let cur_pos = a.offset;
-    let max_pos = a.buffer.len() as i64;
+    let max_pos = a.len() as i64;
     let new_offset = match whence {
         libc::SEEK_SET => offset,
         libc::SEEK_CUR => cur_pos + offset,
@@ -149,7 +245,7 @@ unsafe extern "C" fn AAsset_seek(asset: *mut AAsset, offset: i64, whence: c_int)
 }
 
 unsafe extern "C" fn AAsset_getLength64(asset: *mut AAsset) -> i64 {
-    (*asset).buffer.len() as i64
+    (*asset).len() as i64
 }
 
 unsafe extern "C" fn AAsset_getLength(asset: *mut AAsset) -> i64 {
@@ -158,7 +254,7 @@ unsafe extern "C" fn AAsset_getLength(asset: *mut AAsset) -> i64 {
 
 unsafe extern "C" fn AAsset_getRemainingLength64(asset: *mut AAsset) -> i64 {
     let a = &*asset;
-    (a.buffer.len() as i64 - a.offset).max(0)
+    (a.len() as i64 - a.offset).max(0)
 }
 
 unsafe extern "C" fn AAsset_getRemainingLength(asset: *mut AAsset) -> i64 {
@@ -166,7 +262,7 @@ unsafe extern "C" fn AAsset_getRemainingLength(asset: *mut AAsset) -> i64 {
 }
 
 unsafe extern "C" fn AAsset_getBuffer(asset: *mut AAsset) -> *const c_void {
-    (*asset).buffer.as_ptr() as *const c_void
+    (*asset).as_ptr() as *const c_void
 }
 
 unsafe extern "C" fn AAssetDir_close(asset_dir: *mut AAssetDir) {

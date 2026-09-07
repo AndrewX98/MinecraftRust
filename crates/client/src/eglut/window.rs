@@ -55,16 +55,46 @@ pub(crate) unsafe fn eglut_init_inner(dpy_ptr: *mut *mut Display) {
              dpy, screen, root, egl_dpy, ver_major, ver_minor);
 
     eprintln!("eglut_init_inner: initializing atoms...");
-    STATE.xdnd_drop = XInternAtom(dpy, "XdndDrop\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_type_list = XInternAtom(dpy, "XdndTypeList\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_selection = XInternAtom(dpy, "XdndSelection\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_enter = XInternAtom(dpy, "XdndEnter\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_position = XInternAtom(dpy, "XdndPosition\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_status = XInternAtom(dpy, "XdndStatus\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_leave = XInternAtom(dpy, "XdndLeave\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_finished = XInternAtom(dpy, "XdndFinished\0".as_ptr() as *const c_char, 0);
-    STATE.xdnd_action_copy = XInternAtom(dpy, "XdndActionCopy\0".as_ptr() as *const c_char, 0);
-    STATE.xtext_uri_list = XInternAtom(dpy, "text/uri-list\0".as_ptr() as *const c_char, 0);
+    {
+        let mut names: [*mut c_char; 10] = [
+            "XdndDrop\0".as_ptr() as *mut c_char,
+            "XdndTypeList\0".as_ptr() as *mut c_char,
+            "XdndSelection\0".as_ptr() as *mut c_char,
+            "XdndEnter\0".as_ptr() as *mut c_char,
+            "XdndPosition\0".as_ptr() as *mut c_char,
+            "XdndStatus\0".as_ptr() as *mut c_char,
+            "XdndLeave\0".as_ptr() as *mut c_char,
+            "XdndFinished\0".as_ptr() as *mut c_char,
+            "XdndActionCopy\0".as_ptr() as *mut c_char,
+            "text/uri-list\0".as_ptr() as *mut c_char,
+        ];
+        let mut atoms: [u64; 10] = [0; 10];
+        let ok = unsafe { x11::xlib::XInternAtoms(dpy, names.as_mut_ptr(), 10, 0, atoms.as_mut_ptr() as *mut u64) };
+        if ok != 0 {
+            STATE.xdnd_drop = atoms[0];
+            STATE.xdnd_type_list = atoms[1];
+            STATE.xdnd_selection = atoms[2];
+            STATE.xdnd_enter = atoms[3];
+            STATE.xdnd_position = atoms[4];
+            STATE.xdnd_status = atoms[5];
+            STATE.xdnd_leave = atoms[6];
+            STATE.xdnd_finished = atoms[7];
+            STATE.xdnd_action_copy = atoms[8];
+            STATE.xtext_uri_list = atoms[9];
+        } else {
+            // fallback per-atom
+            STATE.xdnd_drop = XInternAtom(dpy, "XdndDrop\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_type_list = XInternAtom(dpy, "XdndTypeList\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_selection = XInternAtom(dpy, "XdndSelection\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_enter = XInternAtom(dpy, "XdndEnter\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_position = XInternAtom(dpy, "XdndPosition\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_status = XInternAtom(dpy, "XdndStatus\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_leave = XInternAtom(dpy, "XdndLeave\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_finished = XInternAtom(dpy, "XdndFinished\0".as_ptr() as *const c_char, 0);
+            STATE.xdnd_action_copy = XInternAtom(dpy, "XdndActionCopy\0".as_ptr() as *const c_char, 0);
+            STATE.xtext_uri_list = XInternAtom(dpy, "text/uri-list\0".as_ptr() as *const c_char, 0);
+        }
+    }
     eprintln!("eglut_init_inner: atoms done");
 
     XINPUT_RT = Some(XInputRuntime { xi2_available: false });

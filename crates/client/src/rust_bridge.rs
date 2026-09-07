@@ -1160,8 +1160,13 @@ pub unsafe extern "C" fn fake_egl_install_library() {
     }
     linker_load_library_rust(c"libEGL.so".as_ptr(), egl_names.as_ptr(), egl_funcs.as_ptr(), egl_names.len());
 
-    // Load real EGL functions via dlopen/dlsym
-    let libegl = libc::dlopen(c"libEGL.so".as_ptr() as *const libc::c_char, libc::RTLD_LAZY | libc::RTLD_LOCAL);
+    // Load real EGL functions via dlopen/dlsym — reuse already-loaded handle if available
+    // (game_window::real_egl_get_proc_address already dlopened it). RTLD_NOLOAD avoids
+    // filesystem probe on the second open.
+    let libegl = {
+        let h = libc::dlopen(c"libEGL.so".as_ptr() as *const libc::c_char, libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_NOLOAD);
+        if !h.is_null() { h } else { libc::dlopen(c"libEGL.so".as_ptr() as *const libc::c_char, libc::RTLD_LAZY | libc::RTLD_LOCAL) }
+    };
     if !libegl.is_null() {
         macro_rules! dlsym_egl {
             ($var:expr, $name:literal) => {
@@ -1368,33 +1373,12 @@ pub unsafe extern "C" fn fake_egl_save_current_window_handle() {
         }
     }
 
-    // Save the EGL config from the current context
-    let query_ctx = REAL_EGL_QUERY_CONTEXT.load(Ordering::SeqCst);
-    let choose_cfg = REAL_EGL_CHOOSE_CONFIG.load(Ordering::SeqCst);
-    if !query_ctx.is_null() && !choose_cfg.is_null() {
-        let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
-        let saved_ctx = SAVED_EGL_CONTEXT.load(Ordering::SeqCst);
-        if !saved_disp.is_null() && !saved_ctx.is_null() {
-            let qc: extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) = std::mem::transmute(query_ctx);
-            let cc: extern "C" fn(*mut c_void, *const i32, *mut c_void, i32, *mut i32) -> i32 = std::mem::transmute(choose_cfg);
-            let mut config_id: i32 = 0;
-            qc(saved_disp, saved_ctx, EGL_CONFIG_ID, &mut config_id);
-            let attribs = [EGL_CONFIG_ID, config_id, EGL_NONE, 0];
-            let mut cfg: *mut c_void = std::ptr::null_mut();
-            let mut num: i32 = 0;
-            cc(saved_disp, attribs.as_ptr(), &mut cfg as *mut *mut c_void as *mut c_void, 1, &mut num);
-            if !cfg.is_null() {
-                SAVED_EGL_CONFIG.store(cfg, Ordering::SeqCst);
-                log::info!("[FakeEGL] saved EGL config: config_id={} config={:p}", config_id, cfg);
-            }
-        }
-    }
-
-    // eglutCreateWindow deliberately leaves context/surface null (created later on
-    // the game thread). Still seed display + config from eglut so primary create
-    // can succeed without waiting for the first makeCurrent fallback path.
+    // Prefer eglut STATE directly — avoids 2 driver roundtrips (eglQueryContext +
+    // eglChooseConfig) when we already have the config from eglutChooseConfig.
     if SAVED_EGL_DISPLAY.load(Ordering::SeqCst).is_null()
         || SAVED_EGL_CONFIG.load(Ordering::SeqCst).is_null()
+        || SAVED_EGL_CONTEXT.load(Ordering::SeqCst).is_null()
+        || SAVED_EGL_SURFACE.load(Ordering::SeqCst).is_null()
     {
         let egl_dpy = crate::eglut::state::STATE.egl_dpy;
         let win_ref = &*std::ptr::addr_of!(crate::eglut::state::STATE.current_window);
@@ -1407,11 +1391,36 @@ pub unsafe extern "C" fn fake_egl_save_current_window_handle() {
             if SAVED_EGL_CONFIG.load(Ordering::SeqCst).is_null() && !eglut_win.config.is_null() {
                 SAVED_EGL_CONFIG.store(eglut_win.config as *mut c_void, Ordering::SeqCst);
             }
-            if !eglut_win.context.is_null() {
+            if SAVED_EGL_CONTEXT.load(Ordering::SeqCst).is_null() && !eglut_win.context.is_null() {
                 SAVED_EGL_CONTEXT.store(eglut_win.context as *mut c_void, Ordering::SeqCst);
             }
-            if !eglut_win.surface.is_null() {
+            if SAVED_EGL_SURFACE.load(Ordering::SeqCst).is_null() && !eglut_win.surface.is_null() {
                 SAVED_EGL_SURFACE.store(eglut_win.surface as *mut c_void, Ordering::SeqCst);
+            }
+        }
+    }
+
+    // Fallback: reconstruct config via EGL query only if STATE seeding failed
+    // (e.g. headless test where eglut window not yet created). Saves driver calls on hot path.
+    if SAVED_EGL_CONFIG.load(Ordering::SeqCst).is_null() {
+        let query_ctx = REAL_EGL_QUERY_CONTEXT.load(Ordering::SeqCst);
+        let choose_cfg = REAL_EGL_CHOOSE_CONFIG.load(Ordering::SeqCst);
+        if !query_ctx.is_null() && !choose_cfg.is_null() {
+            let saved_disp = SAVED_EGL_DISPLAY.load(Ordering::SeqCst);
+            let saved_ctx = SAVED_EGL_CONTEXT.load(Ordering::SeqCst);
+            if !saved_disp.is_null() && !saved_ctx.is_null() {
+                let qc: extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) = std::mem::transmute(query_ctx);
+                let cc: extern "C" fn(*mut c_void, *const i32, *mut c_void, i32, *mut i32) -> i32 = std::mem::transmute(choose_cfg);
+                let mut config_id: i32 = 0;
+                qc(saved_disp, saved_ctx, EGL_CONFIG_ID, &mut config_id);
+                let attribs = [EGL_CONFIG_ID, config_id, EGL_NONE, 0];
+                let mut cfg: *mut c_void = std::ptr::null_mut();
+                let mut num: i32 = 0;
+                cc(saved_disp, attribs.as_ptr(), &mut cfg as *mut *mut c_void as *mut c_void, 1, &mut num);
+                if !cfg.is_null() {
+                    SAVED_EGL_CONFIG.store(cfg, Ordering::SeqCst);
+                    log::info!("[FakeEGL] saved EGL config: config_id={} config={:p}", config_id, cfg);
+                }
             }
         }
     }

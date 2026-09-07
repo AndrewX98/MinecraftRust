@@ -1,7 +1,20 @@
 use crate::soinfo::{RelocType, SoInfo, TlsSegment};
-use goblin::elf::program_header::ProgramHeader;
-use goblin::elf::Elf;
 use goblin::elf;
+
+#[derive(Clone, Debug)]
+struct Phdr {
+    p_type: u32,
+    p_flags: u32,
+    p_offset: u64,
+    p_vaddr: u64,
+    p_filesz: u64,
+    p_memsz: u64,
+    p_align: u64,
+}
+struct DynEnt {
+    d_tag: i64,
+    d_val: u64,
+}
 
 #[derive(Debug)]
 pub struct LoadedElf {
@@ -30,7 +43,9 @@ pub fn load_elf_with_fd(fd: i32, data: &[u8], name: &str) -> Result<LoadedElf, L
 fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf, LoadError> {
     #[cfg(feature = "perf")]
     let t0 = std::time::Instant::now();
-    let elf = Elf::parse(data).map_err(|e| LoadError::Parse(format!("{:?}", e)))?;
+    // Manual ELF header/PHDR parse — zero alloc, no goblin SHT walk, no extra copies.
+    // This replaces goblin::Elf::parse which faults all pages and allocates Vecs.
+    let (e_type, phdrs_raw, dyn_phdr_raw) = parse_elf_headers(data)?;
     #[cfg(feature = "perf")]
     {
         let dt = t0.elapsed();
@@ -39,18 +54,18 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
         }
     }
 
-    let is_lib = elf.header.e_type == elf::header::ET_DYN;
-    if !is_lib {
+    if e_type != elf::header::ET_DYN {
         return Err(LoadError::NotSharedLibrary);
     }
 
     let mut base: usize = 0;
     let mut total_size: usize = 0;
-    let mut phdrs: Vec<ProgramHeader> = Vec::new();
-    let mut tls_phdr: Option<ProgramHeader> = None;
-    let mut relro_phdr: Option<ProgramHeader> = None;
+    let mut phdrs: Vec<Phdr> = Vec::new();
+    let mut tls_phdr: Option<Phdr> = None;
+    let mut relro_phdr: Option<Phdr> = None;
+    let mut dyn_phdr: Option<Phdr> = dyn_phdr_raw.clone();
 
-    for phdr in &elf.program_headers {
+    for phdr in &phdrs_raw {
         match phdr.p_type {
             elf::program_header::PT_LOAD => {
                 let end = (phdr.p_vaddr + phdr.p_memsz) as usize;
@@ -63,7 +78,19 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
             elf::program_header::PT_GNU_RELRO => {
                 relro_phdr = Some(phdr.clone());
             }
+            elf::program_header::PT_DYNAMIC => {
+                // already captured as dyn_phdr_raw
+            }
             _ => {}
+        }
+    }
+    // Ensure dyn_phdr is set if not captured via clone above (fallback)
+    if dyn_phdr.is_none() {
+        for ph in &phdrs_raw {
+            if ph.p_type == elf::program_header::PT_DYNAMIC {
+                dyn_phdr = Some(ph.clone());
+                break;
+            }
         }
     }
 
@@ -175,9 +202,7 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
         }
     }
 
-    let dynamic_addr = elf.program_headers.iter()
-        .find(|ph| ph.p_type == elf::program_header::PT_DYNAMIC)
-        .map(|ph| (base + ph.p_vaddr as usize) as usize);
+    let dynamic_addr = dyn_phdr.as_ref().map(|ph| (base + ph.p_vaddr as usize) as usize);
 
     let mut soinfo = SoInfo {
         name: name.to_string(),
@@ -214,39 +239,59 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
     let mut pltrel_type = RelocType::Rela;
     let mut soname_idx: Option<u64> = None;
 
-    if let Some(ref dynamic) = elf.dynamic {
-        for entry in &dynamic.dyns {
-            match entry.d_tag {
-                elf::dynamic::DT_STRTAB => strtab = Some(entry.d_val),
-                elf::dynamic::DT_STRSZ => strtab_size = entry.d_val as usize,
-                elf::dynamic::DT_SYMTAB => symtab = Some(entry.d_val),
-                elf::dynamic::DT_PLTREL => {
-                    pltrel_type = if entry.d_val as u64 == elf::dynamic::DT_REL as u64 {
+    // Manual DT walk from file data (PT_DYNAMIC payload)
+    {
+        let dyn_ents: Vec<DynEnt> = if let Some(ref dph) = dyn_phdr {
+            let off = dph.p_offset as usize;
+            let sz = dph.p_filesz as usize;
+            if off + sz <= data.len() && sz % 16 == 0 {
+                let mut v = Vec::with_capacity(sz / 16);
+                for chunk in data[off..off + sz].chunks_exact(16) {
+                    let d_tag = i64::from_le_bytes(chunk[0..8].try_into().unwrap());
+                    let d_val = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+                    if d_tag == elf::dynamic::DT_NULL as i64 {
+                        v.push(DynEnt { d_tag, d_val });
+                        break;
+                    }
+                    v.push(DynEnt { d_tag, d_val });
+                }
+                v
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        for entry in dyn_ents {
+            match entry.d_tag as i64 {
+                x if x == elf::dynamic::DT_STRTAB as i64 => strtab = Some(entry.d_val),
+                x if x == elf::dynamic::DT_STRSZ as i64 => strtab_size = entry.d_val as usize,
+                x if x == elf::dynamic::DT_SYMTAB as i64 => symtab = Some(entry.d_val),
+                x if x == elf::dynamic::DT_PLTREL as i64 => {
+                    pltrel_type = if entry.d_val == elf::dynamic::DT_REL as u64 {
                         RelocType::Rel
                     } else {
                         RelocType::Rela
                     };
                 }
-                elf::dynamic::DT_JMPREL => pltrel_off = Some(entry.d_val),
-                elf::dynamic::DT_PLTRELSZ => pltrel_sz = Some(entry.d_val),
-                elf::dynamic::DT_RELA => rela_off = Some(entry.d_val),
-                elf::dynamic::DT_RELASZ => rela_sz = Some(entry.d_val as u64),
-                elf::dynamic::DT_REL => rel_off = Some(entry.d_val),
-                elf::dynamic::DT_RELSZ => rel_sz = Some(entry.d_val as u64),
-                elf::dynamic::DT_INIT => init_fn = Some(entry.d_val),
-                elf::dynamic::DT_INIT_ARRAY => init_array_off = Some(entry.d_val),
-                elf::dynamic::DT_INIT_ARRAYSZ => init_array_sz = Some(entry.d_val as u64),
-                elf::dynamic::DT_FINI => fini_fn = Some(entry.d_val),
-                elf::dynamic::DT_FINI_ARRAY => fini_array_off = Some(entry.d_val),
-                elf::dynamic::DT_FINI_ARRAYSZ => fini_array_sz = Some(entry.d_val as u64),
-                elf::dynamic::DT_PREINIT_ARRAY => preinit_array_off = Some(entry.d_val),
-                elf::dynamic::DT_PREINIT_ARRAYSZ => preinit_array_sz = Some(entry.d_val as u64),
-                elf::dynamic::DT_NEEDED => {
-                    dependencies.push(entry.d_val);
-                }
-                elf::dynamic::DT_SONAME => soname_idx = Some(entry.d_val),
-                elf::dynamic::DT_GNU_HASH => gnu_hash_addr = Some(entry.d_val),
-                elf::dynamic::DT_HASH => sysv_hash_addr = Some(entry.d_val),
+                x if x == elf::dynamic::DT_JMPREL as i64 => pltrel_off = Some(entry.d_val),
+                x if x == elf::dynamic::DT_PLTRELSZ as i64 => pltrel_sz = Some(entry.d_val),
+                x if x == elf::dynamic::DT_RELA as i64 => rela_off = Some(entry.d_val),
+                x if x == elf::dynamic::DT_RELASZ as i64 => rela_sz = Some(entry.d_val),
+                x if x == elf::dynamic::DT_REL as i64 => rel_off = Some(entry.d_val),
+                x if x == elf::dynamic::DT_RELSZ as i64 => rel_sz = Some(entry.d_val),
+                x if x == elf::dynamic::DT_INIT as i64 => init_fn = Some(entry.d_val),
+                x if x == elf::dynamic::DT_INIT_ARRAY as i64 => init_array_off = Some(entry.d_val),
+                x if x == elf::dynamic::DT_INIT_ARRAYSZ as i64 => init_array_sz = Some(entry.d_val),
+                x if x == elf::dynamic::DT_FINI as i64 => fini_fn = Some(entry.d_val),
+                x if x == elf::dynamic::DT_FINI_ARRAY as i64 => fini_array_off = Some(entry.d_val),
+                x if x == elf::dynamic::DT_FINI_ARRAYSZ as i64 => fini_array_sz = Some(entry.d_val),
+                x if x == elf::dynamic::DT_PREINIT_ARRAY as i64 => preinit_array_off = Some(entry.d_val),
+                x if x == elf::dynamic::DT_PREINIT_ARRAYSZ as i64 => preinit_array_sz = Some(entry.d_val),
+                x if x == elf::dynamic::DT_NEEDED as i64 => dependencies.push(entry.d_val),
+                x if x == elf::dynamic::DT_SONAME as i64 => soname_idx = Some(entry.d_val),
+                x if x == elf::dynamic::DT_GNU_HASH as i64 => gnu_hash_addr = Some(entry.d_val),
+                x if x == elf::dynamic::DT_HASH as i64 => sysv_hash_addr = Some(entry.d_val),
                 _ => {}
             }
         }
@@ -376,6 +421,7 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
                 soinfo.gnu_bloom_n = bloom_size;
                 soinfo.gnu_bucket = buckets.to_vec();
                 soinfo.gnu_chain = chains.to_vec();
+                soinfo.dynsym_count = dynsym_count;
                 soinfo.set_gnu_hash_flag();
             }
         }
@@ -393,6 +439,7 @@ fn load_elf_inner(data: &[u8], fd: Option<i32>, name: &str) -> Result<LoadedElf,
                 soinfo.bucket_count = nbuckets as usize;
                 soinfo.bucket = buckets.to_vec();
                 soinfo.chain = chains.to_vec();
+                soinfo.dynsym_count = nchains as usize;
             }
         }
     }
@@ -430,4 +477,69 @@ fn phdr_flags_to_prot(flags: u32) -> i32 {
         prot |= libc::PROT_EXEC;
     }
     prot
+}
+
+fn parse_elf_headers(data: &[u8]) -> Result<(u16, Vec<Phdr>, Option<Phdr>), LoadError> {
+    if data.len() < 64 {
+        return Err(LoadError::Parse("ELF too small".into()));
+    }
+    if data[0] != 0x7f || data[1] != b'E' || data[2] != b'L' || data[3] != b'F' {
+        return Err(LoadError::Parse("bad ELF magic".into()));
+    }
+    let ei_class = data[4];
+    let ei_data = data[5];
+    if ei_class != 2 {
+        return Err(LoadError::Parse("only ELF64 supported".into()));
+    }
+    if ei_data != 1 && ei_data != 2 {
+        return Err(LoadError::Parse("unknown EI_DATA".into()));
+    }
+    let le = ei_data == 1;
+    let read_u16 = |off: usize| {
+        let b: [u8; 2] = data[off..off + 2].try_into().unwrap();
+        if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) }
+    };
+    let read_u32 = |off: usize| {
+        let b: [u8; 4] = data[off..off + 4].try_into().unwrap();
+        if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+    };
+    let read_u64 = |off: usize| {
+        let b: [u8; 8] = data[off..off + 8].try_into().unwrap();
+        if le { u64::from_le_bytes(b) } else { u64::from_be_bytes(b) }
+    };
+    let e_type = read_u16(16);
+    let e_phoff = read_u64(32) as usize;
+    let e_phentsize = read_u16(54) as usize;
+    let e_phnum = read_u16(56) as usize;
+    if e_phentsize != std::mem::size_of::<Phdr>() && e_phentsize != 56 {
+        // tolerate but require at least 56
+        if e_phentsize < 56 {
+            return Err(LoadError::Parse("bad e_phentsize".into()));
+        }
+    }
+    if e_phoff == 0 || e_phnum == 0 {
+        return Err(LoadError::Parse("no program headers".into()));
+    }
+    if e_phoff + e_phnum * e_phentsize > data.len() {
+        return Err(LoadError::Parse("PHDR out of range".into()));
+    }
+    let mut phdrs = Vec::with_capacity(e_phnum);
+    let mut dyn_phdr: Option<Phdr> = None;
+    for i in 0..e_phnum {
+        let off = e_phoff + i * e_phentsize;
+        // Phdr layout: p_type(4) p_flags(4) p_offset(8) p_vaddr(8) p_paddr(8) p_filesz(8) p_memsz(8) p_align(8)
+        let p_type = read_u32(off);
+        let p_flags = read_u32(off + 4);
+        let p_offset = read_u64(off + 8);
+        let p_vaddr = read_u64(off + 16);
+        let p_filesz = read_u64(off + 32);
+        let p_memsz = read_u64(off + 40);
+        let p_align = read_u64(off + 48);
+        let ph = Phdr { p_type, p_flags, p_offset, p_vaddr, p_filesz, p_memsz, p_align };
+        if p_type == elf::program_header::PT_DYNAMIC {
+            dyn_phdr = Some(ph.clone());
+        }
+        phdrs.push(ph);
+    }
+    Ok((e_type, phdrs, dyn_phdr))
 }

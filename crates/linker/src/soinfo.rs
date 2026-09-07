@@ -47,6 +47,7 @@ pub struct SoInfo {
     pub gnu_bloom_filter: Vec<usize>,
     pub gnu_bloom_shift: usize,
     pub gnu_bloom_n: usize,
+    pub dynsym_count: usize,
     pub pltrel: Option<(usize, usize)>,
     pub pltrel_type: RelocType,
     pub rel: Option<(usize, usize)>,
