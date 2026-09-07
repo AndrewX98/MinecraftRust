@@ -198,7 +198,7 @@ fn log_xal_store_state(dir: &str) {
                     ("refresh_token", "refresh"),
                     ("WebViewFlowId", "WebViewFlow"),
                     ("WelcomeBackSisu", "welcomeBack"),
-                    ("Serialized", "corrupted"),
+                    ("Serialized", "keyPointer"),
                     ("user_id", "userId"),
                 ] {
                     if s.contains(probe.0) {

@@ -245,10 +245,9 @@ unsafe fn call_url_operation_succeeded(env: *mut JNIEnv, op_id: u64, final_url: 
 }
 
 /// XAL persists an interactive sign-in as a "pending webview flow" (a store
-/// file under `xal/` carrying `WebViewFlowId` + `WelcomeBackSisu`). Stale
-/// markers from a previous session can wedge the next launch into the
-/// "name loaded, not signed in" state — but they MUST only be removed while
-/// the game is not running (sanitize_xal_store(), called pre-launch).
+/// file under `xal/` carrying `WebViewFlowId` + `WelcomeBackSisu`). These are
+/// resume tickets for silent auto-login on the next boot and MUST be
+/// preserved — see `sanitize_xal_store()`, which no longer deletes them.
 /// Deleting them mid-session — especially between urlOperationSucceeded and
 /// XAL's completion handler reading the file back — races the REST thread's
 /// read and aborts the process with an uncaught
@@ -256,16 +255,25 @@ unsafe fn call_url_operation_succeeded(env: *mut JNIEnv, op_id: u64, final_url: 
 ///
 /// Boot-time XAL store repair. Runs BEFORE the game's XAL reads the store.
 ///
-/// - Files containing "Serialized to SharedPreferences" are the known-corrupt
-///   ECDSA signing-key cache (AGENTS.md): XAL feeds the junk key material to
-///   its parser on the REST thread and dies with an uncaught
-///   Xal::ParseException ("Token root is not an object"). Quarantine them so
-///   a fresh key gets generated.
-/// - Files containing WebViewFlowId describe an interrupted interactive
-///   sign-in flow; resuming them on the next boot wedges the menu in the
-///   half-signed-in state. Remove them.
+/// - Files containing "Serialized to SharedPreferences" are XAL's pointer to
+///   the ECDSA device key living in SharedPreferences (`ecdsa_key.json` on
+///   our side, see `jni_support::ecdsa_impl`). They are only junk when STALE
+///   (their `Id` no longer matches the stored key) — a matching pointer is
+///   exactly what XAL needs to restore the cached key and reuse its D/T
+///   tokens, so it must be kept. Quarantining a matching pointer forces a
+///   fresh device registration every boot and churns the token cache.
+/// - Files containing WebViewFlowId (`WelcomeBackSisu` resume tickets) are
+///   NEVER touched: XAL resumes them on boot for silent auto-login. Deleting
+///   them is what forced a manual sign-in on every launch (the reference C++
+///   launcher preserves the store untouched and signs in automatically).
+///   Mid-session deletion is likewise forbidden: unlinking the flow file
+///   under XAL's REST thread aborts the process with an uncaught
+///   Xal::ParseException ("Token root is not an object").
 /// - Token files (refresh_token / Xtoken / ...) are NEVER touched here —
 ///   deleting those is what forced repeated manual re-sign-ins.
+/// - Files we already quarantined are skipped: quarantine lives in the
+///   sibling `xal-quarantine/` directory (NOT as `.bad` files inside `xal/`,
+///   which XAL still opens and parses during its store enumeration).
 pub fn sanitize_xal_store() {
     let dir = unsafe {
         let ptr = crate::path_helper::path_helper_get_primary_data_directory();
@@ -274,11 +282,17 @@ pub fn sanitize_xal_store() {
         }
         CStr::from_ptr(ptr).to_string_lossy().into_owned()
     };
-    let store = std::path::Path::new(&dir).join("xal");
+    let data_dir = std::path::Path::new(&dir);
+    let store = data_dir.join("xal");
     let entries = match std::fs::read_dir(&store) {
         Ok(e) => e.filter_map(|x| x.ok()).collect::<Vec<_>>(),
         Err(_) => return,
     };
+    let stored_id = ecdsa_store_id(data_dir);
+    // Quarantine lives OUTSIDE the store: XAL opens every file under xal/
+    // (including `*.bad` renames) during enumeration, so in-place renames
+    // would still be parsed.
+    let quarantine = data_dir.join("xal-quarantine");
     for e in entries {
         if !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
@@ -288,13 +302,43 @@ pub fn sanitize_xal_store() {
             Err(_) => continue, // binary or unreadable: leave it alone
         };
         let corrupt_key = content.contains("Serialized to SharedPreferences");
-        let pending_flow = content.contains("WebViewFlowId");
-        if !(corrupt_key || pending_flow) {
+        if !corrupt_key {
             continue;
         }
-        let action = if corrupt_key { "quarantining corrupt ECDSA key cache" } else { "clearing pending webview-flow resume state" };
-        log::warn!("xal_store: {} ({})", action, e.path().display());
-        let _ = std::fs::rename(e.path(), e.path().with_extension("bad"));
+        // Key pointer: keep it when it matches the stored device key.
+        let file_id = serde_json::from_str::<serde_json::Value>(&content)
+            .ok()
+            .and_then(|v| {
+                v.get("Id")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            });
+        if file_id.is_some() && file_id == stored_id {
+            log::info!(
+                "xal_store: keeping ECDSA key pointer {} (matches stored key {})",
+                e.path().display(),
+                stored_id.as_deref().unwrap_or("?")
+            );
+            continue;
+        }
+        log::warn!("xal_store: quarantining stale ECDSA key pointer ({})", e.path().display());
+        if std::fs::create_dir_all(&quarantine).is_ok() {
+            let dest = quarantine.join(e.file_name());
+            let _ = std::fs::rename(e.path(), dest);
+        }
+    }
+}
+
+/// Read the `Id` field of the Rust ECDSA store (`ecdsa_key.json`).
+/// `None` when the store is missing or unparsable.
+fn ecdsa_store_id(data_dir: &std::path::Path) -> Option<String> {
+    let data = std::fs::read_to_string(data_dir.join("ecdsa_key.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&data).ok()?;
+    let id = v.get("Id")?.as_str()?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
     }
 }
 

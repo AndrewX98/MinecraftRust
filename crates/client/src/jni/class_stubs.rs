@@ -634,6 +634,165 @@ fn register_playfab_classes(env: *mut JNIEnv) {
 }
 
 // ================================================================
+// com/google/android/gms/games/* — Play Games bridge (26.x auto-login gate)
+//
+// The 26.x game bootstraps Xbox silent auth behind its Play Games clients:
+// PgsAchievementsClient_create needs PlayGames.getAchievementsClient to
+// resolve AND return non-null, then PgsGamesSignInClient_create needs
+// PlayGames.getGamesSignInClient likewise. The C++ launcher's FakeJni
+// auto-stubs these; on the Rust VM the lookup failed and the game stayed
+// guest forever (Catalog 401s, zero sisu/xsts). Task-returning calls below
+// hand out stub objects; follow-up lookups surface as GetMethodID warnings
+// and get stubbed iteratively.
+// ================================================================
+
+unsafe extern "C" fn PlayGames_getAchievementsClient(
+    _env: *mut JNIEnv,
+    _clazz: jclass,
+    _activity: jobject,
+) -> jobject {
+    log::info!("PlayGames: getAchievementsClient -> stub");
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn PlayGames_getGamesSignInClient(
+    _env: *mut JNIEnv,
+    _clazz: jclass,
+    _activity: jobject,
+) -> jobject {
+    log::info!("PlayGames: getGamesSignInClient -> stub");
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn PlayGames_getRecallClient(
+    _env: *mut JNIEnv,
+    _clazz: jclass,
+    _activity: jobject,
+) -> jobject {
+    log::info!("PlayGames: getRecallClient -> stub");
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn GamesSignInClient_task_stub(
+    _env: *mut JNIEnv,
+    _self: jobject,
+) -> jobject {
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn GamesSignInClient_task_stub_str(
+    _env: *mut JNIEnv,
+    _self: jobject,
+    _s: jstring,
+) -> jobject {
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn GamesSignInClient_task_stub_str_int(
+    _env: *mut JNIEnv,
+    _self: jobject,
+    _s: jstring,
+    _i: jint,
+) -> jobject {
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn GamesSignInClient_task_stub_str_bool(
+    _env: *mut JNIEnv,
+    _self: jobject,
+    _s: jstring,
+    _b: jboolean,
+) -> jobject {
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn GamesSignInClient_task_stub_str_bool_list(
+    _env: *mut JNIEnv,
+    _self: jobject,
+    _s: jstring,
+    _b: jboolean,
+    _list: jobject,
+) -> jobject {
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+unsafe extern "C" fn GamesSignInClient_task_stub_bool(
+    _env: *mut JNIEnv,
+    _self: jobject,
+    _b: jboolean,
+) -> jobject {
+    Box::into_raw(Box::new(1u8)) as jobject
+}
+
+fn register_play_games_classes(env: *mut JNIEnv) {
+    reg(
+        env,
+        b"com/google/android/gms/games/PlayGames\0",
+        &[
+            JNINativeMethod {
+                name: b"getAchievementsClient\0".as_ptr() as *const c_char,
+                signature: b"(Landroid/app/Activity;)Lcom/google/android/gms/games/AchievementsClient;\0".as_ptr() as *const c_char,
+                fnPtr: PlayGames_getAchievementsClient as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getGamesSignInClient\0".as_ptr() as *const c_char,
+                signature: b"(Landroid/app/Activity;)Lcom/google/android/gms/games/GamesSignInClient;\0".as_ptr() as *const c_char,
+                fnPtr: PlayGames_getGamesSignInClient as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"getRecallClient\0".as_ptr() as *const c_char,
+                signature: b"(Landroid/app/Activity;)Lcom/google/android/gms/games/RecallClient;\0".as_ptr() as *const c_char,
+                fnPtr: PlayGames_getRecallClient as *mut c_void,
+            },
+        ],
+    );
+    reg(
+        env,
+        b"com/google/android/gms/games/GamesSignInClient\0",
+        &[
+            JNINativeMethod {
+                name: b"isAuthenticated\0".as_ptr() as *const c_char,
+                signature: b"()Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"signIn\0".as_ptr() as *const c_char,
+                signature: b"()Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"requestServerSideAccess\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;)Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub_str as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"requestServerSideAccess\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;I)Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub_str_int as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"requestServerSideAccess\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;Z)Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub_str_bool as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"requestServerSideAccess\0".as_ptr() as *const c_char,
+                signature: b"(Ljava/lang/String;ZLjava/util/List;)Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub_str_bool_list as *mut c_void,
+            },
+            JNINativeMethod {
+                name: b"requestServerSideAccess\0".as_ptr() as *const c_char,
+                signature: b"(Z)Lcom/google/android/gms/tasks/Task;\0".as_ptr() as *const c_char,
+                fnPtr: GamesSignInClient_task_stub_bool as *mut c_void,
+            },
+        ],
+    );
+    ensure_class(env, b"com/google/android/gms/games/AchievementsClient\0");
+    ensure_class(env, b"com/google/android/gms/games/RecallClient\0");
+    ensure_class(env, b"com/google/android/gms/tasks/Task\0");
+}
+
+// ================================================================
 // Marker classes (no native methods — ensure the class table is populated)
 // ================================================================
 
@@ -669,6 +828,7 @@ pub fn register_all(env: *mut JNIEnv) {
     register_account_classes(env);
     register_package_source_classes(env);
     register_playfab_classes(env);
+    register_play_games_classes(env);
     register_marker_classes(env);
     log::info!("class_stubs: registered coverage classes with libjnivm-sys VM");
 }
