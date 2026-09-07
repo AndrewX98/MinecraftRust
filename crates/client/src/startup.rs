@@ -191,6 +191,9 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
         // waits for it to signal readiness (which it does after ALooper_prepare),
         // then returns. The main thread blocks on executeMainThread but the game
         // thread runs the event loop and renders.
+        // (A faithful ThreadMover port was tried 2026-09-07: game thread captured
+        // and run on main, startGame on helper — booted and logged in fine but did
+        // NOT fix the flaky server-list trigger, so it was reverted.)
         corelib::minecraft_utils::core_minecraft_utils_register_libc_stub();
 
         // 2) Load libm
