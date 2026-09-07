@@ -355,9 +355,12 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_setHttpUrl(
     if let Ok(states) = request_states().lock() {
         if let Some(state) = states.get(&key) {
             if let Ok(mut s) = state.lock() {
-                s.url = url_str;
+                s.url = url_str.clone();
             }
         }
+    }
+    if url_str.contains("playfabapi.com") {
+        log::info!("HTTP setup: url={}", url_str);
     }
 }
 
@@ -586,6 +589,7 @@ let mut req = client.request(method, &url);
                     );
                 }
 
+                let resp_body_len = resp_body.len();
                 let resp_obj = create_response_object(env, status, resp_headers, resp_body, call_handle);
                 if resp_obj.is_null() {
                     log::error!("HTTP: failed to create HttpClientResponse object for {} {}", method_string, url);
@@ -598,7 +602,7 @@ let mut req = client.request(method, &url);
                 ];
                 call_void_method(env, self_ptr as jobject, "OnRequestCompleted",
                     "(JLcom/xbox/httpclient/HttpClientResponse;)V", &mut args);
-                log::info!("HTTP request: {} {} -> {} ({}ms)", method_string, url, status, before.elapsed().as_millis());
+                log::info!("HTTP request: {} {} -> {} ({}ms, body_len={})", method_string, url, status, before.elapsed().as_millis(), resp_body_len);
             }
             Err(e) => {
                 log::error!("HTTP request failed: {} {} {}", method_string, url, e);
