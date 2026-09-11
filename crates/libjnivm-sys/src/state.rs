@@ -20,6 +20,11 @@ pub struct JvmInner {
     pub handles: HashMap<usize, String>,
     pub next_class_id: usize,
     pub object_fields: HashMap<usize, HashMap<String, jvalue>>,
+    // Runtime class of each live jobject, set at creation (NewObject family,
+    // AllocObject, NewStringUTF). Lets GetObjectClass report the real class
+    // instead of java/lang/Object, so GetMethodID hits the exact class and
+    // same-(name, sig) methods on different classes don't become a lottery.
+    pub object_classes: HashMap<usize, String>,
     // methodID tokens from jni_GetMethodID for methods not yet registered as
     // natives: mid -> (name, signature). Lets find_method resolve them against
     // cls.methods by name/signature once the native is registered (mirrors
@@ -46,9 +51,20 @@ pub fn jvm_state() -> &'static Mutex<JvmInner> {
             handles: HashMap::new(),
             next_class_id: 1,
             object_fields: HashMap::new(),
+            object_classes: HashMap::new(),
             method_tokens: HashMap::new(),
         })
     })
+}
+
+pub fn get_object_class(obj: jobject) -> Option<String> {
+    if obj.is_null() { return None; }
+    jvm_state().lock().unwrap().object_classes.get(&(obj as usize)).cloned()
+}
+
+pub fn set_object_class(obj: jobject, cls: String) {
+    if obj.is_null() { return; }
+    jvm_state().lock().unwrap().object_classes.insert(obj as usize, cls);
 }
 
 pub fn get_jnienv_from_env(env: *mut JNIEnv) -> *mut JNIEnvAttrs {
@@ -77,12 +93,24 @@ pub fn find_method(mid: jmethodID) -> Option<*mut std::ffi::c_void> {
         }
     }
     // Fallback: mid is a boxed (name, signature) token issued by jni_GetMethodID
-    // before the native was registered. Resolve it against the registry now.
+    // before the native was registered. Resolve it against the registry now,
+    // deterministically (lexicographically smallest class — same rule as
+    // GetMethodID, never HashMap order).
     if let Some((n, s)) = state.method_tokens.get(&mid) {
-        for (_, cls) in &state.classes {
+        let mut best: Option<(String, *mut std::ffi::c_void)> = None;
+        for (cls_key, cls) in &state.classes {
             if let Some(&f) = cls.methods.get(&(n.clone(), s.clone())) {
-                return Some(f);
+                let better = match &best {
+                    None => true,
+                    Some((best_name, _)) => *cls_key < *best_name,
+                };
+                if better {
+                    best = Some((cls_key.clone(), f));
+                }
             }
+        }
+        if let Some((_, f)) = best {
+            return Some(f);
         }
         return None;
     }

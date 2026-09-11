@@ -34,7 +34,9 @@ pub unsafe extern "C" fn jni_NewStringUTF(_env: *mut JNIEnv, utf: *const i8) -> 
     } else {
         CStr::from_ptr(utf).to_string_lossy().into_owned()
     };
-    CString::new(owned).unwrap_or_default().into_raw() as jstring
+    let s = CString::new(owned).unwrap_or_default().into_raw() as jstring;
+    crate::state::set_object_class(s, "java/lang/String".to_string());
+    s
 }
 pub unsafe extern "C" fn jni_GetStringUTFLength(_env: *mut JNIEnv, s: jstring) -> jsize {
     if s.is_null() { return 0; }

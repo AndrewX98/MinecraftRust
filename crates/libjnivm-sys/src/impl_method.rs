@@ -9,19 +9,21 @@ pub unsafe extern "C" fn jni_GetMethodID(_env: *mut JNIEnv, clazz: jclass, name:
     let s = CStr::from_ptr(sig).to_string_lossy().into_owned();
     let cls_name = get_class_name_from_handle(clazz).unwrap_or_else(|| "<unknown>".to_string());
     let state = jvm_state().lock().unwrap();
-    // Cross-class (name, sig) search — call sites depend on it because
-    // GetObjectClass reports java/lang/Object for every object. Several
-    // classes legitimately register the same signature (e.g. getResponseBody
-    // on Xbox and PlayFab response classes), so the winner MUST NOT depend on
-    // HashMap iteration order (it would change every boot). Exact-class match
-    // wins; otherwise the lexicographically smallest class name.
+    // Cross-class (name, sig) search — call sites depend on it because some
+    // objects predate class tracking (null-class creations). Several classes
+    // legitimately register the same signature, so the winner MUST NOT depend
+    // on HashMap iteration order (it would change every boot). Exact-class
+    // match wins; otherwise the lexicographically smallest class name, so the
+    // choice is identical on every boot.
     let mut best: Option<(String, usize)> = None;
     for (cls_key, cls) in &state.classes {
         if cls.methods.contains_key(&(n.clone(), s.clone())) {
             let rank = if *cls_key == cls_name { 0 } else { 1 };
             let better = match &best {
                 None => true,
-                Some((_, best_rank)) => rank < *best_rank,
+                Some((best_name, best_rank)) => {
+                    rank < *best_rank || (rank == *best_rank && *cls_key < *best_name)
+                }
             };
             if better {
                 best = Some((cls_key.clone(), rank));

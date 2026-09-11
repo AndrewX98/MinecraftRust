@@ -585,7 +585,10 @@ pub unsafe extern "C" fn jni_support_start_game(
     // Create MainActivity instance via JNI NewObject on the Rust VM and keep a
     // global ref: libjnivm-sys NewObject ignores args and returns a valid dummy
     // pointer, used opaquely as ga->java_game_activity (Baron activity ref gone).
-    let activity = jni_call!(env, NewObject(std::ptr::null_mut(), std::ptr::null_mut()));
+    // Pass the real class so per-object class tracking tags it (GetObjectClass
+    // must resolve MainActivity, not java/lang/Object, for exact dispatch).
+    let activity_cls = jni_call!(env, FindClass(b"com/mojang/minecraftpe/MainActivity\0".as_ptr() as *const c_char));
+    let activity = jni_call!(env, NewObject(activity_cls, std::ptr::null_mut()));
     let activity_ref = jni_call!(env, NewGlobalRef(activity));
 
     // Storage dir is set inside jni_support_start_game_with_baron via path_helper_get_primary_data_directory()
