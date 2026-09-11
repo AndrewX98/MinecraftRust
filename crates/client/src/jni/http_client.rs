@@ -39,6 +39,25 @@ unsafe fn hc_symbol(name: &str) -> *mut c_void {
     jni_resolve_symbol(c.as_ptr())
 }
 
+// Shared client: one connection pool for the whole process (a fresh client
+// per request costs 1-3.6s in TLS handshakes vs <1s shared, measured),
+// HTTP/1.1 only (HTTP/2 stalls some Xbox hosts; C++ curl also defaults to
+// HTTP/1.1), no redirects and no timeout (matching C++ lib_http_client,
+// which sets no FOLLOWLOCATION and no timeout).
+static SHARED_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+
+fn shared_client() -> reqwest::blocking::Client {
+    SHARED_CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .http1_only()
+                .build()
+                .expect("shared reqwest client must build")
+        })
+        .clone()
+}
+
 // Read the request body set on the HCCallHandle by the game (via
 // HCHttpCallRequestSetRequestBodyBytes) before doRequestAsync was invoked.
 unsafe fn read_call_request_body(call_handle: i64) -> Vec<u8> {
@@ -493,16 +512,7 @@ pub unsafe extern "C" fn Java_com_xbox_httpclient_HttpClientRequest_doRequestAsy
     let self_ptr = self_ as usize;
 
     std::thread::spawn(move || {
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("Failed to create HTTP client: {}", e);
-                return;
-            }
-        };
+        let client = shared_client();
 
         let (url, method, headers, body) = {
             match thread_state.lock() {
@@ -588,7 +598,6 @@ let mut req = client.request(method, &url);
                         String::from_utf8_lossy(&resp_body)
                     );
                 }
-
                 let resp_body_len = resp_body.len();
                 let resp_obj = create_response_object(env, status, resp_headers, resp_body, call_handle);
                 if resp_obj.is_null() {
