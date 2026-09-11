@@ -100,14 +100,23 @@ static START_THREAD_STORED: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
 pub extern "C" fn fake_thread_mover_store_start_thread_id() {
-    START_THREAD_STORED.store(true, Ordering::SeqCst);
+    // Arm game-thread capture in the libc shim. Must run on the helper
+    // thread that calls GameActivity_onCreate (mirrors C++
+    // ThreadMover::storeStartThreadId, called at startThread begin).
+    libc_shim::pthreads::thread_mover_arm();
 }
 
 #[no_mangle]
 pub extern "C" fn fake_thread_mover_execute_main_thread() {
-    // Block forever to keep the process alive while the game renders.
+    // Run the captured game thread on the true main thread (mirrors C++
+    // ThreadMover::executeMainThread). Blocks until the start thread spawns
+    // it. Parks forever afterwards as a backstop (the game thread never
+    // returns in practice).
+    let (f_ptr, arg) = libc_shim::pthreads::thread_mover_take_captured();
+    let f: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
+        unsafe { std::mem::transmute(f_ptr) };
+    unsafe { f(arg as *mut c_void) };
     let (_tx, rx) = std::sync::mpsc::channel::<()>();
-    // Leak the sender so recv() never returns Err
     Box::leak(Box::new(_tx));
     let _ = rx.recv();
 }

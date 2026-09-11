@@ -291,17 +291,31 @@ fn main() {
     let stbi_load = startup::dlsym(game_handle, "stbi_load_from_memory");
     let stbi_free = startup::dlsym(game_handle, "stbi_image_free");
 
-    // Start the game via Rust JniSupport (libjnivm-sys VM)
-    perf::span("game_start", || {
-        log::info!("mcpelauncher-client: starting game via Rust JniSupport...");
-        unsafe {
-            fake_thread_mover_store_start_thread_id();
-            jni_support::jni_support_start_game(rust_support, std::ptr::null_mut(), game_create, stbi_load, stbi_free);
-        }
-        log::info!("mcpelauncher-client: game started, entering event loop...");
+    // Start the game via Rust JniSupport (libjnivm-sys VM), mirroring the C++
+    // launcher: startGame runs on a helper thread (the ThreadMover start
+    // thread) while the TRUE main thread runs the game's first pthread via
+    // fake_thread_mover_execute_main_thread below.
+    // Raw game pointers cross into the helper thread as plain addresses.
+    let rust_support_u = rust_support as usize;
+    let game_create_u = game_create as usize;
+    let stbi_load_u = stbi_load as usize;
+    let stbi_free_u = stbi_free as usize;
+    let game_thread = std::thread::spawn(move || {
+        perf::span("game_start", || {
+            log::info!("mcpelauncher-client: starting game via Rust JniSupport...");
+            unsafe {
+                fake_thread_mover_store_start_thread_id();
+                jni_support::jni_support_start_game(rust_support_u as *mut _, std::ptr::null_mut(), game_create_u as *mut _, stbi_load_u as *mut _, stbi_free_u as *mut _);
+            }
+            log::info!("mcpelauncher-client: GameActivity_onCreate returned");
+        });
+        perf::span_ms("total_to_game_start", t_main.elapsed().as_millis());
     });
-    perf::span_ms("total_to_game_start", t_main.elapsed().as_millis());
+    // Detach: the helper lives until GameActivity_onCreate returns (readiness
+    // signaled by the game thread running on main), then exits like C++.
+    std::mem::forget(game_thread);
 
-    // Block the main thread forever (game thread runs independently)
+    // Run the captured game thread on the main thread; blocks until captured,
+    // then runs it (never returns in practice).
     unsafe { fake_thread_mover_execute_main_thread() };
 }

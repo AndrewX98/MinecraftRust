@@ -181,19 +181,12 @@ pub fn load_core_libraries(_lib_dir: &str) -> Result<(), i32> {
 
         // 1) Register libc symbols with the Rust linker (corelib twin of the
         //    merged C++ + Rust getLibCSymbols + rust_load_stub("libc.so", ...)).
-        // NOTE: ThreadMover::hookLibC is intentionally NOT called here.
-        // The original C++ launcher runs startGame on a detached helper thread so
-        // the main thread is free for executeMainThread. In the Rust bridge, both
-        // startGame and executeMainThread run on the main thread. If we intercept
-        // pthread_create, GameActivity_onCreate blocks waiting for the game thread
-        // to signal readiness, but the thread never starts (stored in promise) → deadlock.
-        // Without the hook, the game creates a real thread, GameActivity_onCreate
-        // waits for it to signal readiness (which it does after ALooper_prepare),
-        // then returns. The main thread blocks on executeMainThread but the game
-        // thread runs the event loop and renders.
-        // (A faithful ThreadMover port was tried 2026-09-07: game thread captured
-        // and run on main, startGame on helper — booted and logged in fine but did
-        // NOT fix the flaky server-list trigger, so it was reverted.)
+        // NOTE: ThreadMover capture lives in the libc shim (pthreads.rs): the
+        // first pthread_create issued by the start thread is captured and run
+        // on the true main thread, mirroring C++ ThreadMover::hookLibC +
+        // executeMainThread. startGame itself runs on a helper thread spawned
+        // in main(), so GameActivity_onCreate's readiness wait is satisfied
+        // exactly like the C++ launcher (no deadlock).
         corelib::minecraft_utils::core_minecraft_utils_register_libc_stub();
 
         // 2) Load libm

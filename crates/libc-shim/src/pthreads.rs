@@ -145,6 +145,73 @@ pub fn from_host_sched_policy(sp: i32) -> i32 {
     }
 }
 
+// ── ThreadMover (port of C++ thread_mover.cpp) ──
+// The C++ launcher runs the game's first thread (spawned by
+// GameActivity_onCreate) on the REAL main thread: pthread_create is hooked,
+// the first thread created by the start thread is captured into a promise,
+// and executeMainThread runs it. Without this the game runs on a spawned
+// thread and thread-identity-sensitive game code (subsystem scheduling,
+// looper affinity) behaves differently — and flakily — vs C++.
+use std::sync::{mpsc, OnceLock};
+use std::sync::atomic::AtomicBool;
+
+type CapturedThread = (usize, usize); // (start_routine ptr, arg ptr)
+
+struct MoverChannel {
+    tx: mpsc::Sender<CapturedThread>,
+    rx: std::sync::Mutex<Option<mpsc::Receiver<CapturedThread>>>,
+}
+
+static MOVER_ARMED: AtomicBool = AtomicBool::new(false);
+static MOVER_STARTER_TID: AtomicUsize = AtomicUsize::new(0);
+static MOVER_DONE: AtomicBool = AtomicBool::new(false);
+static MOVER_CHAN: OnceLock<MoverChannel> = OnceLock::new();
+
+fn mover_chan() -> &'static MoverChannel {
+    MOVER_CHAN.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        MoverChannel { tx, rx: std::sync::Mutex::new(Some(rx)) }
+    })
+}
+
+/// Arm the capture from the start thread (call on the helper thread right
+/// before GameActivity_onCreate). Mirrors ThreadMover::storeStartThreadId.
+pub fn thread_mover_arm() {
+    mover_chan();
+    MOVER_STARTER_TID.store(unsafe { libc::pthread_self() } as usize, Ordering::SeqCst);
+    MOVER_DONE.store(false, Ordering::SeqCst);
+    MOVER_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// Block the true main thread until the game thread is captured, then return
+/// it. Mirrors the wait half of ThreadMover::executeMainThread.
+pub fn thread_mover_take_captured() -> CapturedThread {
+    let chan = mover_chan();
+    let rx = chan.rx.lock().unwrap().take().expect("thread_mover: captured receiver already taken");
+    rx.recv().expect("thread_mover: game thread was never captured")
+}
+
+fn thread_mover_try_capture(
+    start: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
+    arg: *mut c_void,
+) -> bool {
+    let f = match start {
+        Some(f) => f as usize,
+        None => return false,
+    };
+    if !MOVER_ARMED.load(Ordering::SeqCst) || MOVER_DONE.load(Ordering::SeqCst) {
+        return false;
+    }
+    let me = unsafe { libc::pthread_self() } as usize;
+    if me != MOVER_STARTER_TID.load(Ordering::SeqCst) {
+        return false;
+    }
+    if MOVER_DONE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return false;
+    }
+    mover_chan().tx.send((f, arg as usize)).is_ok()
+}
+
 // ── public API: thread management ──
 
 pub unsafe extern "C" fn pthread_create(
@@ -153,6 +220,13 @@ pub unsafe extern "C" fn pthread_create(
     start: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
     arg: *mut c_void,
 ) -> i32 {
+    // ThreadMover: first thread spawned by the start thread runs on the true
+    // main thread instead (mirrors C++ hookLibC lambda, which returns 0
+    // without creating a thread; the out-param is left untouched, like C++).
+    if thread_mover_try_capture(start, arg) {
+        log::info!("thread_mover: captured game thread, will run on main thread");
+        return 0;
+    }
     let mut host_attr: libc::pthread_attr_t = std::mem::zeroed();
     libc::pthread_attr_init(&mut host_attr);
     if !attr.is_null() {
