@@ -7,6 +7,7 @@ pub mod hook_manager;
 pub mod hybris_utils;
 pub mod minecraft_utils;
 pub mod mod_loader;
+pub mod mod_menu;
 
 #[cfg(test)]
 mod tests {

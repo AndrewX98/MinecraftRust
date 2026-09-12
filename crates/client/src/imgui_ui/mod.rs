@@ -172,8 +172,6 @@ struct UiState {
     renderer: gles2::Gles2Renderer,
     last_frame: Instant,
     show_about: bool,
-    file_picker_open: bool,
-    file_picker_path: String,
     /// Session-only menubar visibility (manifest's static `showMenuBar`);
     /// cleared by "Hide Menubar", not persisted. Alt-focus (with
     /// "Use Alt to Focus Menubar" on) reopens it.
@@ -319,8 +317,6 @@ pub fn init_once() {
         renderer,
         last_frame: Instant::now(),
         show_about: false,
-        file_picker_open: false,
-        file_picker_path: String::new(),
         menubar_visible_session: true,
         #[cfg(debug_assertions)]
         prev_alt_dbg: false,
@@ -543,11 +539,6 @@ pub fn draw_frame() {
             }
             // ---- File ------------------------------------------------
             ui.menu("File", || {
-                // Upstream gates "Open" behind #ifndef NDEBUG.
-                #[cfg(debug_assertions)]
-                if ui.menu_item("Open") {
-                    state.file_picker_open = true;
-                }
                 if ui.menu_item("Hide Menubar") {
                     // Hide for this session only (no confirm popup).
                     state.menubar_visible_session = false;
@@ -566,43 +557,23 @@ pub fn draw_frame() {
                 }
             });
             // ---- Mods ------------------------------------------------
+            // NOTE: this menu only holds patch toggles (matching upstream
+            // imgui_ui.cpp) — it was never a listing of .so files from the
+            // mods/ directory. Mods load silently at startup from
+            // <data_dir>/mods/ plus -m dirs (see startup::load_mods).
             ui.menu("Mods", || {
-                let autofocus =
-                    crate::settings::mc_settings_get_enable_keyboard_autofocus_patches_1_20_60();
-                if ui.menu_item_enabled_selected_no_shortcut(
-                    "Enable Keyboard AutoFocus Patches for 1.20.60+",
-                    autofocus,
-                    true,
-                ) {
-                    crate::settings::mc_settings_set_enable_keyboard_autofocus_patches_1_20_60(!autofocus);
-                    crate::settings::mc_settings_save();
-                }
                 let paste =
                     crate::settings::mc_settings_get_enable_keyboard_autofocus_paste_patches_1_20_60();
-                // Like upstream, the paste toggle is only enabled while the
-                // base autofocus patches are on.
                 if ui.menu_item_enabled_selected_no_shortcut(
                     "Enable Keyboard AutoFocus Paste Patches for 1.20.60+",
                     paste,
-                    autofocus,
+                    true,
                 ) {
                     crate::settings::mc_settings_set_enable_keyboard_autofocus_paste_patches_1_20_60(!paste);
                     crate::settings::mc_settings_save();
                 }
-                // Upstream gates this behind __x86_64__; the patch itself is a
-                // no-op until ported (flag persisted like the others).
-                #[cfg(target_arch = "x86_64")]
-                {
-                    let intel = crate::settings::mc_settings_get_enable_intel_sprint_strafe();
-                    if ui.menu_item_enabled_selected_no_shortcut(
-                        "Enable Sprint strafe patch for Intel CPUs (requires restart)",
-                        intel,
-                        true,
-                    ) {
-                        crate::settings::mc_settings_set_enable_intel_sprint_strafe(!intel);
-                        crate::settings::mc_settings_save();
-                    }
-                }
+                // Mod-registered entries (upstream `appendMenu(menuentries)`).
+                crate::mod_menu::render_mod_menus(ui);
             });
             // ---- View ------------------------------------------------
             ui.menu("View", || {
@@ -669,19 +640,6 @@ pub fn draw_frame() {
         state.menu_focused = false;
     }
 
-    // File picker (manifest imgui_ui.cpp:840-848, #ifndef NDEBUG only).
-    #[cfg(debug_assertions)]
-    if state.file_picker_open {
-        let mut open = state.file_picker_open;
-        ui.window("filepicker")
-            .opened(&mut open)
-            .build(|| {
-                ui.input_text("Path", &mut state.file_picker_path).build();
-                ui.button("Open");
-            });
-        state.file_picker_open = open;
-    }
-
     let fonts = state.fonts;
     let font_sizes = state.font_sizes;
     let fps = state.fps_smoothed;
@@ -710,6 +668,9 @@ pub fn draw_frame() {
                 }
             });
     }
+
+    // Mod-registered custom windows (upstream "Custom Windows" block).
+    crate::mod_menu::render_mod_windows(ui, fonts);
 
     // Ends the Ui borrow; render_legacy produces the draw data (legacy path:
     // no managed texture requests, font atlas already carries our GLuint id).

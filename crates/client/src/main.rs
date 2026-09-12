@@ -38,6 +38,7 @@ mod xbox_auth;
 #[cfg_attr(not(target_os = "macos"), path = "imgui_ui/mod.rs")]
 mod imgui_ui;
 mod perf;
+mod mod_menu;
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 

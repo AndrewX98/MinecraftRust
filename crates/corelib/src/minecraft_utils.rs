@@ -288,6 +288,21 @@ pub fn get_api() -> HashMap<String, *mut c_void> {
         mc_mod_jnivm_register_method as *mut c_void,
     );
 
+    // Mod menu/window API (upstream imgui_ui.h): rendered by the client's
+    // imgui overlay; state lives in mod_menu.rs.
+    syms.insert(
+        "mcpelauncher_addmenu".to_string(),
+        crate::mod_menu::mcpelauncher_addmenu as *mut c_void,
+    );
+    syms.insert(
+        "mcpelauncher_show_window".to_string(),
+        crate::mod_menu::mcpelauncher_show_window as *mut c_void,
+    );
+    syms.insert(
+        "mcpelauncher_close_window".to_string(),
+        crate::mod_menu::mcpelauncher_close_window as *mut c_void,
+    );
+
     syms
 }
 
@@ -684,6 +699,9 @@ mod tests {
             "mcpelauncher_package_version_revision",
             "mcpelauncher_request_google_credentials",
             "jnivm_register_method",
+            "mcpelauncher_addmenu",
+            "mcpelauncher_show_window",
+            "mcpelauncher_close_window",
         ] {
             assert!(api.contains_key(k), "missing getApi key {}", k);
         }
