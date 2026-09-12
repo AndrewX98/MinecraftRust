@@ -599,7 +599,15 @@ let mut req = client.request(method, &url);
                     );
                 }
                 let resp_body_len = resp_body.len();
-                let resp_obj = create_response_object(env, status, resp_headers, resp_body, call_handle);
+                // C++ parity: on the streaming path (the only setter the game
+                // uses) libHttpClient streams response bytes into the native
+                // HCCallHandle during download and the Java body stays empty —
+                // the game reads the native buffer, never the Java object
+                // (verified: full chain with empty Java bodies, zero [B reads).
+                // Keep the Java object; the void-pull getter is a no-op on
+                // empty state (write_call_response_body returns early).
+                write_call_response_body(call_handle, &resp_body);
+                let resp_obj = create_response_object(env, status, resp_headers, Vec::new(), call_handle);
                 if resp_obj.is_null() {
                     log::error!("HTTP: failed to create HttpClientResponse object for {} {}", method_string, url);
                     return;
